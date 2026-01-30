@@ -1,0 +1,195 @@
+# Promtail Configuration
+# Log collector and shipper configuration
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: info
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    timeout: 10s
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+      max_retries: 10
+    # External labels added to all logs
+    external_labels:
+      environment: ${ENVIRONMENT:-production}
+      cluster: portfolio
+
+scrape_configs:
+  # Backend application logs
+  - job_name: backend
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: portfolio-backend
+          service: backend
+          __path__: /var/log/portfolio/*.log
+
+    # Pipeline to parse JSON logs
+    pipeline_stages:
+      # Parse JSON
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            target: target
+            request_id: fields.request_id
+            method: fields.method
+            uri: fields.uri
+            status: fields.status
+            duration_ms: fields.duration_ms
+
+      # Extract labels
+      - labels:
+          level:
+          target:
+          request_id:
+          method:
+          status:
+
+      # Set timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+      # Drop empty or null values
+      - match:
+          selector: '{level=""}'
+          action: drop
+
+  # Frontend server logs
+  - job_name: frontend-server
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: portfolio-frontend
+          service: frontend
+          log_type: server
+          __path__: /var/log/frontend/server/*.log
+
+    # Pipeline for frontend logs
+    pipeline_stages:
+      # Parse JSON
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            context: context
+            metadata: metadata
+
+      # Extract labels from context
+      - json:
+          source: context
+          expressions:
+            request_id: requestId
+            component: component
+            url: url
+
+      # Apply labels
+      - labels:
+          level:
+          component:
+          request_id:
+
+      # Set timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+  # Frontend client logs (forwarded from API)
+  - job_name: frontend-client
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: portfolio-frontend
+          service: frontend
+          log_type: client
+          __path__: /var/log/frontend/server/combined.log
+
+    # Pipeline for client logs
+    pipeline_stages:
+      # Match client logs (those with source=client)
+      - match:
+          selector: '{service="frontend"}'
+          stages:
+            - json:
+                expressions:
+                  context: context
+
+            - json:
+                source: context
+                expressions:
+                  source: source
+
+            - match:
+                selector: '{source="client"}'
+                action: keep
+
+            - json:
+                expressions:
+                  timestamp: timestamp
+                  level: level
+                  message: message
+                  component: context.component
+                  user_agent: context.userAgent
+                  device_type: context.deviceType
+
+            - labels:
+                level:
+                component:
+                device_type:
+
+            - timestamp:
+                source: timestamp
+                format: RFC3339
+
+  # Error logs only (high priority)
+  - job_name: errors
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: portfolio-errors
+          priority: high
+          __path__: /var/log/portfolio/error.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            target: target
+            error: fields.error
+
+      - labels:
+          level:
+          target:
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+      # Only keep error and fatal logs
+      - match:
+          selector: '{level!~"error|fatal"}'
+          action: drop
+
+# Limits
+limits_config:
+  # Maximum rate to push logs
+  readline_rate: 10000
+  readline_burst: 20000
+  # Maximum number of active streams
+  max_streams: 1000

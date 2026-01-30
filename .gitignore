@@ -1,1 +1,6 @@
 /target
+/logs
+*.log
+*.log.*
+/data
+Cargo.lock

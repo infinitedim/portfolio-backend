@@ -1,0 +1,155 @@
+# Grafana Alert Rules
+# Configure alerting for critical events
+
+apiVersion: 1
+
+groups:
+  - name: portfolio_alerts
+    interval: 1m
+    rules:
+      # High Error Rate Alert
+      - uid: high_error_rate
+        title: High Error Rate
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'sum(rate({level="error"} [5m])) > 5'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5 errors per second for the last 5 minutes"
+        labels:
+          severity: critical
+          team: platform
+
+      # Slow Response Time Alert
+      - uid: slow_response_time
+        title: Slow Response Time
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'quantile_over_time(0.95, {job="portfolio-backend"} | json | duration_ms != "" | unwrap duration_ms [10m]) > 2000'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "P95 response time exceeds 2 seconds"
+          description: "95th percentile response time has been above 2 seconds for 10 minutes"
+        labels:
+          severity: warning
+          team: platform
+
+      # Security Events Alert
+      - uid: security_events
+        title: Multiple Failed Login Attempts
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({} |= "authentication failed" [5m])) > 10'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Multiple failed login attempts detected"
+          description: "More than 10 failed login attempts in the last 5 minutes"
+        labels:
+          severity: high
+          team: security
+
+      # Service Down Alert
+      - uid: service_down
+        title: Service Not Responding
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({job="portfolio-backend"} [5m])) == 0'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Service appears to be down"
+          description: "No logs received from backend service in the last 5 minutes"
+        labels:
+          severity: critical
+          team: platform
+
+      # High Memory Usage (if metrics available)
+      - uid: high_memory
+        title: High Memory Usage
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({} |= "out of memory" [5m])) > 0'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "Out of memory errors detected"
+          description: "Application is experiencing out of memory errors"
+        labels:
+          severity: critical
+          team: platform
+
+      # Rate Limit Abuse
+      - uid: rate_limit_abuse
+        title: Rate Limit Abuse Detected
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({} |= "Rate limit exceeded" [5m])) > 100'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Excessive rate limit violations"
+          description: "More than 100 rate limit violations in the last 5 minutes"
+        labels:
+          severity: high
+          team: security
+
+      # Poor Web Vitals
+      - uid: poor_web_vitals
+        title: Poor Web Vitals - LCP
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki
+            model:
+              expr: 'avg_over_time({service="frontend", log_type="client"} |= "LCP" | json | unwrap value [10m]) > 4000'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "Poor Largest Contentful Paint performance"
+          description: "Average LCP exceeds 4 seconds for the last 10 minutes"
+        labels:
+          severity: warning
+          team: frontend

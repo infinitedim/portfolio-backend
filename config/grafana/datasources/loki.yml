@@ -1,0 +1,26 @@
+# Grafana Datasources
+# Auto-provisioned datasource configuration
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    editable: true
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+      derivedFields:
+        # Extract request ID and create link
+        - datasourceUid: loki
+          matcherRegex: "request_id=(\\w+)"
+          name: RequestID
+          url: "$${__value.raw}"
+        # Extract trace ID if using distributed tracing
+        - datasourceUid: tempo
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"

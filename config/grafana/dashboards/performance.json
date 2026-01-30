@@ -1,0 +1,159 @@
+{
+  "dashboard": {
+    "title": "Portfolio Performance Dashboard",
+    "tags": ["portfolio", "performance"],
+    "timezone": "browser",
+    "editable": true,
+    "panels": [
+      {
+        "title": "Response Time Percentiles",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "quantile_over_time(0.50, {job=\"portfolio-backend\"} | json | duration_ms != \"\" | unwrap duration_ms [5m])",
+            "legendFormat": "P50",
+            "refId": "A"
+          },
+          {
+            "expr": "quantile_over_time(0.95, {job=\"portfolio-backend\"} | json | duration_ms != \"\" | unwrap duration_ms [5m])",
+            "legendFormat": "P95",
+            "refId": "B"
+          },
+          {
+            "expr": "quantile_over_time(0.99, {job=\"portfolio-backend\"} | json | duration_ms != \"\" | unwrap duration_ms [5m])",
+            "legendFormat": "P99",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms"
+          }
+        }
+      },
+      {
+        "title": "Slow Requests (>1s)",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "{job=\"portfolio-backend\"} | json | duration_ms > 1000",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "includeByName": {
+                "timestamp": true,
+                "method": true,
+                "uri": true,
+                "duration_ms": true,
+                "status": true
+              }
+            }
+          }
+        ]
+      },
+      {
+        "title": "Web Vitals - LCP (Largest Contentful Paint)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "{service=\"frontend\", log_type=\"client\"} |= \"LCP\" | json | unwrap value",
+            "legendFormat": "LCP",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 2500, "color": "yellow" },
+                { "value": 4000, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Web Vitals - FID (First Input Delay)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+        "targets": [
+          {
+            "expr": "{service=\"frontend\", log_type=\"client\"} |= \"FID\" | json | unwrap value",
+            "legendFormat": "FID",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 100, "color": "yellow" },
+                { "value": 300, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Web Vitals - CLS (Cumulative Layout Shift)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+        "targets": [
+          {
+            "expr": "{service=\"frontend\", log_type=\"client\"} |= \"CLS\" | json | unwrap value",
+            "legendFormat": "CLS",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "decimals": 3,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 0.1, "color": "yellow" },
+                { "value": 0.25, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Request Duration Heatmap",
+        "type": "heatmap",
+        "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+        "targets": [
+          {
+            "expr": "{job=\"portfolio-backend\"} | json | duration_ms != \"\" | unwrap duration_ms",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "calculate": true,
+          "yAxis": {
+            "unit": "ms"
+          }
+        }
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

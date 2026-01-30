@@ -1,0 +1,132 @@
+{
+  "dashboard": {
+    "title": "Portfolio Application Overview",
+    "tags": ["portfolio", "overview"],
+    "timezone": "browser",
+    "editable": true,
+    "panels": [
+      {
+        "title": "Total Requests per Minute",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(rate({job=\"portfolio-backend\"} |~ \"request completed\" [1m]))",
+            "legendFormat": "Total Requests",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Error Rate (Last 5m)",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(rate({job=\"portfolio-backend\", level=\"error\"} [5m]))",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "yellow" },
+                { "value": 5, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "P95 Response Time",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+        "targets": [
+          {
+            "expr": "quantile_over_time(0.95, {job=\"portfolio-backend\"} | json | duration_ms != \"\" | unwrap duration_ms [5m])",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1000, "color": "yellow" },
+                { "value": 2000, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Recent Error Logs",
+        "type": "logs",
+        "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "{level=~\"error|fatal\"} |= \"\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "wrapLogMessage": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "title": "Requests by Status Code",
+        "type": "piechart",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 20 },
+        "targets": [
+          {
+            "expr": "sum by (status) (count_over_time({job=\"portfolio-backend\"} | json | status != \"\" [1h]))",
+            "legendFormat": "{{status}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Web Vitals - LCP",
+        "type": "timeseries",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 20 },
+        "targets": [
+          {
+            "expr": "{service=\"frontend\", log_type=\"client\"} |= \"LCP\" | json | unwrap value",
+            "legendFormat": "LCP",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 2500, "color": "yellow" },
+                { "value": 4000, "color": "red" }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

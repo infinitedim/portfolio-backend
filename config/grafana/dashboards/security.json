@@ -1,0 +1,127 @@
+{
+  "dashboard": {
+    "title": "Portfolio Security Dashboard",
+    "tags": ["portfolio", "security"],
+    "timezone": "browser",
+    "editable": true,
+    "panels": [
+      {
+        "title": "Suspicious Request Patterns",
+        "type": "logs",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "{job=\"portfolio-frontend\"} |= \"Suspicious request detected\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "wrapLogMessage": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "title": "Security Events by Type",
+        "type": "piechart",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum by (eventType) (count_over_time({} |= \"Security event\" | json [1h]))",
+            "legendFormat": "{{eventType}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Rate Limit Violations",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+        "targets": [
+          {
+            "expr": "sum(rate({} |= \"Rate limit exceeded\" [5m]))",
+            "legendFormat": "Rate Limit Hits",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "4xx Client Errors",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+        "targets": [
+          {
+            "expr": "sum by (status) (rate({job=\"portfolio-backend\"} | json | status =~ \"4..\" [5m]))",
+            "legendFormat": "{{status}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Failed Authentication Attempts",
+        "type": "stat",
+        "gridPos": { "h": 6, "w": 6, "x": 0, "y": 18 },
+        "targets": [
+          {
+            "expr": "sum(count_over_time({} |= \"authentication failed\" [1h]))",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 10, "color": "yellow" },
+                { "value": 50, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "CORS Violations",
+        "type": "stat",
+        "gridPos": { "h": 6, "w": 6, "x": 6, "y": 18 },
+        "targets": [
+          {
+            "expr": "sum(count_over_time({} |= \"CORS\" [1h]))",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Security Events by IP",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+        "targets": [
+          {
+            "expr": "{} |= \"Security event\" | json",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "includeByName": {
+                "timestamp": true,
+                "ipAddress": true,
+                "eventType": true,
+                "threatLevel": true,
+                "message": true
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    }
+  }
+}

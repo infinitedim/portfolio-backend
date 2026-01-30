@@ -1,0 +1,104 @@
+{
+  "dashboard": {
+    "title": "Portfolio Errors Dashboard",
+    "tags": ["portfolio", "errors"],
+    "timezone": "browser",
+    "editable": true,
+    "panels": [
+      {
+        "title": "Error Count by Level",
+        "type": "bargauge",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum by (level) (count_over_time({level=~\"error|fatal\"} [1h]))",
+            "legendFormat": "{{level}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        }
+      },
+      {
+        "title": "Error Rate by Component",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum by (component) (rate({level=\"error\"} | json | component != \"\" [5m]))",
+            "legendFormat": "{{component}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Error Distribution by Service",
+        "type": "piechart",
+        "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "sum by (service) (count_over_time({level=~\"error|fatal\"} [1h]))",
+            "legendFormat": "{{service}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Recent Critical Errors",
+        "type": "logs",
+        "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "{level=\"fatal\"} |= \"\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "wrapLogMessage": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "title": "Error Details Table",
+        "type": "table",
+        "gridPos": { "h": 12, "w": 24, "x": 0, "y": 18 },
+        "targets": [
+          {
+            "expr": "{level=~\"error|fatal\"} | json",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "includeByName": {
+                "timestamp": true,
+                "level": true,
+                "message": true,
+                "component": true,
+                "request_id": true
+              },
+              "indexByName": {
+                "timestamp": 0,
+                "level": 1,
+                "component": 2,
+                "message": 3,
+                "request_id": 4
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    }
+  }
+}
