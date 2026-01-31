@@ -7,7 +7,7 @@ edition = "2021"
 # Web framework
 axum = "0.7"
 tokio = { version = "1", features = ["full", "sync"] }
-tower = "0.4"
+tower = "0.5"
 tower-http = { version = "0.5", features = ["trace", "request-id", "util", "cors"] }
 
 # Logging and tracing
