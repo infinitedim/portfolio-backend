@@ -2,7 +2,6 @@
  * Database Module
  * PostgreSQL connection pool and utilities
  */
-
 pub mod models;
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -50,10 +49,16 @@ impl Default for DbConfig {
 /// Initialize the database connection pool
 pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Error> {
     let config = config.unwrap_or_default();
-    
+
     tracing::info!("Initializing database connection pool...");
-    tracing::debug!("Database URL: {}", config.url.replace(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '/' && c != '@' && c != '.', "*"));
-    
+    tracing::debug!(
+        "Database URL: {}",
+        config.url.replace(
+            |c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '/' && c != '@' && c != '.',
+            "*"
+        )
+    );
+
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
         .min_connections(config.min_connections)
@@ -61,17 +66,15 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
         .idle_timeout(std::time::Duration::from_secs(config.idle_timeout_secs))
         .connect(&config.url)
         .await?;
-    
+
     // Test connection
-    sqlx::query("SELECT 1")
-        .fetch_one(&pool)
-        .await?;
-    
+    sqlx::query("SELECT 1").fetch_one(&pool).await?;
+
     tracing::info!("Database connection pool initialized successfully");
-    
+
     let pool = Arc::new(pool);
     let _ = DB_POOL.set(pool.clone());
-    
+
     Ok(pool)
 }
 
@@ -83,15 +86,12 @@ pub fn get_pool() -> Option<Arc<PgPool>> {
 
 /// Check if database is healthy
 pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
-    let pool = get_pool().ok_or_else(|| {
-        sqlx::Error::Configuration("Database pool not initialized".into())
-    })?;
-    
+    let pool = get_pool()
+        .ok_or_else(|| sqlx::Error::Configuration("Database pool not initialized".into()))?;
+
     let start = std::time::Instant::now();
-    sqlx::query("SELECT 1")
-        .fetch_one(pool.as_ref())
-        .await?;
-    
+    sqlx::query("SELECT 1").fetch_one(pool.as_ref()).await?;
+
     Ok(start.elapsed())
 }
 
@@ -99,9 +99,10 @@ pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
 /// Creates tables if they don't exist
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("Running database migrations...");
-    
+
     // Create users table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS users (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             email TEXT UNIQUE NOT NULL,
@@ -109,12 +110,14 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             role TEXT NOT NULL DEFAULT 'admin',
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create refresh_tokens table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS refresh_tokens (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -123,39 +126,47 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             revoked BOOLEAN NOT NULL DEFAULT false,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create index on token_hash for fast lookups
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash 
         ON refresh_tokens(token_hash)
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create index on expires_at for cleanup
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at 
         ON refresh_tokens(expires_at)
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create portfolio_sections table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS portfolio_sections (
             key TEXT PRIMARY KEY,
             content JSONB NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create blog_posts table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS blog_posts (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             title TEXT NOT NULL,
@@ -167,19 +178,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     // Create index on slug for fast lookups
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug 
         ON blog_posts(slug)
-    "#)
+    "#,
+    )
     .execute(pool)
     .await?;
-    
+
     tracing::info!("Database migrations completed successfully");
-    
+
     Ok(())
 }

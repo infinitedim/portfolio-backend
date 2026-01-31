@@ -2,7 +2,6 @@
  * Authentication Routes
  * JWT-based authentication with login, verify, refresh, and logout
  */
-
 use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, StatusCode},
@@ -14,11 +13,7 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
 // ============================================================================
@@ -29,15 +24,15 @@ lazy_static::lazy_static! {
     /// JWT secret key from environment
     pub static ref JWT_SECRET: String = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "default-jwt-secret-change-in-production".to_string());
-    
+
     /// Refresh token secret (can be same as JWT_SECRET or different)
     pub static ref REFRESH_SECRET: String = std::env::var("REFRESH_TOKEN_SECRET")
         .unwrap_or_else(|_| JWT_SECRET.clone());
-    
+
     /// Admin email from environment
     pub static ref ADMIN_EMAIL: String = std::env::var("ADMIN_EMAIL")
         .unwrap_or_else(|_| "admin@example.com".to_string());
-    
+
     /// Admin password hash from environment (or plain password to hash)
     pub static ref ADMIN_PASSWORD_HASH: String = {
         // First try ADMIN_HASH_PASSWORD (already hashed)
@@ -51,13 +46,13 @@ lazy_static::lazy_static! {
             hash("admin123", DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         }
     };
-    
+
     /// Refresh token storage (in-memory)
-    pub static ref REFRESH_TOKENS: Arc<RwLock<HashMap<String, RefreshTokenData>>> = 
+    pub static ref REFRESH_TOKENS: Arc<RwLock<HashMap<String, RefreshTokenData>>> =
         Arc::new(RwLock::new(HashMap::new()));
-    
+
     /// Rate limit storage (IP -> last request timestamp)
-    pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, i64>>> = 
+    pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, i64>>> =
         Arc::new(RwLock::new(HashMap::new()));
 }
 
@@ -77,11 +72,11 @@ const RATE_LIMIT_WINDOW_SECS: i64 = 60;
 /// JWT Claims structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,      // User ID
-    pub email: String,    // User email
-    pub role: String,     // User role
-    pub exp: i64,         // Expiry timestamp
-    pub iat: i64,         // Issued at timestamp
+    pub sub: String,   // User ID
+    pub email: String, // User email
+    pub role: String,  // User role
+    pub exp: i64,      // Expiry timestamp
+    pub iat: i64,      // Issued at timestamp
 }
 
 /// Stored refresh token data
@@ -128,7 +123,7 @@ pub struct LoginResponse {
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub success: bool,
-    pub is_valid: bool,  // For compatibility with SecureAuth
+    pub is_valid: bool, // For compatibility with SecureAuth
     pub user: Option<UserInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -194,10 +189,14 @@ fn hash_refresh_token(token: &str) -> String {
 }
 
 /// Create access token
-fn create_access_token(user_id: &str, email: &str, role: &str) -> Result<String, jsonwebtoken::errors::Error> {
+fn create_access_token(
+    user_id: &str,
+    email: &str,
+    role: &str,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let now = Utc::now();
     let exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES);
-    
+
     let claims = Claims {
         sub: user_id.to_string(),
         email: email.to_string(),
@@ -205,7 +204,7 @@ fn create_access_token(user_id: &str, email: &str, role: &str) -> Result<String,
         exp: exp.timestamp(),
         iat: now.timestamp(),
     };
-    
+
     encode(
         &Header::default(),
         &claims,
@@ -236,13 +235,13 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 async fn check_rate_limit(ip: &str) -> bool {
     let now = Utc::now().timestamp();
     let mut limits = RATE_LIMIT.write().await;
-    
+
     if let Some(last_request) = limits.get(ip) {
         if now - last_request < RATE_LIMIT_WINDOW_SECS {
             return false; // Rate limited
         }
     }
-    
+
     limits.insert(ip.to_string(), now);
     true // Allowed
 }
@@ -258,7 +257,7 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let ip = addr.ip().to_string();
-    
+
     // Rate limit check
     if !check_rate_limit(&ip).await {
         return (
@@ -272,7 +271,7 @@ pub async fn login(
             }),
         );
     }
-    
+
     // Validate request
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
@@ -286,7 +285,7 @@ pub async fn login(
             }),
         );
     }
-    
+
     // Basic email format validation
     if !payload.email.contains('@') {
         return (
@@ -300,11 +299,11 @@ pub async fn login(
             }),
         );
     }
-    
+
     // Check credentials
     let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
     let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
-    
+
     if !email_matches || !password_matches {
         return (
             StatusCode::UNAUTHORIZED,
@@ -317,11 +316,11 @@ pub async fn login(
             }),
         );
     }
-    
+
     // Generate tokens
     let user_id = "admin-user-id"; // In production, this would come from DB
     let role = "admin";
-    
+
     let access_token = match create_access_token(user_id, &payload.email, role) {
         Ok(token) => token,
         Err(e) => {
@@ -338,23 +337,26 @@ pub async fn login(
             );
         }
     };
-    
+
     let refresh_token = generate_refresh_token();
     let refresh_token_hash = hash_refresh_token(&refresh_token);
-    
+
     // Store refresh token
     let expires_at = (Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS)).timestamp();
     {
         let mut tokens = REFRESH_TOKENS.write().await;
-        tokens.insert(refresh_token_hash, RefreshTokenData {
-            user_id: user_id.to_string(),
-            email: payload.email.clone(),
-            role: role.to_string(),
-            expires_at,
-            revoked: false,
-        });
+        tokens.insert(
+            refresh_token_hash,
+            RefreshTokenData {
+                user_id: user_id.to_string(),
+                email: payload.email.clone(),
+                role: role.to_string(),
+                expires_at,
+                revoked: false,
+            },
+        );
     }
-    
+
     (
         StatusCode::OK,
         Json(LoginResponse {
@@ -388,7 +390,7 @@ pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
             );
         }
     };
-    
+
     match verify_access_token(&token) {
         Ok(claims) => (
             StatusCode::OK,
@@ -432,16 +434,16 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
             }),
         );
     }
-    
+
     let token_hash = hash_refresh_token(&payload.refresh_token);
     let now = Utc::now().timestamp();
-    
+
     // Check if token exists and is valid
     let token_data = {
         let tokens = REFRESH_TOKENS.read().await;
         tokens.get(&token_hash).cloned()
     };
-    
+
     match token_data {
         Some(data) if !data.revoked && data.expires_at > now => {
             // Create new access token
@@ -460,12 +462,13 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                     );
                 }
             };
-            
+
             // Optionally rotate refresh token
             let new_refresh_token = generate_refresh_token();
             let new_token_hash = hash_refresh_token(&new_refresh_token);
-            let new_expires_at = (Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS)).timestamp();
-            
+            let new_expires_at =
+                (Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS)).timestamp();
+
             {
                 let mut tokens = REFRESH_TOKENS.write().await;
                 // Revoke old token
@@ -473,15 +476,18 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                     old_data.revoked = true;
                 }
                 // Store new token
-                tokens.insert(new_token_hash, RefreshTokenData {
-                    user_id: data.user_id,
-                    email: data.email,
-                    role: data.role,
-                    expires_at: new_expires_at,
-                    revoked: false,
-                });
+                tokens.insert(
+                    new_token_hash,
+                    RefreshTokenData {
+                        user_id: data.user_id,
+                        email: data.email,
+                        role: data.role,
+                        expires_at: new_expires_at,
+                        revoked: false,
+                    },
+                );
             }
-            
+
             (
                 StatusCode::OK,
                 Json(RefreshResponse {
@@ -506,10 +512,7 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
 
 /// POST /api/auth/logout
 /// Invalidate refresh token
-pub async fn logout(
-    headers: HeaderMap,
-    Json(payload): Json<LogoutRequest>,
-) -> impl IntoResponse {
+pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> impl IntoResponse {
     // Try to get refresh token from body or revoke based on access token
     if let Some(refresh_token) = payload.refresh_token {
         let token_hash = hash_refresh_token(&refresh_token);
@@ -518,10 +521,13 @@ pub async fn logout(
             data.revoked = true;
         }
     }
-    
+
     // If access token provided, try to find and revoke associated refresh tokens
     // For simplicity, we just return success as access token will expire anyway
-    if let Some(access_token) = payload.access_token.or_else(|| extract_bearer_token(&headers)) {
+    if let Some(access_token) = payload
+        .access_token
+        .or_else(|| extract_bearer_token(&headers))
+    {
         if let Ok(claims) = verify_access_token(&access_token) {
             // Could revoke all refresh tokens for this user
             let mut tokens = REFRESH_TOKENS.write().await;
@@ -532,7 +538,7 @@ pub async fn logout(
             }
         }
     }
-    
+
     // Logout always succeeds (idempotent)
     (StatusCode::OK, Json(LogoutResponse { success: true }))
 }

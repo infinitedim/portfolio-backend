@@ -2,14 +2,11 @@
  * Logging Middleware
  * HTTP request/response logging and request ID tracking
  */
-
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
-use tower_http::request_id::{RequestId, MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use axum::{extract::Request, middleware::Next, response::Response};
 use std::time::Instant;
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 
 /// Request logging middleware
 pub async fn log_request(request: Request, next: Next) -> Response {

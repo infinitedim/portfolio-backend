@@ -2,7 +2,6 @@
  * Blog Routes
  * CRUD API endpoints for blog posts
  */
-
 use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
@@ -181,7 +180,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                     page_size: query.page_size,
                     total: 0,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -259,7 +259,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
             page_size,
             total,
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 /// GET /api/blog/:slug - Get single blog post by slug
@@ -270,9 +271,12 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid slug".to_string(),
-                message: Some("Slug must contain only lowercase letters, numbers, and hyphens".to_string()),
+                message: Some(
+                    "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
+                ),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let pool = match db::get_pool() {
@@ -284,7 +288,8 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                     error: "Database not available".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -293,7 +298,7 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
         SELECT id, title, slug, summary, content_md, content_html, published, created_at, updated_at
         FROM blog_posts
         WHERE slug = $1
-        "#
+        "#,
     )
     .bind(&slug)
     .fetch_optional(pool.as_ref())
@@ -319,7 +324,8 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                 error: "Not found".to_string(),
                 message: None,
             }),
-        ).into_response(),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("Database error fetching blog post: {}", e);
             (
@@ -328,7 +334,8 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                     error: "Database error".to_string(),
                     message: None,
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -351,7 +358,8 @@ pub async fn create_post(
                 error: "Title is required".to_string(),
                 message: None,
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     if payload.slug.trim().is_empty() {
@@ -361,7 +369,8 @@ pub async fn create_post(
                 error: "Slug is required".to_string(),
                 message: None,
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Validate slug format
@@ -370,9 +379,12 @@ pub async fn create_post(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid slug".to_string(),
-                message: Some("Slug must contain only lowercase letters, numbers, and hyphens".to_string()),
+                message: Some(
+                    "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
+                ),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let pool = match db::get_pool() {
@@ -384,7 +396,8 @@ pub async fn create_post(
                     error: "Database not available".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -463,9 +476,12 @@ pub async fn update_post(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid slug".to_string(),
-                message: Some("Slug must contain only lowercase letters, numbers, and hyphens".to_string()),
+                message: Some(
+                    "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
+                ),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let pool = match db::get_pool() {
@@ -477,7 +493,8 @@ pub async fn update_post(
                     error: "Database not available".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -498,7 +515,8 @@ pub async fn update_post(
                     error: "Not found".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
         Err(e) => {
             tracing::error!("Database error fetching blog post: {}", e);
@@ -508,7 +526,8 @@ pub async fn update_post(
                     error: "Database error".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -516,7 +535,10 @@ pub async fn update_post(
     let title = payload.title.unwrap_or(existing.title);
     let summary = payload.summary.or(existing.summary);
     let content_md = payload.content_md.or(existing.content_md);
-    let content_html = payload.content_html.map(|h| sanitize_html(&h)).or(existing.content_html);
+    let content_html = payload
+        .content_html
+        .map(|h| sanitize_html(&h))
+        .or(existing.content_html);
     let published = payload.published.unwrap_or(existing.published);
 
     match sqlx::query_as::<_, BlogPost>(
@@ -576,9 +598,12 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid slug".to_string(),
-                message: Some("Slug must contain only lowercase letters, numbers, and hyphens".to_string()),
+                message: Some(
+                    "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
+                ),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let pool = match db::get_pool() {
@@ -590,7 +615,8 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
                     error: "Database not available".to_string(),
                     message: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -608,7 +634,8 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
                         error: "Not found".to_string(),
                         message: None,
                     }),
-                ).into_response();
+                )
+                    .into_response();
             }
             (StatusCode::OK, Json(SuccessResponse { success: true })).into_response()
         }
@@ -620,7 +647,8 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
                     error: "Failed to delete post".to_string(),
                     message: None,
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }

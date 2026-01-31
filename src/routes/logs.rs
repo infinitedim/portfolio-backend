@@ -1,15 +1,14 @@
+use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogLevel, LogResponse};
 /**
  * Logs Route Handler
  * Endpoint for receiving client logs from frontend
  */
-
 use axum::{
-    extract::{Json, Extension},
+    extract::{Extension, Json},
     http::StatusCode,
     response::IntoResponse,
 };
 use tower_http::request_id::RequestId;
-use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogLevel, LogResponse};
 
 /// POST /api/logs - Receive client logs
 #[tracing::instrument(skip(logs), fields(batch_size = logs.logs.len()))]

@@ -2,14 +2,9 @@
  * Health Routes
  * Endpoints for checking backend health status
  */
-
-use axum::{
-    Json,
-    http::StatusCode,
-    response::IntoResponse,
-};
-use serde::{Deserialize, Serialize};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 // Track server start time for uptime calculation
@@ -102,7 +97,7 @@ pub async fn health_ping() -> impl IntoResponse {
 /// GET /health/detailed - Detailed health with all checks
 pub async fn health_detailed() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
-    
+
     // Check database health
     let database_check = match crate::db::health_check().await {
         Ok(duration) => ServiceCheck {
@@ -116,18 +111,18 @@ pub async fn health_detailed() -> impl IntoResponse {
             error: Some(e.to_string()),
         },
     };
-    
+
     // TODO: Implement actual Redis check when Redis is connected (Fase 4)
     let redis_check = ServiceCheck {
         status: "unhealthy".to_string(),
         response_time: None,
         error: Some("Redis not configured yet".to_string()),
     };
-    
+
     // Overall status is "ok" even if DB/Redis are not configured
     // This allows frontend to know backend is running
     let overall_status = "ok".to_string();
-    
+
     let response = DetailedHealthResponse {
         status: overall_status,
         timestamp: Utc::now(),
@@ -137,7 +132,7 @@ pub async fn health_detailed() -> impl IntoResponse {
             redis: redis_check,
         },
     };
-    
+
     (StatusCode::OK, Json(response))
 }
 
@@ -173,29 +168,33 @@ pub async fn health_redis() -> impl IntoResponse {
         response_time: None,
         error: Some("Redis not configured yet".to_string()),
     };
-    
+
     (StatusCode::OK, Json(check))
 }
 
 /// GET /health/ready - Readiness check
 pub async fn health_ready() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
-    
+
     // Check database health
     let database_status = match crate::db::health_check().await {
         Ok(_) => "healthy".to_string(),
         Err(_) => "unhealthy".to_string(),
     };
-    
+
     // TODO: Implement actual Redis check when Redis is connected (Fase 4)
     let redis_status = "unhealthy".to_string();
-    
+
     // For MVP, we're "ready" if backend is running
     // Database is optional (will use in-memory fallback)
     let is_ready = true;
-    
+
     let response = ReadyResponse {
-        status: if is_ready { "ready".to_string() } else { "not ready".to_string() },
+        status: if is_ready {
+            "ready".to_string()
+        } else {
+            "not ready".to_string()
+        },
         timestamp: Utc::now(),
         uptime: Some(uptime),
         checks: Some(ReadyChecks {
@@ -208,6 +207,6 @@ pub async fn health_ready() -> impl IntoResponse {
             None
         },
     };
-    
+
     (StatusCode::OK, Json(response))
 }

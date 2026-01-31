@@ -2,29 +2,25 @@
  * Portfolio Backend
  * Main application entry point
  */
-
 mod db;
 mod logging;
 mod routes;
 
 use axum::{
+    http::{HeaderValue, Method},
+    middleware,
     routing::{get, post},
     Router,
-    middleware,
-    http::{HeaderValue, Method},
-};
-use tower_http::{
-    cors::CorsLayer,
-    trace::TraceLayer,
 };
 use std::net::SocketAddr;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 /// Configure CORS from environment variables
 /// Uses ALLOWED_ORIGINS (comma-separated) or FRONTEND_ORIGIN
 /// Falls back to allowing all origins in development
 fn configure_cors() -> CorsLayer {
     let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
-    
+
     // Get allowed origins from env
     let origins: Vec<HeaderValue> = std::env::var("ALLOWED_ORIGINS")
         .or_else(|_| std::env::var("FRONTEND_ORIGIN"))
@@ -34,7 +30,7 @@ fn configure_cors() -> CorsLayer {
                 .collect()
         })
         .unwrap_or_default();
-    
+
     // Base CORS layer
     let cors = CorsLayer::new()
         .allow_methods([
@@ -53,7 +49,7 @@ fn configure_cors() -> CorsLayer {
             axum::http::header::HeaderName::from_static("x-payload-encrypted"),
         ])
         .allow_credentials(true);
-    
+
     // Configure origins
     if !origins.is_empty() {
         tracing::info!("CORS: Allowing origins from env: {:?}", origins);
@@ -78,13 +74,13 @@ fn configure_cors() -> CorsLayer {
 async fn main() {
     // Load environment variables from .env file
     dotenvy::dotenv().ok();
-    
+
     // Initialize logging
     logging::init();
-    
+
     // Initialize server start time for uptime tracking
     routes::health::init_start_time();
-    
+
     // Initialize database if DATABASE_URL is set
     if std::env::var("DATABASE_URL").is_ok() {
         match db::init_pool(None).await {
@@ -95,7 +91,10 @@ async fn main() {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to initialize database pool: {}. Continuing without database.", e);
+                tracing::warn!(
+                    "Failed to initialize database pool: {}. Continuing without database.",
+                    e
+                );
             }
         }
     } else {
@@ -107,7 +106,7 @@ async fn main() {
 
     // Define the address
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    
+
     tracing::info!("Starting server on {}", addr);
 
     // Run the server with connect info for IP extraction
@@ -127,7 +126,7 @@ async fn main() {
 fn create_app() -> Router {
     // Configure CORS from environment
     let cors = configure_cors();
-    
+
     tracing::info!("CORS configured");
 
     // Build the router
@@ -140,10 +139,21 @@ fn create_app() -> Router {
         .route("/api/auth/refresh", post(routes::auth::refresh))
         .route("/api/auth/logout", post(routes::auth::logout))
         // Portfolio routes
-        .route("/api/portfolio", get(routes::portfolio::get_portfolio).patch(routes::portfolio::update_portfolio))
+        .route(
+            "/api/portfolio",
+            get(routes::portfolio::get_portfolio).patch(routes::portfolio::update_portfolio),
+        )
         // Blog routes
-        .route("/api/blog", get(routes::blog::list_posts).post(routes::blog::create_post))
-        .route("/api/blog/{slug}", get(routes::blog::get_post).patch(routes::blog::update_post).delete(routes::blog::delete_post))
+        .route(
+            "/api/blog",
+            get(routes::blog::list_posts).post(routes::blog::create_post),
+        )
+        .route(
+            "/api/blog/{slug}",
+            get(routes::blog::get_post)
+                .patch(routes::blog::update_post)
+                .delete(routes::blog::delete_post),
+        )
         // Health check routes
         .route("/health", get(routes::health::health_ping))
         .route("/health/detailed", get(routes::health::health_detailed))

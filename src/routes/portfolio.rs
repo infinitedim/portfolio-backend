@@ -2,7 +2,6 @@
  * Portfolio Routes
  * API endpoints for portfolio data (skills, projects, experience, about)
  */
-
 use axum::{
     extract::Query,
     http::{HeaderMap, StatusCode},
@@ -128,23 +127,26 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             }),
         );
     }
-    
+
     if !is_valid_section(&query.section) {
         return (
             StatusCode::BAD_REQUEST,
             Json(PortfolioResponse {
                 data: None,
-                error: Some(format!("Invalid section. Valid sections: {:?}", VALID_SECTIONS)),
+                error: Some(format!(
+                    "Invalid section. Valid sections: {:?}",
+                    VALID_SECTIONS
+                )),
             }),
         );
     }
-    
+
     let section_key = query.section.to_lowercase();
-    
+
     // Try to get data from database
     if let Some(pool) = db::get_pool() {
         match sqlx::query_as::<_, PortfolioSection>(
-            "SELECT key, content, updated_at FROM portfolio_sections WHERE key = $1"
+            "SELECT key, content, updated_at FROM portfolio_sections WHERE key = $1",
         )
         .bind(&section_key)
         .fetch_optional(pool.as_ref())
@@ -161,7 +163,10 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             }
             Ok(None) => {
                 // Section not found in DB, return static data
-                tracing::debug!("Section '{}' not found in database, using static data", section_key);
+                tracing::debug!(
+                    "Section '{}' not found in database, using static data",
+                    section_key
+                );
             }
             Err(e) => {
                 tracing::error!("Database error fetching portfolio section: {}", e);
@@ -169,7 +174,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             }
         }
     }
-    
+
     // Return static/fallback data
     match get_static_data(&section_key) {
         Some(data) => (
@@ -200,7 +205,7 @@ pub async fn update_portfolio(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    
+
     let token = match token {
         Some(t) => t,
         None => {
@@ -214,7 +219,7 @@ pub async fn update_portfolio(
             );
         }
     };
-    
+
     // Verify token
     if verify_access_token(token).is_err() {
         return (
@@ -226,7 +231,7 @@ pub async fn update_portfolio(
             }),
         );
     }
-    
+
     // Validate section
     if !is_valid_section(&payload.section) {
         return (
@@ -234,13 +239,16 @@ pub async fn update_portfolio(
             Json(UpdatePortfolioResponse {
                 success: false,
                 message: None,
-                error: Some(format!("Invalid section. Valid sections: {:?}", VALID_SECTIONS)),
+                error: Some(format!(
+                    "Invalid section. Valid sections: {:?}",
+                    VALID_SECTIONS
+                )),
             }),
         );
     }
-    
+
     let section_key = payload.section.to_lowercase();
-    
+
     // Update in database
     let pool = match db::get_pool() {
         Some(p) => p,
@@ -255,7 +263,7 @@ pub async fn update_portfolio(
             );
         }
     };
-    
+
     // Upsert the section
     match sqlx::query(
         r#"
@@ -264,7 +272,7 @@ pub async fn update_portfolio(
         ON CONFLICT (key) DO UPDATE SET
             content = EXCLUDED.content,
             updated_at = now()
-        "#
+        "#,
     )
     .bind(&section_key)
     .bind(&payload.data)

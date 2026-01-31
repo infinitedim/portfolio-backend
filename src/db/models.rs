@@ -2,7 +2,6 @@
  * Database Models
  * Structs representing database tables
  */
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
