@@ -160,6 +160,7 @@ pub struct LogoutResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // Constructed via Json() in error responses
 pub struct ErrorResponse {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]

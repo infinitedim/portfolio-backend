@@ -186,7 +186,7 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
     };
 
     // Clamp page_size to max 100
-    let page_size = query.page_size.min(100).max(1);
+    let page_size = query.page_size.clamp(1, 100);
     let page = query.page.max(1);
     let offset = (page - 1) * page_size;
 

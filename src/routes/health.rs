@@ -20,6 +20,7 @@ pub fn init_start_time() {
 /// Health status enum
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // Reserved for future health API responses
 pub enum HealthStatus {
     Ok,
     Healthy,

@@ -1,7 +1,6 @@
-/**
- * Database Models
- * Structs representing database tables
- */
+//! Database Models - structs representing database tables (used by sqlx/serde).
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
