@@ -13,6 +13,7 @@ pub enum LogLevel {
     Debug,
     Info,
     Warn,
+    #[serde(alias = "fatal")]
     Error,
 }
 
@@ -32,7 +33,7 @@ impl std::fmt::Display for LogLevel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientLogEntry {
     pub timestamp: String,
-    pub level: String,
+    pub level: LogLevel,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<serde_json::Value>,

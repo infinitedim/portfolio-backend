@@ -4,7 +4,6 @@
  */
 
 use axum::{
-    body::Body,
     extract::Request,
     middleware::Next,
     response::Response,
@@ -13,21 +12,19 @@ use tower_http::request_id::{RequestId, MakeRequestUuid, PropagateRequestIdLayer
 use std::time::Instant;
 
 /// Request logging middleware
-pub async fn log_request(
-    request_id: Option<RequestId>,
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn log_request(request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let version = request.version();
 
-    // Extract request ID
-    let req_id = request_id
-        .as_ref()
+    // Extract request ID from extensions (set by SetRequestIdLayer)
+    let req_id = request
+        .extensions()
+        .get::<RequestId>()
         .and_then(|id| id.header_value().to_str().ok())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
     // Log incoming request
     tracing::info!(

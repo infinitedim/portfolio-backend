@@ -6,7 +6,7 @@
 pub mod config;
 pub mod middleware;
 
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use tracing_appender::{non_blocking, rolling};
 use std::io;
 

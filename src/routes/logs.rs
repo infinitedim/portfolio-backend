@@ -4,22 +4,22 @@
  */
 
 use axum::{
-    extract::Json,
+    extract::{Json, Extension},
     http::StatusCode,
     response::IntoResponse,
 };
 use tower_http::request_id::RequestId;
-use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogResponse};
+use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogLevel, LogResponse};
 
 /// POST /api/logs - Receive client logs
 #[tracing::instrument(skip(logs), fields(batch_size = logs.logs.len()))]
 pub async fn receive_client_logs(
-    request_id: Option<RequestId>,
+    request_id: Option<Extension<RequestId>>,
     Json(logs): Json<ClientLogBatch>,
 ) -> impl IntoResponse {
     let req_id = request_id
         .as_ref()
-        .and_then(|id| id.header_value().to_str().ok())
+        .and_then(|ext| ext.0.header_value().to_str().ok())
         .unwrap_or("unknown");
 
     tracing::info!(
@@ -55,9 +55,6 @@ pub async fn receive_client_logs(
 
 /// Process a single client log entry
 fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), String> {
-    // Parse log level
-    let level = log.level.as_str();
-
     // Create structured log entry
     let span = tracing::info_span!(
         "client_log",
@@ -69,40 +66,37 @@ fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), Stri
     let _enter = span.enter();
 
     // Log based on level
-    match level {
-        "trace" => tracing::trace!(
+    match log.level {
+        LogLevel::Trace => tracing::trace!(
             message = %log.message,
             context = ?log.context,
             metadata = ?log.metadata,
             "client log"
         ),
-        "debug" => tracing::debug!(
+        LogLevel::Debug => tracing::debug!(
             message = %log.message,
             context = ?log.context,
             metadata = ?log.metadata,
             "client log"
         ),
-        "info" => tracing::info!(
+        LogLevel::Info => tracing::info!(
             message = %log.message,
             context = ?log.context,
             metadata = ?log.metadata,
             "client log"
         ),
-        "warn" => tracing::warn!(
+        LogLevel::Warn => tracing::warn!(
             message = %log.message,
             context = ?log.context,
             metadata = ?log.metadata,
             "client log"
         ),
-        "error" | "fatal" => tracing::error!(
+        LogLevel::Error => tracing::error!(
             message = %log.message,
             context = ?log.context,
             metadata = ?log.metadata,
             "client log"
         ),
-        _ => {
-            return Err(format!("Unknown log level: {}", level));
-        }
     }
 
     Ok(())
