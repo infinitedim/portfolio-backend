@@ -1,0 +1,55 @@
+# ============================================================================
+# CD Pipeline - Backend Production (portfolio-backend)
+# Build release binary; add deploy steps when backend is deployed to VPS.
+# ============================================================================
+
+name: CD - Production
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-production
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build Release
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: portfolio-backend-binary
+          path: target/release/portfolio-backend
+          retention-days: 7
+
+  # Uncomment and configure when deploying backend to VPS
+  # deploy:
+  #   name: Deploy to Production
+  #   runs-on: ubuntu-latest
+  #   needs: build-release
+  #   environment: production
+  #   steps:
+  #     - name: Download binary
+  #       uses: actions/download-artifact@v6
+  #       with:
+  #         name: portfolio-backend-binary
+  #     - name: Deploy via SSH
+  #       run: |
+  #         scp portfolio-backend ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/portfolio-backend/
+  #         ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "systemctl restart portfolio-backend"
