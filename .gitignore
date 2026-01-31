@@ -4,3 +4,4 @@
 *.log.*
 /data
 Cargo.lock
+.env
