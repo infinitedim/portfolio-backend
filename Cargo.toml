@@ -57,3 +57,6 @@ ammonia = "4"
 
 # Regex for validation
 regex = "1"
+
+# Pin time to avoid time-core 0.1.8 (edition2024 not supported in older Cargo on deploy)
+time = "0.3.45"
