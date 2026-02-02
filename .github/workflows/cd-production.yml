@@ -32,7 +32,7 @@ jobs:
         run: cargo build --release
 
       - name: Upload release binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: portfolio-backend-binary
           path: target/release/portfolio-backend
