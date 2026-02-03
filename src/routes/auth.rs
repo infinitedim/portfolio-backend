@@ -543,3 +543,112 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
     // Logout always succeeds (idempotent)
     (StatusCode::OK, Json(LogoutResponse { success: true }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use axum::routing::post;
+    use tower::ServiceExt;
+
+    fn auth_router() -> Router {
+        Router::new()
+            .route("/api/auth/login", post(login))
+            .route("/api/auth/verify", post(verify_token))
+            .route("/api/auth/refresh", post(refresh))
+            .route("/api/auth/logout", post(logout))
+    }
+
+    async fn post_json(app: Router, uri: &str, json: &impl serde::Serialize) -> (StatusCode, axum::body::Bytes) {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let mut req = Request::post(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
+        // Login handler needs ConnectInfo; set peer address for tests
+        if uri.contains("/login") {
+            req.extensions_mut().insert(SocketAddr::from(([127, 0, 0, 1], 12345)));
+        }
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        (status, bytes)
+    }
+
+    async fn post_empty(app: Router, uri: &str) -> (StatusCode, axum::body::Bytes) {
+        let req = Request::post(uri).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        (status, bytes)
+    }
+
+    #[test]
+    fn test_verify_access_token_invalid_returns_err() {
+        let result = verify_access_token("invalid.jwt.token");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_login_empty_email_returns_bad_request() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest { email: "".to_string(), password: "admin123".to_string() },
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_login_invalid_email_format_returns_bad_request() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest { email: "no-at-sign".to_string(), password: "admin123".to_string() },
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_login_wrong_credentials_returns_unauthorized() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest { email: "admin@example.com".to_string(), password: "wrongpassword".to_string() },
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_verify_no_token_returns_error_in_body() {
+        let (status, bytes) = post_empty(auth_router(), "/api/auth/verify").await;
+        assert_eq!(status, StatusCode::OK);
+        let body: VerifyResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(!body.success);
+        assert!(!body.is_valid);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_empty_token_returns_bad_request() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/refresh",
+            &RefreshRequest { refresh_token: "".to_string() },
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_logout_returns_success() {
+        let (status, bytes) = post_json(
+            auth_router(),
+            "/api/auth/logout",
+            &LogoutRequest { access_token: None, refresh_token: None },
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: LogoutResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.success);
+    }
+}

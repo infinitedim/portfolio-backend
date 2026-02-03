@@ -211,3 +211,88 @@ pub async fn health_ready() -> impl IntoResponse {
 
     (StatusCode::OK, Json(response))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    fn test_router() -> Router {
+        Router::new()
+            .route("/health", get(health_ping))
+            .route("/health/detailed", get(health_detailed))
+            .route("/health/database", get(health_database))
+            .route("/health/redis", get(health_redis))
+            .route("/health/ready", get(health_ready))
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(app: Router, uri: &str) -> (StatusCode, T) {
+        let req = Request::get(uri).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let value: T = serde_json::from_slice(&body).unwrap();
+        (status, value)
+    }
+
+    #[test]
+    fn test_health_status_serialization() {
+        let status = HealthStatus::Ok;
+        let s = serde_json::to_string(&status).unwrap();
+        assert_eq!(s, "\"ok\"");
+    }
+
+    #[test]
+    fn test_service_check_has_required_fields() {
+        let check = ServiceCheck {
+            status: "healthy".to_string(),
+            response_time: Some(10),
+            error: None,
+        };
+        let json = serde_json::to_string(&check).unwrap();
+        assert!(json.contains("healthy"));
+    }
+
+    #[tokio::test]
+    async fn test_health_ping_returns_ok() {
+        init_start_time();
+        let (status, body) = get_json::<SimpleHealthResponse>(test_router(), "/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_health_redis_returns_unhealthy() {
+        let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/redis").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "unhealthy");
+    }
+
+    #[tokio::test]
+    async fn test_health_database_returns_when_no_pool() {
+        let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/database").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "unhealthy");
+    }
+
+    #[tokio::test]
+    async fn test_health_detailed_returns_ok() {
+        init_start_time();
+        let (status, body) = get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(body.uptime.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_health_ready_returns_ready() {
+        init_start_time();
+        let (status, body) = get_json::<ReadyResponse>(test_router(), "/health/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ready");
+    }
+}

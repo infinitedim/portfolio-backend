@@ -81,3 +81,18 @@ pub fn request_id_layer() -> SetRequestIdLayer<MakeRequestUuid> {
 pub fn propagate_request_id_layer() -> PropagateRequestIdLayer {
     PropagateRequestIdLayer::x_request_id()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_request_id_layer_creates_layer() {
+        let _layer = request_id_layer();
+    }
+
+    #[test]
+    fn test_propagate_request_id_layer_creates_layer() {
+        let _layer = propagate_request_id_layer();
+    }
+}

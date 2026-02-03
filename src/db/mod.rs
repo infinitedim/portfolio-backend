@@ -197,3 +197,31 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_db_config_default_uses_env_or_fallback() {
+        let config = DbConfig::default();
+        assert!(config.max_connections >= 1);
+        assert!(config.min_connections >= 0);
+        assert!(config.connect_timeout_secs >= 1);
+        assert!(config.idle_timeout_secs >= 1);
+        assert!(!config.url.is_empty());
+    }
+
+    #[test]
+    fn test_get_pool_none_before_init() {
+        // DB_POOL is not initialized in test; get_pool returns None
+        let pool = get_pool();
+        assert!(pool.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_health_check_fails_without_pool() {
+        let result = health_check().await;
+        assert!(result.is_err());
+    }
+}

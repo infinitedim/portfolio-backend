@@ -54,9 +54,10 @@ pub struct UpdatePortfolioResponse {
 // ============================================================================
 
 /// Valid section keys
-const VALID_SECTIONS: &[&str] = &["skills", "projects", "experience", "about"];
+pub const VALID_SECTIONS: &[&str] = &["skills", "projects", "experience", "about"];
 
-fn is_valid_section(section: &str) -> bool {
+/// Check if section key is valid (for tests).
+pub fn is_valid_section(section: &str) -> bool {
     VALID_SECTIONS.contains(&section.to_lowercase().as_str())
 }
 
@@ -64,8 +65,8 @@ fn is_valid_section(section: &str) -> bool {
 // Static/Fallback Data
 // ============================================================================
 
-/// Get static/fallback data for a section
-fn get_static_data(section: &str) -> Option<Value> {
+/// Get static/fallback data for a section (for tests).
+pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
         "projects" => Some(serde_json::json!([
             {
@@ -298,5 +299,86 @@ pub async fn update_portfolio(
                 }),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use axum::routing::{get, patch};
+    use tower::ServiceExt;
+
+    fn portfolio_router() -> Router {
+        Router::new()
+            .route("/api/portfolio", get(get_portfolio).patch(update_portfolio))
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(app: Router, uri: &str) -> (StatusCode, T) {
+        let req = Request::get(uri).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let value: T = serde_json::from_slice(&bytes).unwrap();
+        (status, value)
+    }
+
+    async fn patch_json(app: Router, uri: &str, json: &impl serde::Serialize) -> StatusCode {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let req = Request::patch(uri).header("content-type", "application/json").body(body).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        res.status()
+    }
+
+    #[test]
+    fn test_is_valid_section() {
+        assert!(is_valid_section("skills"));
+        assert!(is_valid_section("Skills"));
+        assert!(is_valid_section("projects"));
+        assert!(is_valid_section("experience"));
+        assert!(is_valid_section("about"));
+        assert!(!is_valid_section("invalid"));
+        assert!(!is_valid_section(""));
+    }
+
+    #[test]
+    fn test_get_static_data() {
+        assert!(get_static_data("skills").is_some());
+        assert!(get_static_data("projects").is_some());
+        assert!(get_static_data("experience").is_some());
+        assert!(get_static_data("about").is_some());
+        assert!(get_static_data("invalid").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_portfolio_missing_section_returns_bad_request() {
+        let (status, _) = get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_portfolio_invalid_section_returns_bad_request() {
+        let (status, _) = get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=invalid").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_portfolio_skills_returns_ok_with_data() {
+        let (status, body) = get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=skills").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.data.is_some());
+        assert!(body.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_portfolio_no_auth_returns_unauthorized() {
+        let status = patch_json(
+            portfolio_router(),
+            "/api/portfolio",
+            &UpdatePortfolioRequest { section: "skills".to_string(), data: serde_json::json!({"test": true}) },
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

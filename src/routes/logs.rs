@@ -100,3 +100,56 @@ fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), Stri
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogLevel};
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use axum::routing::post;
+    use tower::ServiceExt;
+
+    fn logs_router() -> Router {
+        Router::new().route("/api/logs", post(receive_client_logs))
+    }
+
+    async fn post_json(app: Router, uri: &str, json: &impl serde::Serialize) -> (axum::http::StatusCode, axum::body::Bytes) {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let req = Request::post(uri).header("content-type", "application/json").body(body).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        (status, bytes)
+    }
+
+    #[tokio::test]
+    async fn test_receive_client_logs_accepts_batch() {
+        let batch = ClientLogBatch {
+            logs: vec![ClientLogEntry {
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                level: LogLevel::Info,
+                message: "test message".to_string(),
+                context: None,
+                metadata: None,
+            }],
+        };
+        let (status, bytes) = post_json(logs_router(), "/api/logs", &batch).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        let body: crate::logging::config::LogResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.success);
+        assert_eq!(body.received, 1);
+        assert_eq!(body.processed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_receive_client_logs_empty_batch() {
+        let batch = ClientLogBatch { logs: vec![] };
+        let (status, bytes) = post_json(logs_router(), "/api/logs", &batch).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        let body: crate::logging::config::LogResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.success);
+        assert_eq!(body.received, 0);
+    }
+}

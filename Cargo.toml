@@ -60,3 +60,7 @@ regex = "1"
 
 # Pin time to avoid time-core 0.1.8 (edition2024 not supported in older Cargo on deploy)
 time = "0.3.45"
+
+[dev-dependencies]
+# Test utilities (tokio already in dependencies with "full")
+# axum-test removed to avoid extra deps; tests use tower::ServiceExt::oneshot

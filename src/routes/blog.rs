@@ -31,11 +31,13 @@ pub struct BlogListQuery {
     pub published: Option<bool>,
 }
 
-fn default_page() -> i64 {
+/// Default page for list (for tests).
+pub fn default_page() -> i64 {
     1
 }
 
-fn default_page_size() -> i64 {
+/// Default page size for list (for tests).
+pub fn default_page_size() -> i64 {
     10
 }
 
@@ -123,12 +125,13 @@ lazy_static::lazy_static! {
     static ref SLUG_REGEX: Regex = Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap();
 }
 
-fn is_valid_slug(slug: &str) -> bool {
+/// Check if slug is valid (for tests).
+pub fn is_valid_slug(slug: &str) -> bool {
     SLUG_REGEX.is_match(slug)
 }
 
-/// Sanitize HTML content using ammonia
-fn sanitize_html(html: &str) -> String {
+/// Sanitize HTML content using ammonia (for tests).
+pub fn sanitize_html(html: &str) -> String {
     ammonia::clean(html)
 }
 
@@ -650,5 +653,87 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use axum::routing::{delete, get, patch, post};
+    use tower::ServiceExt;
+
+    fn blog_router() -> Router {
+        Router::new()
+            .route("/api/blog", get(list_posts).post(create_post))
+            .route("/api/blog/{slug}", get(get_post).patch(update_post).delete(delete_post))
+    }
+
+    async fn get_status(app: Router, uri: &str) -> StatusCode {
+        let req = Request::get(uri).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        res.status()
+    }
+
+    async fn post_json(app: Router, uri: &str, json: &impl serde::Serialize) -> StatusCode {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let req = Request::post(uri).header("content-type", "application/json").body(body).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        res.status()
+    }
+
+    #[test]
+    fn test_is_valid_slug() {
+        assert!(is_valid_slug("my-post"));
+        assert!(is_valid_slug("post123"));
+        assert!(is_valid_slug("a-b-c"));
+        assert!(!is_valid_slug("Invalid"));
+        assert!(!is_valid_slug("has space"));
+        assert!(!is_valid_slug(""));
+    }
+
+    #[test]
+    fn test_sanitize_html_removes_script() {
+        let html = "<p>Hello</p><script>alert(1)</script>";
+        let out = sanitize_html(html);
+        assert!(!out.contains("<script>"));
+        assert!(out.contains("Hello"));
+    }
+
+    #[test]
+    fn test_default_page_and_page_size() {
+        assert_eq!(default_page(), 1);
+        assert_eq!(default_page_size(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_list_posts_no_db_returns_503() {
+        let status = get_status(blog_router(), "/api/blog").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_get_post_invalid_slug_returns_bad_request() {
+        let status = get_status(blog_router(), "/api/blog/Invalid_Slug").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_post_no_auth_returns_unauthorized() {
+        let status = post_json(
+            blog_router(),
+            "/api/blog",
+            &CreateBlogRequest {
+                title: "Test".to_string(),
+                slug: "test-post".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+            },
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

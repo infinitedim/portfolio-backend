@@ -188,6 +188,42 @@ NEXT_PUBLIC_LOG_API_URL=/api/logs
 - **Backend logs**: Daily rotation, 30 days
 - **Frontend logs**: 50MB rotation, 10 files
 
+## Testing
+
+Unit tests are in each module under `#[cfg(test)] mod tests`. No database or Redis is required for tests (handlers use fallbacks when the pool is not initialized).
+
+### Run tests
+
+```bash
+cargo test
+```
+
+**Note (Windows):** If you see linker errors like `link: extra operand`, ensure the MSVC link.exe is used (e.g. run from "Developer Command Prompt for VS" or fix PATH so MSVC tools come before GNU/MinGW).
+
+### Coverage (target >88%)
+
+Install [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and run:
+
+```bash
+# Install (once)
+cargo install cargo-llvm-cov
+
+# Run tests with coverage
+cargo llvm-cov test
+
+# Report (text)
+cargo llvm-cov report
+
+# HTML report (open target/llvm-cov/html/index.html)
+cargo llvm-cov report --html
+```
+
+To enforce a minimum coverage threshold (e.g. 88%):
+
+```bash
+cargo llvm-cov report --summary-only --fail-under 88
+```
+
 ## Development
 
 ### Adding Logging to Code
