@@ -15,11 +15,12 @@ pub async fn log_request(request: Request, next: Next) -> Response {
     let uri = request.uri().clone();
     let version = request.version();
 
-    let req_id = request
+    let req_id: String = request
         .extensions()
         .get::<RequestId>()
         .and_then(|id| id.header_value().to_str().ok())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
     // Log incoming request
     tracing::info!(

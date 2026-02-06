@@ -307,6 +307,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    #[allow(unused_imports)]
     use axum::routing::{get, patch};
     use axum::Router;
     use tower::ServiceExt;
