@@ -1,8 +1,7 @@
-/**
+/*!
  * Logging Configuration
  * Configuration types and utilities for logging
  */
-
 use serde::{Deserialize, Serialize};
 
 /// Log level enumeration

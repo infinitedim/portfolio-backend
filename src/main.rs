@@ -2,20 +2,15 @@
  * Portfolio Backend
  * Main application entry point
  */
-
 mod logging;
 mod routes;
 
-use axum::{
-    routing::post,
-    Router,
-    middleware,
-};
+use axum::{middleware, routing::post, Router};
+use std::net::SocketAddr;
 use tower_http::{
-    cors::{CorsLayer, Any},
+    cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() {
@@ -27,7 +22,7 @@ async fn main() {
 
     // Define the address
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    
+
     tracing::info!("Starting server on {}", addr);
 
     // Run the server

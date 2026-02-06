@@ -1,25 +1,25 @@
-/**
+/*!
  * Logs Route Handler
  * Endpoint for receiving client logs from frontend
  */
-
 use axum::{
-    extract::Json,
+    extract::{Extension, Json},
     http::StatusCode,
     response::IntoResponse,
 };
 use tower_http::request_id::RequestId;
+
 use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogResponse};
 
 /// POST /api/logs - Receive client logs
 #[tracing::instrument(skip(logs), fields(batch_size = logs.logs.len()))]
 pub async fn receive_client_logs(
-    request_id: Option<RequestId>,
+    request_id: Option<Extension<RequestId>>,
     Json(logs): Json<ClientLogBatch>,
 ) -> impl IntoResponse {
     let req_id = request_id
         .as_ref()
-        .and_then(|id| id.header_value().to_str().ok())
+        .and_then(|ext| ext.header_value().to_str().ok())
         .unwrap_or("unknown");
 
     tracing::info!(

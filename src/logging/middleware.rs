@@ -1,31 +1,23 @@
-/**
+/*!
  * Logging Middleware
  * HTTP request/response logging and request ID tracking
  */
-
-use axum::{
-    body::Body,
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
-use tower_http::request_id::{RequestId, MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use axum::{extract::Request, middleware::Next, response::Response};
 use std::time::Instant;
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 
 /// Request logging middleware
-pub async fn log_request(
-    request_id: Option<RequestId>,
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn log_request(request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let version = request.version();
 
-    // Extract request ID
-    let req_id = request_id
-        .as_ref()
+    let req_id = request
+        .extensions()
+        .get::<RequestId>()
         .and_then(|id| id.header_value().to_str().ok())
         .unwrap_or("unknown");
 
