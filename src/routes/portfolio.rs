@@ -25,7 +25,7 @@ pub struct PortfolioQuery {
 }
 
 /// Response for GET /api/portfolio
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PortfolioResponse {
     pub data: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,7 +33,7 @@ pub struct PortfolioResponse {
 }
 
 /// Request body for PATCH /api/portfolio
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdatePortfolioRequest {
     pub section: String,
     pub data: Value,

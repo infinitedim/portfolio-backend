@@ -120,7 +120,7 @@ pub struct LoginResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub success: bool,
@@ -155,7 +155,7 @@ pub struct LogoutRequest {
     pub refresh_token: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct LogoutResponse {
     pub success: bool,
 }

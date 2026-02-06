@@ -80,7 +80,7 @@ pub struct BlogPostResponse {
 }
 
 /// Request body for POST /api/blog (create)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateBlogRequest {
     pub title: String,
