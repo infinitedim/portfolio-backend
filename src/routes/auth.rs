@@ -102,7 +102,8 @@ pub struct UserInfo {
 // Request/Response Types
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
@@ -129,7 +130,7 @@ pub struct VerifyResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshRequest {
     pub refresh_token: String,
@@ -145,7 +146,7 @@ pub struct RefreshResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutRequest {
     #[serde(default)]
