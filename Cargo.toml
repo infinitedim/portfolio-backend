@@ -29,7 +29,7 @@ dotenvy = "0.15"
 # Auth
 bcrypt = "0.17"
 jsonwebtoken = "9"
-rand = "0.8"
+rand = "0.9"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
