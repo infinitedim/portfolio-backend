@@ -28,7 +28,7 @@ dotenvy = "0.15"
 
 # Auth
 bcrypt = "0.17"
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 rand = "0.8"
 
 # Database
