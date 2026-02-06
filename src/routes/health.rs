@@ -217,8 +217,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::Router;
     use axum::routing::get;
+    use axum::Router;
     use tower::ServiceExt;
 
     fn test_router() -> Router {
@@ -234,7 +234,9 @@ mod tests {
         let req = Request::get(uri).body(Body::empty()).unwrap();
         let res = app.oneshot(req).await.unwrap();
         let status = res.status();
-        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let value: T = serde_json::from_slice(&body).unwrap();
         (status, value)
     }
@@ -282,7 +284,8 @@ mod tests {
     #[tokio::test]
     async fn test_health_detailed_returns_ok() {
         init_start_time();
-        let (status, body) = get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        let (status, body) =
+            get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert!(body.uptime.is_some());

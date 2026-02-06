@@ -549,31 +549,35 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::Router;
     use axum::routing::post;
+    use axum::Router;
     use tower::ServiceExt;
 
     fn auth_router() -> Router {
+        use axum::extract::connect_info::MockConnectInfo;
         Router::new()
             .route("/api/auth/login", post(login))
             .route("/api/auth/verify", post(verify_token))
             .route("/api/auth/refresh", post(refresh))
             .route("/api/auth/logout", post(logout))
+            .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
     }
 
-    async fn post_json(app: Router, uri: &str, json: &impl serde::Serialize) -> (StatusCode, axum::body::Bytes) {
+    async fn post_json(
+        app: Router,
+        uri: &str,
+        json: &impl serde::Serialize,
+    ) -> (StatusCode, axum::body::Bytes) {
         let body = Body::from(serde_json::to_vec(json).unwrap());
-        let mut req = Request::post(uri)
+        let req = Request::post(uri)
             .header("content-type", "application/json")
             .body(body)
             .unwrap();
-        // Login handler needs ConnectInfo; set peer address for tests
-        if uri.contains("/login") {
-            req.extensions_mut().insert(SocketAddr::from(([127, 0, 0, 1], 12345)));
-        }
         let res = app.oneshot(req).await.unwrap();
         let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         (status, bytes)
     }
 
@@ -581,7 +585,9 @@ mod tests {
         let req = Request::post(uri).body(Body::empty()).unwrap();
         let res = app.oneshot(req).await.unwrap();
         let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         (status, bytes)
     }
 
@@ -596,8 +602,12 @@ mod tests {
         let (status, _) = post_json(
             auth_router(),
             "/api/auth/login",
-            &LoginRequest { email: "".to_string(), password: "admin123".to_string() },
-        ).await;
+            &LoginRequest {
+                email: "".to_string(),
+                password: "admin123".to_string(),
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -606,8 +616,12 @@ mod tests {
         let (status, _) = post_json(
             auth_router(),
             "/api/auth/login",
-            &LoginRequest { email: "no-at-sign".to_string(), password: "admin123".to_string() },
-        ).await;
+            &LoginRequest {
+                email: "no-at-sign".to_string(),
+                password: "admin123".to_string(),
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -616,8 +630,12 @@ mod tests {
         let (status, _) = post_json(
             auth_router(),
             "/api/auth/login",
-            &LoginRequest { email: "admin@example.com".to_string(), password: "wrongpassword".to_string() },
-        ).await;
+            &LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "wrongpassword".to_string(),
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
@@ -635,8 +653,11 @@ mod tests {
         let (status, _) = post_json(
             auth_router(),
             "/api/auth/refresh",
-            &RefreshRequest { refresh_token: "".to_string() },
-        ).await;
+            &RefreshRequest {
+                refresh_token: "".to_string(),
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -645,8 +666,12 @@ mod tests {
         let (status, bytes) = post_json(
             auth_router(),
             "/api/auth/logout",
-            &LogoutRequest { access_token: None, refresh_token: None },
-        ).await;
+            &LogoutRequest {
+                access_token: None,
+                refresh_token: None,
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let body: LogoutResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(body.success);

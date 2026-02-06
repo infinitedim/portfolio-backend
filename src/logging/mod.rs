@@ -2,12 +2,13 @@
  * Logging Module
  * Centralized logging configuration and utilities
  */
+
 pub mod config;
 pub mod middleware;
 
-use std::io;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_appender::{non_blocking, rolling};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use std::io;
 
 /// Initialize the logging system
 pub fn init() {
@@ -30,23 +31,26 @@ pub fn init() {
     let (console_writer, _console_guard) = non_blocking(io::stdout());
 
     // Configure log level
-    let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| {
-        if is_production {
-            "info".to_string()
-        } else {
-            "debug".to_string()
-        }
-    });
+    let log_level = std::env::var("LOG_LEVEL")
+        .unwrap_or_else(|_| {
+            if is_production {
+                "info".to_string()
+            } else {
+                "debug".to_string()
+            }
+        });
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(format!(
-            "portfolio_backend={},tower_http=debug,axum=debug",
-            log_level
-        ))
-    });
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            EnvFilter::new(format!(
+                "portfolio_backend={},tower_http=debug,axum=debug",
+                log_level
+            ))
+        });
 
     // Build the subscriber
-    let subscriber = tracing_subscriber::registry().with(env_filter);
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter);
 
     if is_production {
         // JSON format for production
@@ -97,7 +101,10 @@ pub fn init() {
             .with_thread_ids(false)
             .with_thread_names(false);
 
-        subscriber.with(file_layer).with(console_layer).init();
+        subscriber
+            .with(file_layer)
+            .with(console_layer)
+            .init();
     }
 
     tracing::info!("Logging initialized for {} environment", environment);

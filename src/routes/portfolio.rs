@@ -307,27 +307,31 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::Router;
     use axum::routing::{get, patch};
+    use axum::Router;
     use tower::ServiceExt;
 
     fn portfolio_router() -> Router {
-        Router::new()
-            .route("/api/portfolio", get(get_portfolio).patch(update_portfolio))
+        Router::new().route("/api/portfolio", get(get_portfolio).patch(update_portfolio))
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(app: Router, uri: &str) -> (StatusCode, T) {
         let req = Request::get(uri).body(Body::empty()).unwrap();
         let res = app.oneshot(req).await.unwrap();
         let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let value: T = serde_json::from_slice(&bytes).unwrap();
         (status, value)
     }
 
     async fn patch_json(app: Router, uri: &str, json: &impl serde::Serialize) -> StatusCode {
         let body = Body::from(serde_json::to_vec(json).unwrap());
-        let req = Request::patch(uri).header("content-type", "application/json").body(body).unwrap();
+        let req = Request::patch(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
         let res = app.oneshot(req).await.unwrap();
         res.status()
     }
@@ -360,13 +364,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_portfolio_invalid_section_returns_bad_request() {
-        let (status, _) = get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=invalid").await;
+        let (status, _) =
+            get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=invalid")
+                .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn test_get_portfolio_skills_returns_ok_with_data() {
-        let (status, body) = get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=skills").await;
+        let (status, body) =
+            get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=skills")
+                .await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.data.is_some());
         assert!(body.error.is_none());
@@ -377,8 +385,12 @@ mod tests {
         let status = patch_json(
             portfolio_router(),
             "/api/portfolio",
-            &UpdatePortfolioRequest { section: "skills".to_string(), data: serde_json::json!({"test": true}) },
-        ).await;
+            &UpdatePortfolioRequest {
+                section: "skills".to_string(),
+                data: serde_json::json!({"test": true}),
+            },
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

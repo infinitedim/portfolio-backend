@@ -661,14 +661,17 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::Router;
     use axum::routing::{delete, get, patch, post};
+    use axum::Router;
     use tower::ServiceExt;
 
     fn blog_router() -> Router {
         Router::new()
             .route("/api/blog", get(list_posts).post(create_post))
-            .route("/api/blog/{slug}", get(get_post).patch(update_post).delete(delete_post))
+            .route(
+                "/api/blog/{slug}",
+                get(get_post).patch(update_post).delete(delete_post),
+            )
     }
 
     async fn get_status(app: Router, uri: &str) -> StatusCode {
@@ -679,7 +682,10 @@ mod tests {
 
     async fn post_json(app: Router, uri: &str, json: &impl serde::Serialize) -> StatusCode {
         let body = Body::from(serde_json::to_vec(json).unwrap());
-        let req = Request::post(uri).header("content-type", "application/json").body(body).unwrap();
+        let req = Request::post(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
         let res = app.oneshot(req).await.unwrap();
         res.status()
     }
@@ -733,7 +739,8 @@ mod tests {
                 content_html: None,
                 published: Some(false),
             },
-        ).await;
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

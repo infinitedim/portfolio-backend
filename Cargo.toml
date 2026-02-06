@@ -5,23 +5,14 @@ edition = "2021"
 
 [dependencies]
 # Web framework
-axum = "0.8"
-tokio = { version = "1", features = ["full", "sync"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = [
-  "trace",
-  "request-id",
-  "util",
-  "cors",
-] }
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "request-id", "util", "cors"] }
 
 # Logging and tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
-  "json",
-  "fmt",
-] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 tracing-appender = "0.2"
 
 # Serialization
@@ -31,36 +22,14 @@ serde_json = "1.0"
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-lazy_static = "1.4"
-async-trait = "0.1"
-thiserror = "1.0"
-
-# Authentication
-jsonwebtoken = "9"
-bcrypt = "0.15"
-rand = "0.8"
-
-# Environment
+lazy_static = "1.5"
+regex = "1"
 dotenvy = "0.15"
 
+# Auth
+bcrypt = "0.17"
+jsonwebtoken = "9"
+rand = "0.8"
+
 # Database
-sqlx = { version = "0.8", features = [
-  "runtime-tokio",
-  "postgres",
-  "uuid",
-  "chrono",
-  "json",
-] }
-
-# HTML Sanitization
-ammonia = "4"
-
-# Regex for validation
-regex = "1"
-
-# Pin time to avoid time-core 0.1.8 (edition2024 not supported in older Cargo on deploy)
-time = "0.3.45"
-
-[dev-dependencies]
-# Test utilities (tokio already in dependencies with "full")
-# axum-test removed to avoid extra deps; tests use tower::ServiceExt::oneshot
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
