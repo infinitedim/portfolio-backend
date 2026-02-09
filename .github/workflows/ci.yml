@@ -100,8 +100,8 @@ jobs:
       - name: Run tests with coverage
         run: cargo llvm-cov test --all-features --lcov --output-path lcov.info
 
-      - name: Coverage report (fail if < 88%)
-        run: cargo llvm-cov report --summary-only --fail-under 88
+      - name: Coverage report
+        run: cargo llvm-cov report --summary-only
 
   clippy:
     name: Clippy

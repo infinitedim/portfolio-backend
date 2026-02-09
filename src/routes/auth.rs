@@ -232,19 +232,25 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 /// Check rate limit for an IP
 async fn check_rate_limit(ip: &str) -> bool {
     #[cfg(test)]
-    return true; // Bypass in tests so validation and credentials are exercised
-
-    let now = Utc::now().timestamp();
-    let mut limits = RATE_LIMIT.write().await;
-
-    if let Some(last_request) = limits.get(ip) {
-        if now - last_request < RATE_LIMIT_WINDOW_SECS {
-            return false; // Rate limited
-        }
+    {
+        let _ = ip;
+        return true; // Bypass in tests so validation and credentials are exercised
     }
 
-    limits.insert(ip.to_string(), now);
-    true // Allowed
+    #[cfg(not(test))]
+    {
+        let now = Utc::now().timestamp();
+        let mut limits = RATE_LIMIT.write().await;
+
+        if let Some(last_request) = limits.get(ip) {
+            if now - last_request < RATE_LIMIT_WINDOW_SECS {
+                return false; // Rate limited
+            }
+        }
+
+        limits.insert(ip.to_string(), now);
+        true // Allowed
+    }
 }
 
 // ============================================================================
