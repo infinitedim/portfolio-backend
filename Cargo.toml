@@ -35,4 +35,4 @@ rand = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 
 # HTML sanitization (blog)
-ammonia = "3"
+ammonia = "4"
