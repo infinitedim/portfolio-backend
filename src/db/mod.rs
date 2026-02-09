@@ -206,7 +206,6 @@ mod tests {
     fn test_db_config_default_uses_env_or_fallback() {
         let config = DbConfig::default();
         assert!(config.max_connections >= 1);
-        assert!(config.min_connections >= 0);
         assert!(config.connect_timeout_secs >= 1);
         assert!(config.idle_timeout_secs >= 1);
         assert!(!config.url.is_empty());

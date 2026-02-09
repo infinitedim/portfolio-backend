@@ -21,6 +21,7 @@ use crate::routes::auth::verify_access_token;
 /// Query parameters for GET /api/portfolio
 #[derive(Debug, Deserialize)]
 pub struct PortfolioQuery {
+    #[serde(default)]
     pub section: String,
 }
 
