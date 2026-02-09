@@ -11,7 +11,7 @@ use axum::{
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
@@ -174,11 +174,7 @@ pub struct ErrorResponse {
 
 /// Generate a random refresh token
 fn generate_refresh_token() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(64)
-        .map(char::from)
-        .collect()
+    Alphanumeric.sample_string(&mut rand::rng(), 64)
 }
 
 /// Hash a refresh token for storage
