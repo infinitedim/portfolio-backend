@@ -1268,6 +1268,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1288,6 +1289,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 49d6c1db0099e96b5a9d8f4b2fb7b5786f6bec96
 name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1343,7 +1346,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "tower 0.4.13",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "tracing-appender",
@@ -2132,10 +2135,6 @@ version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
 dependencies = [
- "futures-core",
- "futures-util",
- "pin-project",
- "pin-project-lite",
  "tower-layer",
  "tower-service",
  "tracing",
