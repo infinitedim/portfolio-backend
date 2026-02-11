@@ -37,15 +37,15 @@ cargo run
 
 ### Accessing Dashboards
 
-- **Grafana**: http://localhost:3001
+- **Grafana**: <http://localhost:3001>
   - Username: `admin`
   - Password: `admin`
-- **Loki API**: http://localhost:3100
-- **Promtail**: http://localhost:9080
+- **Loki API**: <http://localhost:3100>
+- **Promtail**: <http://localhost:9080>
 
 ## Architecture
 
-```
+```bash
 ┌─────────────────┐
 │  Frontend       │
 │  (Next.js)      │
@@ -291,6 +291,7 @@ try {
    ```
 
 4. Test Loki connection:
+
    ```bash
    curl http://localhost:3100/ready
    ```
@@ -300,6 +301,7 @@ try {
 1. Check Loki retention settings in `config/loki-config.yml`
 2. Reduce retention period if needed
 3. Run compaction manually:
+
    ```bash
    docker-compose -f docker-compose.logging.yml restart loki
    ```
