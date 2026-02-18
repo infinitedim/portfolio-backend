@@ -6,6 +6,35 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+/// Admin User model (from Prisma schema)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AdminUser {
+    pub id: String,
+    pub email: String,
+    pub password_hash: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub avatar: Option<String>,
+    pub role: String,
+    pub is_active: bool,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub last_login_ip: Option<String>,
+    pub login_attempts: i32,
+    pub locked_until: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// New admin user for insertion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewAdminUser {
+    pub email: String,
+    pub password_hash: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub role: Option<String>,
+}
+
 /// User model
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct User {

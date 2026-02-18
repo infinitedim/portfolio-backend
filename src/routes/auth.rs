@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
+use crate::db::{self, models::AdminUser};
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -116,6 +118,24 @@ pub struct LoginResponse {
     pub user: Option<UserInfo>,
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterResponse {
+    pub success: bool,
+    pub user: Option<UserInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -256,6 +276,174 @@ async fn check_rate_limit(ip: &str) -> bool {
 // ============================================================================
 // Handlers
 // ============================================================================
+
+/// POST /api/auth/register
+/// Register the first admin user (only works if no admin exists)
+pub async fn register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(payload): Json<RegisterRequest>,
+) -> impl IntoResponse {
+    let ip = addr.ip().to_string();
+
+    // Rate limit check
+    if !check_rate_limit(&ip).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(RegisterResponse {
+                success: false,
+                user: None,
+                error: Some("Too many requests. Please try again later.".to_string()),
+            }),
+        );
+    }
+
+    // Validate request
+    if payload.email.is_empty() || payload.password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(RegisterResponse {
+                success: false,
+                user: None,
+                error: Some("Email and password are required".to_string()),
+            }),
+        );
+    }
+
+    // Basic email format validation
+    if !payload.email.contains('@') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(RegisterResponse {
+                success: false,
+                user: None,
+                error: Some("Invalid email format".to_string()),
+            }),
+        );
+    }
+
+    // Password strength validation
+    if payload.password.len() < 8 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(RegisterResponse {
+                success: false,
+                user: None,
+                error: Some("Password must be at least 8 characters long".to_string()),
+            }),
+        );
+    }
+
+    // Get database pool
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(RegisterResponse {
+                    success: false,
+                    user: None,
+                    error: Some("Database not available".to_string()),
+                }),
+            );
+        }
+    };
+
+    // Check if any admin user already exists
+    let existing_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM admin_users")
+        .fetch_one(pool.as_ref())
+        .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!("Failed to check existing admin users: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RegisterResponse {
+                    success: false,
+                    user: None,
+                    error: Some("Database error".to_string()),
+                }),
+            );
+        }
+    };
+
+    // If any admin exists, registration is closed
+    if existing_count.0 > 0 {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(RegisterResponse {
+                success: false,
+                user: None,
+                error: Some("Registration is closed. An admin account already exists.".to_string()),
+            }),
+        );
+    }
+
+    // Hash password
+    let password_hash = match hash(&payload.password, DEFAULT_COST) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("Failed to hash password: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RegisterResponse {
+                    success: false,
+                    user: None,
+                    error: Some("Failed to process password".to_string()),
+                }),
+            );
+        }
+    };
+
+    // Insert new admin user
+    let user_id = uuid::Uuid::new_v4().to_string();
+    match sqlx::query(
+        r#"
+        INSERT INTO admin_users (id, email, password_hash, first_name, last_name, role, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true, now(), now())
+        "#,
+    )
+    .bind(&user_id)
+    .bind(&payload.email)
+    .bind(&password_hash)
+    .bind(&payload.first_name)
+    .bind(&payload.last_name)
+    .execute(pool.as_ref())
+    .await
+    {
+        Ok(_) => {
+            tracing::info!("Admin user registered successfully: {}", payload.email);
+            (
+                StatusCode::CREATED,
+                Json(RegisterResponse {
+                    success: true,
+                    user: Some(UserInfo {
+                        user_id,
+                        email: payload.email,
+                        role: "SUPER_ADMIN".to_string(),
+                    }),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => {
+            tracing::error!("Failed to create admin user: {}", e);
+            let error_msg = if e.to_string().contains("unique") {
+                "Email already registered".to_string()
+            } else {
+                "Failed to create account".to_string()
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RegisterResponse {
+                    success: false,
+                    user: None,
+                    error: Some(error_msg),
+                }),
+            )
+        }
+    }
+}
 
 /// POST /api/auth/login
 /// Authenticate user and return tokens

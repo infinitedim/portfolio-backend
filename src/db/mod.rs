@@ -100,7 +100,42 @@ pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("Running database migrations...");
 
-    // Create users table
+    // Create admin_users table (based on Prisma schema)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            avatar TEXT,
+            role TEXT NOT NULL DEFAULT 'ADMIN',
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            last_login_at TIMESTAMPTZ,
+            last_login_ip TEXT,
+            login_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create indexes for admin_users
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
+        CREATE INDEX IF NOT EXISTS idx_admin_users_is_active ON admin_users(is_active);
+        CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create users table (legacy, for compatibility)
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (

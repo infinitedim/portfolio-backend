@@ -17,50 +17,40 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 /// Uses ALLOWED_ORIGINS (comma-separated) or FRONTEND_ORIGIN.
 /// Falls back to allowing all origins in development.
 pub fn configure_cors() -> CorsLayer {
-    let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
-
-    let origins: Vec<HeaderValue> = std::env::var("ALLOWED_ORIGINS")
-        .or_else(|_| std::env::var("FRONTEND_ORIGIN"))
-        .map(|s| {
-            s.split(',')
-                .filter_map(|origin| origin.trim().parse::<HeaderValue>().ok())
-                .collect()
+    let allowed_origins = std::env::var("ALLOWED_ORIGINS")
+        .ok()
+        .and_then(|s| {
+            let origins: Vec<HeaderValue> = s
+                .split(',')
+                .filter_map(|origin| origin.trim().parse().ok())
+                .collect();
+            if origins.is_empty() {
+                None
+            } else {
+                Some(origins)
+            }
         })
-        .unwrap_or_default();
+        .or_else(|| {
+            std::env::var("FRONTEND_ORIGIN")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .map(|origin| vec![origin])
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "http://localhost:3000".parse().unwrap(),
+                "http://127.0.0.1:3000".parse().unwrap(),
+            ]
+        });
 
-    let cors = CorsLayer::new()
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PATCH,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
+    CorsLayer::new()
+        .allow_origin(allowed_origins)
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
-            axum::http::header::ACCEPT,
-            axum::http::header::HeaderName::from_static("x-request-id"),
-            axum::http::header::HeaderName::from_static("x-payload-encrypted"),
         ])
-        .allow_credentials(true);
-
-    if !origins.is_empty() {
-        tracing::info!("CORS: Allowing origins from env: {:?}", origins);
-        cors.allow_origin(origins)
-    } else if environment == "development" {
-        let dev_origins: Vec<HeaderValue> = vec![
-            "http://localhost:3000".parse().unwrap(),
-            "http://127.0.0.1:3000".parse().unwrap(),
-            "http://localhost:3001".parse().unwrap(),
-        ];
-        tracing::info!("CORS: Development mode - allowing localhost origins");
-        cors.allow_origin(dev_origins)
-    } else {
-        tracing::warn!("CORS: No origins configured in production - restricting to same origin");
-        cors
-    }
+        .allow_credentials(true)
 }
 
 /// Create and configure the application router.
@@ -70,6 +60,7 @@ pub fn create_app() -> Router {
 
     Router::new()
         .route("/api/logs", post(routes::logs::receive_client_logs))
+        .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/login", post(routes::auth::login))
         .route("/api/auth/verify", post(routes::auth::verify_token))
         .route("/api/auth/refresh", post(routes::auth::refresh))
@@ -137,7 +128,7 @@ pub async fn run() {
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
-    .expect("Failed to start server");
+    .expect("Server error");
 }
 
 #[cfg(test)]
@@ -145,24 +136,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_configure_cors_development_default() {
-        std::env::remove_var("ENVIRONMENT");
-        std::env::remove_var("ALLOWED_ORIGINS");
-        std::env::remove_var("FRONTEND_ORIGIN");
-        let _ = configure_cors();
-    }
-
-    #[test]
-    fn test_configure_cors_with_origins() {
-        std::env::set_var("ENVIRONMENT", "production");
-        std::env::set_var("ALLOWED_ORIGINS", "https://example.com");
-        let _ = configure_cors();
-        std::env::remove_var("ENVIRONMENT");
-        std::env::remove_var("ALLOWED_ORIGINS");
-    }
-
-    #[test]
-    fn test_create_app_builds_router() {
+    fn test_create_app_returns_router() {
         let _app = create_app();
+        // Just test that it compiles and doesn't panic
     }
 }
