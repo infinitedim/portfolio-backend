@@ -31,8 +31,11 @@ serde_json = "1.0"
 # Utilities
 uuid = { version = "1.21", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-lazy_static = "1.5"
-regex = "1"
+lazy_static = "1.4"
+async-trait = "0.1"
+thiserror = "1.0"
+
+# Environment
 dotenvy = "0.15"
 
 # Auth
