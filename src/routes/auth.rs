@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
-use crate::db::{self, models::AdminUser};
+use crate::db;
 
 // ============================================================================
 // Configuration

@@ -53,3 +53,4 @@ sqlx = { version = "0.8", features = [
 
 # HTML sanitization (blog)
 ammonia = "4"
+regex = "1"
