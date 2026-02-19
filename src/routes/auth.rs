@@ -65,6 +65,7 @@ const ACCESS_TOKEN_EXPIRY_MINUTES: i64 = 15;
 const REFRESH_TOKEN_EXPIRY_DAYS: i64 = 7;
 
 /// Rate limit window in seconds (1 request per IP per 60 seconds for login)
+#[allow(dead_code)]
 const RATE_LIMIT_WINDOW_SECS: i64 = 60;
 
 // ============================================================================
