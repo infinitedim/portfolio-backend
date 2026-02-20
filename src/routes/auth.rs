@@ -13,6 +13,7 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -181,13 +182,8 @@ pub struct LogoutResponse {
     pub success: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[allow(dead_code)] // Constructed via Json() in error responses
-pub struct ErrorResponse {
-    pub error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
+// Re-export the shared ErrorResponse so existing code in this module still compiles.
+pub use crate::routes::ErrorResponse;
 
 // ============================================================================
 // Helper Functions
@@ -198,13 +194,14 @@ fn generate_refresh_token() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 64)
 }
 
-/// Hash a refresh token for storage
+/// Hash a refresh token for secure storage using SHA-256.
+/// Using a cryptographic hash is important because the hash is stored
+/// in the database and could be a target for pre-image attacks if a
+/// non-cryptographic function (e.g. DefaultHasher) were used instead.
 fn hash_refresh_token(token: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    token.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Create access token
@@ -250,7 +247,10 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Check rate limit for an IP
+/// Check rate limit for an IP.
+///
+/// Also removes stale entries from the map on every write so the HashMap
+/// does not grow without bound as unique IPs accumulate over time.
 async fn check_rate_limit(ip: &str) -> bool {
     #[cfg(test)]
     {
@@ -262,6 +262,11 @@ async fn check_rate_limit(ip: &str) -> bool {
     {
         let now = Utc::now().timestamp();
         let mut limits = RATE_LIMIT.write().await;
+
+        // Evict all entries whose window has already expired.
+        // This keeps memory proportional to the number of *active* IPs rather
+        // than the total number of unique IPs seen since startup.
+        limits.retain(|_, last| now - *last < RATE_LIMIT_WINDOW_SECS);
 
         if let Some(last_request) = limits.get(ip) {
             if now - last_request < RATE_LIMIT_WINDOW_SECS {
@@ -380,21 +385,34 @@ pub async fn register(
         );
     }
 
-    // Hash password
-    let password_hash = match hash(&payload.password, DEFAULT_COST) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!("Failed to hash password: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(RegisterResponse {
-                    success: false,
-                    user: None,
-                    error: Some("Failed to process password".to_string()),
-                }),
-            );
-        }
-    };
+    // Hash password — bcrypt is intentionally CPU-intensive; run it outside
+    // the async executor so it doesn't block other in-flight tasks.
+    let password_hash =
+        match tokio::task::spawn_blocking(move || hash(&payload.password, DEFAULT_COST)).await {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => {
+                tracing::error!("Failed to hash password: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(RegisterResponse {
+                        success: false,
+                        user: None,
+                        error: Some("Failed to process password".to_string()),
+                    }),
+                );
+            }
+            Err(e) => {
+                tracing::error!("spawn_blocking panic during hash: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(RegisterResponse {
+                        success: false,
+                        user: None,
+                        error: Some("Failed to process password".to_string()),
+                    }),
+                );
+            }
+        };
 
     // Insert new admin user
     let user_id = uuid::Uuid::new_v4().to_string();
@@ -496,28 +514,166 @@ pub async fn login(
         );
     }
 
-    // Check credentials
-    let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
-    let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
+    // Authenticate: query admin_users in the DB first; fall back to env-var
+    // credentials when no database is available (e.g. local dev without PG).
+    let (user_id, authenticated_email, role): (String, String, String) = match crate::db::get_pool()
+    {
+        Some(pool) => {
+            let row = sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    String,
+                    String,
+                    bool,
+                    Option<chrono::DateTime<Utc>>,
+                ),
+            >(
+                r#"SELECT id, email, password_hash, role, is_active, locked_until
+                       FROM admin_users
+                       WHERE LOWER(email) = LOWER($1)"#,
+            )
+            .bind(&payload.email)
+            .fetch_optional(pool.as_ref())
+            .await;
 
-    if !email_matches || !password_matches {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(LoginResponse {
-                success: false,
-                user: None,
-                access_token: None,
-                refresh_token: None,
-                error: Some("Invalid credentials".to_string()),
-            }),
-        );
-    }
+            match row {
+                Ok(Some((id, email, password_hash, role, is_active, locked_until))) => {
+                    // Check account lock
+                    if let Some(until) = locked_until {
+                        if until > Utc::now() {
+                            tracing::warn!("Login attempt on locked account: {}", email);
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(LoginResponse {
+                                    success: false,
+                                    user: None,
+                                    access_token: None,
+                                    refresh_token: None,
+                                    error: Some(
+                                        "Account is temporarily locked. Try again later."
+                                            .to_string(),
+                                    ),
+                                }),
+                            );
+                        }
+                    }
+
+                    // Check account active
+                    if !is_active {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(LoginResponse {
+                                success: false,
+                                user: None,
+                                access_token: None,
+                                refresh_token: None,
+                                error: Some("Account is disabled.".to_string()),
+                            }),
+                        );
+                    }
+
+                    // Verify password — bcrypt is CPU-bound; keep the async executor free.
+                    let pwd = payload.password.clone();
+                    let hash_clone = password_hash.clone();
+                    let password_ok = tokio::task::spawn_blocking(move || {
+                        verify(&pwd, &hash_clone).unwrap_or(false)
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if !password_ok {
+                        let _ = sqlx::query(
+                            "UPDATE admin_users \
+                                 SET login_attempts = login_attempts + 1, updated_at = now() \
+                                 WHERE id = $1",
+                        )
+                        .bind(&id)
+                        .execute(pool.as_ref())
+                        .await;
+                        tracing::warn!("Failed login attempt for: {}", email);
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(LoginResponse {
+                                success: false,
+                                user: None,
+                                access_token: None,
+                                refresh_token: None,
+                                error: Some("Invalid credentials".to_string()),
+                            }),
+                        );
+                    }
+
+                    // Update last login metadata
+                    let _ = sqlx::query(
+                        "UPDATE admin_users \
+                             SET last_login_at = now(), last_login_ip = $1, \
+                                 login_attempts = 0, updated_at = now() \
+                             WHERE id = $2",
+                    )
+                    .bind(&ip)
+                    .bind(&id)
+                    .execute(pool.as_ref())
+                    .await;
+
+                    (id, email, role)
+                }
+                Ok(None) => {
+                    tracing::warn!("Login attempt for unknown user: {}", payload.email);
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(LoginResponse {
+                            success: false,
+                            user: None,
+                            access_token: None,
+                            refresh_token: None,
+                            error: Some("Invalid credentials".to_string()),
+                        }),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Database error during login: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(LoginResponse {
+                            success: false,
+                            user: None,
+                            access_token: None,
+                            refresh_token: None,
+                            error: Some(
+                                "Authentication service temporarily unavailable.".to_string(),
+                            ),
+                        }),
+                    );
+                }
+            }
+        }
+        None => {
+            // No DB — fall back to env-var credentials for dev/no-db mode
+            let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
+            let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
+            if !email_matches || !password_matches {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(LoginResponse {
+                        success: false,
+                        user: None,
+                        access_token: None,
+                        refresh_token: None,
+                        error: Some("Invalid credentials".to_string()),
+                    }),
+                );
+            }
+            (
+                "admin-user-id".to_string(),
+                payload.email.clone(),
+                "SUPER_ADMIN".to_string(),
+            )
+        }
+    };
 
     // Generate tokens
-    let user_id = "admin-user-id"; // In production, this would come from DB
-    let role = "admin";
-
-    let access_token = match create_access_token(user_id, &payload.email, role) {
+    let access_token = match create_access_token(&user_id, &authenticated_email, &role) {
         Ok(token) => token,
         Err(e) => {
             tracing::error!("Failed to create access token: {}", e);
@@ -536,31 +692,49 @@ pub async fn login(
 
     let refresh_token = generate_refresh_token();
     let refresh_token_hash = hash_refresh_token(&refresh_token);
+    let expires_at = Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
-    // Store refresh token
-    let expires_at = (Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS)).timestamp();
+    // Persist refresh token to DB (admin_refresh_tokens) when available
+    if let Some(pool) = crate::db::get_pool() {
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO admin_refresh_tokens (admin_user_id, token_hash, expires_at)
+               VALUES ($1, $2, $3)"#,
+        )
+        .bind(&user_id)
+        .bind(&refresh_token_hash)
+        .bind(expires_at)
+        .execute(pool.as_ref())
+        .await
+        {
+            tracing::error!("Failed to persist refresh token to DB: {}", e);
+        }
+    }
+
+    // Also cache in-memory for fast validation (survives until restart)
     {
         let mut tokens = REFRESH_TOKENS.write().await;
         tokens.insert(
             refresh_token_hash,
             RefreshTokenData {
-                user_id: user_id.to_string(),
-                email: payload.email.clone(),
-                role: role.to_string(),
-                expires_at,
+                user_id: user_id.clone(),
+                email: authenticated_email.clone(),
+                role: role.clone(),
+                expires_at: expires_at.timestamp(),
                 revoked: false,
             },
         );
     }
+
+    tracing::info!("Successful login for user: {}", authenticated_email);
 
     (
         StatusCode::OK,
         Json(LoginResponse {
             success: true,
             user: Some(UserInfo {
-                user_id: user_id.to_string(),
-                email: payload.email,
-                role: role.to_string(),
+                user_id,
+                email: authenticated_email,
+                role,
             }),
             access_token: Some(access_token),
             refresh_token: Some(refresh_token),
@@ -632,16 +806,50 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
     }
 
     let token_hash = hash_refresh_token(&payload.refresh_token);
-    let now = Utc::now().timestamp();
+    let now = Utc::now();
 
-    // Check if token exists and is valid
-    let token_data = {
-        let tokens = REFRESH_TOKENS.read().await;
-        tokens.get(&token_hash).cloned()
+    // Resolve the token owner from DB first, then fall back to in-memory.
+    // This ensures refresh tokens persist across server restarts.
+    let token_data: Option<RefreshTokenData> = {
+        if let Some(pool) = crate::db::get_pool() {
+            match sqlx::query_as::<_, (String, String, String, chrono::DateTime<Utc>, bool)>(
+                r#"SELECT au.id, au.email, au.role, art.expires_at, art.revoked
+                   FROM admin_refresh_tokens art
+                   JOIN admin_users au ON au.id = art.admin_user_id
+                   WHERE art.token_hash = $1"#,
+            )
+            .bind(&token_hash)
+            .fetch_optional(pool.as_ref())
+            .await
+            {
+                Ok(Some((user_id, email, role, expires_at, revoked))) => Some(RefreshTokenData {
+                    user_id,
+                    email,
+                    role,
+                    expires_at: expires_at.timestamp(),
+                    revoked,
+                }),
+                Ok(None) => {
+                    // Not in DB — check in-memory cache (e.g. no-DB mode)
+                    let tokens = REFRESH_TOKENS.read().await;
+                    tokens.get(&token_hash).cloned()
+                }
+                Err(e) => {
+                    tracing::error!("DB error during token refresh lookup: {}", e);
+                    // Degrade gracefully: try in-memory
+                    let tokens = REFRESH_TOKENS.read().await;
+                    tokens.get(&token_hash).cloned()
+                }
+            }
+        } else {
+            // No DB — use in-memory only
+            let tokens = REFRESH_TOKENS.read().await;
+            tokens.get(&token_hash).cloned()
+        }
     };
 
     match token_data {
-        Some(data) if !data.revoked && data.expires_at > now => {
+        Some(data) if !data.revoked && data.expires_at > now.timestamp() => {
             // Create new access token
             let access_token = match create_access_token(&data.user_id, &data.email, &data.role) {
                 Ok(token) => token,
@@ -659,26 +867,44 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 }
             };
 
-            // Optionally rotate refresh token
+            // Rotate refresh token
             let new_refresh_token = generate_refresh_token();
             let new_token_hash = hash_refresh_token(&new_refresh_token);
-            let new_expires_at =
-                (Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS)).timestamp();
+            let new_expires_at = now + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
+            // Rotate in DB
+            if let Some(pool) = crate::db::get_pool() {
+                let _ = sqlx::query(
+                    "UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1",
+                )
+                .bind(&token_hash)
+                .execute(pool.as_ref())
+                .await;
+
+                let _ = sqlx::query(
+                    r#"INSERT INTO admin_refresh_tokens (admin_user_id, token_hash, expires_at)
+                       VALUES ($1, $2, $3)"#,
+                )
+                .bind(&data.user_id)
+                .bind(&new_token_hash)
+                .bind(new_expires_at)
+                .execute(pool.as_ref())
+                .await;
+            }
+
+            // Rotate in-memory cache
             {
                 let mut tokens = REFRESH_TOKENS.write().await;
-                // Revoke old token
                 if let Some(old_data) = tokens.get_mut(&token_hash) {
                     old_data.revoked = true;
                 }
-                // Store new token
                 tokens.insert(
                     new_token_hash,
                     RefreshTokenData {
                         user_id: data.user_id,
                         email: data.email,
                         role: data.role,
-                        expires_at: new_expires_at,
+                        expires_at: new_expires_at.timestamp(),
                         revoked: false,
                     },
                 );
@@ -707,27 +933,49 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
 }
 
 /// POST /api/auth/logout
-/// Invalidate refresh token
+/// Invalidate refresh token(s) in both the DB and the in-memory cache.
 pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> impl IntoResponse {
-    // Try to get refresh token from body or revoke based on access token
+    let pool = crate::db::get_pool();
+
+    // Revoke a specific refresh token if provided
     if let Some(refresh_token) = payload.refresh_token {
         let token_hash = hash_refresh_token(&refresh_token);
+
+        // Revoke in DB
+        if let Some(ref p) = pool {
+            let _ =
+                sqlx::query("UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1")
+                    .bind(&token_hash)
+                    .execute(p.as_ref())
+                    .await;
+        }
+
+        // Revoke in in-memory cache
         let mut tokens = REFRESH_TOKENS.write().await;
         if let Some(data) = tokens.get_mut(&token_hash) {
             data.revoked = true;
         }
     }
 
-    // If access token provided, try to find and revoke associated refresh tokens
-    // For simplicity, we just return success as access token will expire anyway
+    // If an access token is provided, revoke ALL refresh tokens for that user
     if let Some(access_token) = payload
         .access_token
         .or_else(|| extract_bearer_token(&headers))
     {
         if let Ok(claims) = verify_access_token(&access_token) {
-            // Could revoke all refresh tokens for this user
+            // Revoke all user's tokens in DB
+            if let Some(ref p) = pool {
+                let _ = sqlx::query(
+                    "UPDATE admin_refresh_tokens SET revoked = true WHERE admin_user_id = $1",
+                )
+                .bind(&claims.sub)
+                .execute(p.as_ref())
+                .await;
+            }
+
+            // Revoke all user's tokens in in-memory cache
             let mut tokens = REFRESH_TOKENS.write().await;
-            for (_, data) in tokens.iter_mut() {
+            for data in tokens.values_mut() {
                 if data.user_id == claims.sub {
                     data.revoked = true;
                 }
@@ -735,7 +983,7 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
         }
     }
 
-    // Logout always succeeds (idempotent)
+    // Logout is always idempotent — always return success
     (StatusCode::OK, Json(LogoutResponse { success: true }))
 }
 

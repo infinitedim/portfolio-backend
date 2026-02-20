@@ -11,7 +11,9 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer,
+};
 
 /// Configure CORS from environment variables.
 /// Uses ALLOWED_ORIGINS (comma-separated) or FRONTEND_ORIGIN.
@@ -88,14 +90,53 @@ pub fn create_app() -> Router {
         .layer(middleware::from_fn(logging::middleware::log_request))
         .layer(logging::middleware::request_id_layer())
         .layer(TraceLayer::new_for_http())
+        // Compress responses with gzip/br/zstd automatically
+        .layer(CompressionLayer::new())
+        // Global 2 MB request body cap — prevents unbounded buffering
+        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(cors)
 }
 
 /// Run the server (used by main).
 pub async fn run() {
     dotenvy::dotenv().ok();
-    logging::init();
+
+    // Guards MUST be held for the programme's lifetime; dropping them early
+    // shuts down background log-writer threads and loses buffered log lines.
+    let _log_guards = logging::init();
+
     routes::health::init_start_time();
+
+    // Refuse to start in production with the insecure default JWT secret.
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
+    if environment == "production" {
+        let secret = std::env::var("JWT_SECRET").unwrap_or_default();
+        if secret.is_empty() || secret == "default-jwt-secret-change-in-production" {
+            panic!(
+                "FATAL: JWT_SECRET must be set to a secure, unique value in production. \
+                 Refusing to start with the default secret."
+            );
+        }
+
+        // Warn (don't panic) about default admin credentials in production.
+        let admin_email = std::env::var("ADMIN_EMAIL").unwrap_or_default();
+        let admin_password_set =
+            std::env::var("ADMIN_HASH_PASSWORD").is_ok() || std::env::var("ADMIN_PASSWORD").is_ok();
+
+        if admin_email.is_empty() || admin_email == "admin@example.com" {
+            tracing::warn!(
+                "SECURITY: ADMIN_EMAIL is using an insecure default. \
+                 Set ADMIN_EMAIL env var to a real address before registering."
+            );
+        }
+        if !admin_password_set {
+            tracing::warn!(
+                "SECURITY: Neither ADMIN_HASH_PASSWORD nor ADMIN_PASSWORD is set. \
+                 The fallback default password 'admin123' is insecure. \
+                 Set ADMIN_HASH_PASSWORD to a bcrypt hash of a strong password."
+            );
+        }
+    }
 
     if std::env::var("DATABASE_URL").is_ok() {
         match db::init_pool(None).await {
@@ -116,7 +157,17 @@ pub async fn run() {
     }
 
     let app = create_app();
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+
+    // Bind address is configurable via HOST / PORT env vars, defaulting to
+    // 127.0.0.1:3001 so existing dev setups keep working unchanged.
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3001);
+    let addr: SocketAddr = format!("{}:{}", host, port)
+        .parse()
+        .expect("Invalid HOST/PORT configuration");
     tracing::info!("Starting server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr)

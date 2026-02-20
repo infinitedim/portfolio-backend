@@ -102,13 +102,8 @@ pub struct UpdateBlogRequest {
     pub published: Option<bool>,
 }
 
-/// Error response
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
+// Re-export the shared ErrorResponse so existing code in this module still compiles.
+pub use crate::routes::ErrorResponse;
 
 /// Success response (for delete)
 #[derive(Debug, Serialize)]
@@ -197,7 +192,7 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
     let (posts, total): (Vec<BlogPost>, i64) = if let Some(published) = query.published {
         let posts = sqlx::query_as::<_, BlogPost>(
             r#"
-            SELECT id, title, slug, summary, content_md, content_html, published, created_at, updated_at
+            SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html, published, created_at, updated_at
             FROM blog_posts
             WHERE published = $1
             ORDER BY created_at DESC
@@ -221,7 +216,7 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
     } else {
         let posts = sqlx::query_as::<_, BlogPost>(
             r#"
-            SELECT id, title, slug, summary, content_md, content_html, published, created_at, updated_at
+            SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html, published, created_at, updated_at
             FROM blog_posts
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
@@ -254,8 +249,17 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         })
         .collect();
 
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        "public, max-age=60, stale-while-revalidate=30"
+            .parse()
+            .unwrap(),
+    );
+
     (
         StatusCode::OK,
+        headers,
         Json(BlogListResponse {
             items,
             page,
@@ -308,6 +312,13 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
     .await
     {
         Ok(Some(post)) => {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=300, stale-while-revalidate=60"
+                    .parse()
+                    .unwrap(),
+            );
             let response = BlogPostResponse {
                 id: post.id,
                 title: post.title,
@@ -319,7 +330,7 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
-            (StatusCode::OK, Json(response)).into_response()
+            (StatusCode::OK, headers, Json(response)).into_response()
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -404,8 +415,17 @@ pub async fn create_post(
         }
     };
 
-    // Sanitize HTML content
-    let content_html = payload.content_html.map(|h| sanitize_html(&h));
+    // Sanitize HTML content — run in spawn_blocking to avoid blocking
+    // the tokio worker thread with the CPU-bound HTML parser.
+    let content_html = if let Some(h) = payload.content_html {
+        Some(
+            tokio::task::spawn_blocking(move || sanitize_html(&h))
+                .await
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
 
     // Insert new post
     match sqlx::query_as::<_, BlogPost>(
@@ -501,67 +521,42 @@ pub async fn update_post(
         }
     };
 
-    // Check if post exists
-    let existing = sqlx::query_as::<_, BlogPost>(
-        "SELECT id, title, slug, summary, content_md, content_html, published, created_at, updated_at FROM blog_posts WHERE slug = $1"
-    )
-    .bind(&slug)
-    .fetch_optional(pool.as_ref())
-    .await;
-
-    let existing = match existing {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Not found".to_string(),
-                    message: None,
-                }),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!("Database error fetching blog post: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Database error".to_string(),
-                    message: None,
-                }),
-            )
-                .into_response();
-        }
+    // Sanitize incoming HTML (CPU-bound) outside the async executor.
+    let content_html_opt = if let Some(h) = payload.content_html {
+        Some(
+            tokio::task::spawn_blocking(move || sanitize_html(&h))
+                .await
+                .unwrap_or_default(),
+        )
+    } else {
+        None
     };
 
-    // Build update query with optional fields
-    let title = payload.title.unwrap_or(existing.title);
-    let summary = payload.summary.or(existing.summary);
-    let content_md = payload.content_md.or(existing.content_md);
-    let content_html = payload
-        .content_html
-        .map(|h| sanitize_html(&h))
-        .or(existing.content_html);
-    let published = payload.published.unwrap_or(existing.published);
-
+    // Collapse into a single COALESCE UPDATE — eliminates the prior SELECT
+    // round-trip, and returns 0 rows when the slug does not exist.
     match sqlx::query_as::<_, BlogPost>(
         r#"
         UPDATE blog_posts
-        SET title = $1, summary = $2, content_md = $3, content_html = $4, published = $5, updated_at = now()
+        SET title        = COALESCE($1, title),
+            summary      = COALESCE($2, summary),
+            content_md   = COALESCE($3, content_md),
+            content_html = COALESCE($4, content_html),
+            published    = COALESCE($5, published),
+            updated_at   = now()
         WHERE slug = $6
         RETURNING id, title, slug, summary, content_md, content_html, published, created_at, updated_at
         "#
     )
-    .bind(&title)
-    .bind(&summary)
-    .bind(&content_md)
-    .bind(&content_html)
-    .bind(published)
+    .bind(&payload.title)
+    .bind(&payload.summary)
+    .bind(&payload.content_md)
+    .bind(&content_html_opt)
+    .bind(payload.published)
     .bind(&slug)
-    .fetch_one(pool.as_ref())
+    .fetch_optional(pool.as_ref())
     .await
     {
-        Ok(post) => {
+        Ok(Some(post)) => {
             let response = BlogPostResponse {
                 id: post.id,
                 title: post.title,
@@ -575,6 +570,14 @@ pub async fn update_post(
             };
             (StatusCode::OK, Json(response)).into_response()
         }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Not found".to_string(),
+                message: None,
+            }),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("Database error updating blog post: {}", e);
             (

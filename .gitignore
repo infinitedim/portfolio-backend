@@ -1,5 +1,5 @@
 /target
 *.txt
 .env
-.env.*
+.env.development
 *.log.* 

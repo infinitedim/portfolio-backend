@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -63,51 +64,63 @@ pub fn is_valid_section(section: &str) -> bool {
 }
 
 // ============================================================================
-// Static/Fallback Data
+// Static/Fallback Data (built once, reused on every fallback call)
 // ============================================================================
+
+static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
+    serde_json::json!([
+        {
+            "id": "portfolio-website",
+            "name": "Portfolio Website",
+            "description": "A modern portfolio website built with Next.js and Rust",
+            "technologies": ["Next.js", "React", "TypeScript", "Rust", "Axum"],
+            "status": "active",
+            "featured": true
+        }
+    ])
+});
+
+static STATIC_SKILLS: Lazy<Value> = Lazy::new(|| {
+    serde_json::json!([
+        {
+            "name": "Frontend",
+            "skills": [
+                { "name": "React", "level": 90 },
+                { "name": "TypeScript", "level": 85 },
+                { "name": "Next.js", "level": 85 }
+            ]
+        },
+        {
+            "name": "Backend",
+            "skills": [
+                { "name": "Rust", "level": 75 },
+                { "name": "Node.js", "level": 80 },
+                { "name": "PostgreSQL", "level": 75 }
+            ]
+        }
+    ])
+});
+
+static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
+    serde_json::json!({
+        "name": "Developer",
+        "title": "Full Stack Developer",
+        "bio": "A passionate developer building modern web applications.",
+        "location": "Remote",
+        "contact": {
+            "email": "dev@example.com",
+            "github": "https://github.com/developer"
+        }
+    })
+});
 
 /// Get static/fallback data for a section (for tests).
 pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
-        "projects" => Some(serde_json::json!([
-            {
-                "id": "portfolio-website",
-                "name": "Portfolio Website",
-                "description": "A modern portfolio website built with Next.js and Rust",
-                "technologies": ["Next.js", "React", "TypeScript", "Rust", "Axum"],
-                "status": "active",
-                "featured": true
-            }
-        ])),
-        "skills" => Some(serde_json::json!([
-            {
-                "name": "Frontend",
-                "skills": [
-                    { "name": "React", "level": 90 },
-                    { "name": "TypeScript", "level": 85 },
-                    { "name": "Next.js", "level": 85 }
-                ]
-            },
-            {
-                "name": "Backend",
-                "skills": [
-                    { "name": "Rust", "level": 75 },
-                    { "name": "Node.js", "level": 80 },
-                    { "name": "PostgreSQL", "level": 75 }
-                ]
-            }
-        ])),
+        "projects" => Some(STATIC_PROJECTS.clone()),
+        "skills" => Some(STATIC_SKILLS.clone()),
         "experience" => Some(serde_json::json!([])),
-        "about" => Some(serde_json::json!({
-            "name": "Developer",
-            "title": "Full Stack Developer",
-            "bio": "A passionate developer building modern web applications.",
-            "location": "Remote",
-            "contact": {
-                "email": "dev@example.com",
-                "github": "https://github.com/developer"
-            }
-        })),
+        "about" => Some(STATIC_ABOUT.clone()),
         _ => None,
     }
 }
@@ -127,7 +140,8 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                 data: None,
                 error: Some("Missing section parameter".to_string()),
             }),
-        );
+        )
+            .into_response();
     }
 
     if !is_valid_section(&query.section) {
@@ -140,7 +154,8 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                     VALID_SECTIONS
                 )),
             }),
-        );
+        )
+            .into_response();
     }
 
     let section_key = query.section.to_lowercase();
@@ -155,13 +170,22 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
         .await
         {
             Ok(Some(section)) => {
+                let mut cache_headers = axum::http::HeaderMap::new();
+                cache_headers.insert(
+                    axum::http::header::CACHE_CONTROL,
+                    "public, max-age=300, stale-while-revalidate=60"
+                        .parse()
+                        .unwrap(),
+                );
                 return (
                     StatusCode::OK,
+                    cache_headers,
                     Json(PortfolioResponse {
                         data: Some(section.content),
                         error: None,
                     }),
-                );
+                )
+                    .into_response();
             }
             Ok(None) => {
                 // Section not found in DB, return static data
@@ -179,20 +203,33 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
 
     // Return static/fallback data
     match get_static_data(&section_key) {
-        Some(data) => (
-            StatusCode::OK,
-            Json(PortfolioResponse {
-                data: Some(data),
-                error: None,
-            }),
-        ),
+        Some(data) => {
+            let mut cache_headers = axum::http::HeaderMap::new();
+            cache_headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=60, stale-while-revalidate=30"
+                    .parse()
+                    .unwrap(),
+            );
+            (
+                StatusCode::OK,
+                cache_headers,
+                Json(PortfolioResponse {
+                    data: Some(data),
+                    error: None,
+                }),
+            )
+                .into_response()
+        }
         None => (
             StatusCode::NOT_FOUND,
+            axum::http::HeaderMap::new(),
             Json(PortfolioResponse {
                 data: None,
                 error: Some("Section not found".to_string()),
             }),
-        ),
+        )
+            .into_response(),
     }
 }
 

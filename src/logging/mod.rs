@@ -9,8 +9,12 @@ use std::io;
 use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
-/// Initialize the logging system
-pub fn init() {
+/// Initialize the logging system.
+///
+/// Returns the tracing-appender `WorkerGuard`s that **must be kept alive**
+/// for the entire duration of the program. Dropping them early will cause
+/// background writer threads to shut down and log entries will be lost.
+pub fn init() -> Vec<tracing_appender::non_blocking::WorkerGuard> {
     // Get environment
     let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
     let is_production = environment == "production";
@@ -20,14 +24,14 @@ pub fn init() {
 
     // File appender for all logs
     let file_appender = rolling::daily("logs", "app.log");
-    let (file_writer, _file_guard) = non_blocking(file_appender);
+    let (file_writer, file_guard) = non_blocking(file_appender);
 
     // File appender for errors only
     let error_appender = rolling::daily("logs", "error.log");
-    let (error_writer, _error_guard) = non_blocking(error_appender);
+    let (error_writer, error_guard) = non_blocking(error_appender);
 
     // Console writer
-    let (console_writer, _console_guard) = non_blocking(io::stdout());
+    let (console_writer, console_guard) = non_blocking(io::stdout());
 
     // Configure log level
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| {
@@ -97,8 +101,12 @@ pub fn init() {
             .with_thread_ids(false)
             .with_thread_names(false);
 
+        // error_guard held even in dev mode so the background thread stays alive
         subscriber.with(file_layer).with(console_layer).init();
     }
 
     tracing::info!("Logging initialized for {} environment", environment);
+
+    // Return all guards so the caller keeps them alive for the programme's lifetime.
+    vec![file_guard, error_guard, console_guard]
 }

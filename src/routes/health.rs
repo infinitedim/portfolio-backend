@@ -186,9 +186,11 @@ pub async fn health_ready() -> impl IntoResponse {
     // TODO: Implement actual Redis check when Redis is connected (Fase 4)
     let redis_status = "unhealthy".to_string();
 
-    // For MVP, we're "ready" if backend is running
-    // Database is optional (will use in-memory fallback)
-    let is_ready = true;
+    // Ready logic:
+    // - If DATABASE_URL is set the app requires a healthy database to be ready.
+    // - If DATABASE_URL is not set the app runs in no-DB mode and is always ready.
+    let db_configured = std::env::var("DATABASE_URL").is_ok();
+    let is_ready = !db_configured || database_status == "healthy";
 
     let response = ReadyResponse {
         status: if is_ready {
@@ -203,13 +205,19 @@ pub async fn health_ready() -> impl IntoResponse {
             redis: redis_status,
         }),
         reason: if !is_ready {
-            Some("Database or Redis is not healthy".to_string())
+            Some("Database is configured but not reachable".to_string())
         } else {
             None
         },
     };
 
-    (StatusCode::OK, Json(response))
+    let status_code = if is_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (status_code, Json(response))
 }
 
 #[cfg(test)]

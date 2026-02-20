@@ -62,8 +62,13 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
         .min_connections(config.min_connections)
-        .acquire_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
+        // Fail fast under load rather than queuing for 10 s
+        .acquire_timeout(std::time::Duration::from_secs(3))
         .idle_timeout(std::time::Duration::from_secs(config.idle_timeout_secs))
+        // Rotate long-lived connections to avoid stale state
+        .max_lifetime(std::time::Duration::from_secs(1800))
+        // Verify connections before handing them to handlers
+        .test_before_acquire(true)
         .connect(&config.url)
         .await?;
 
@@ -186,6 +191,33 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Create admin_refresh_tokens table (persistent sessions for admin_users)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            admin_user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            revoked BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_token_hash
+            ON admin_refresh_tokens(token_hash);
+        CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_admin_user_id
+            ON admin_refresh_tokens(admin_user_id)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Create portfolio_sections table
     sqlx::query(
         r#"
@@ -218,11 +250,19 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Create index on slug for fast lookups
+    // Create indexes on blog_posts
     sqlx::query(
         r#"
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug 
-        ON blog_posts(slug)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
+            ON blog_posts(slug);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_published
+            ON blog_posts(published);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at
+            ON blog_posts(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_pub_created
+            ON blog_posts(published, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_expires_at
+            ON admin_refresh_tokens(expires_at)
     "#,
     )
     .execute(pool)
