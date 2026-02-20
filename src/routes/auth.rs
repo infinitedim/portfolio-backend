@@ -1,7 +1,5 @@
-/**
- * Authentication Routes
- * JWT-based authentication with login, verify, refresh, and logout
- */
+
+
 use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, StatusCode},
@@ -19,71 +17,58 @@ use tokio::sync::RwLock;
 
 use crate::db;
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
 lazy_static::lazy_static! {
-    /// JWT secret key from environment
+    
     pub static ref JWT_SECRET: String = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "default-jwt-secret-change-in-production".to_string());
 
-    /// Refresh token secret (can be same as JWT_SECRET or different)
+    
     pub static ref REFRESH_SECRET: String = std::env::var("REFRESH_TOKEN_SECRET")
         .unwrap_or_else(|_| JWT_SECRET.clone());
 
-    /// Admin email from environment
+    
     pub static ref ADMIN_EMAIL: String = std::env::var("ADMIN_EMAIL")
         .unwrap_or_else(|_| "admin@example.com".to_string());
 
-    /// Admin password hash from environment (or plain password to hash)
+    
     pub static ref ADMIN_PASSWORD_HASH: String = {
-        // First try ADMIN_HASH_PASSWORD (already hashed)
+        
         if let Ok(hash) = std::env::var("ADMIN_HASH_PASSWORD") {
             hash
         } else if let Ok(plain) = std::env::var("ADMIN_PASSWORD") {
-            // Hash the plain password
+            
             hash(&plain, DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         } else {
-            // Default password "admin123" hashed
+            
             hash("admin123", DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         }
     };
 
-    /// Refresh token storage (in-memory)
+    
     pub static ref REFRESH_TOKENS: Arc<RwLock<HashMap<String, RefreshTokenData>>> =
         Arc::new(RwLock::new(HashMap::new()));
 
-    /// Rate limit storage (IP -> last request timestamp)
+    
     pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, i64>>> =
         Arc::new(RwLock::new(HashMap::new()));
 }
 
-/// Access token expiry in minutes
 const ACCESS_TOKEN_EXPIRY_MINUTES: i64 = 15;
 
-/// Refresh token expiry in days
 const REFRESH_TOKEN_EXPIRY_DAYS: i64 = 7;
 
-/// Rate limit window in seconds (1 request per IP per 60 seconds for login)
 #[allow(dead_code)]
 const RATE_LIMIT_WINDOW_SECS: i64 = 60;
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/// JWT Claims structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,   // User ID
-    pub email: String, // User email
-    pub role: String,  // User role
-    pub exp: i64,      // Expiry timestamp
-    pub iat: i64,      // Issued at timestamp
+    pub sub: String,   
+    pub email: String, 
+    pub role: String,  
+    pub exp: i64,      
+    pub iat: i64,      
 }
 
-/// Stored refresh token data
 #[derive(Debug, Clone)]
 pub struct RefreshTokenData {
     pub user_id: String,
@@ -93,7 +78,6 @@ pub struct RefreshTokenData {
     pub revoked: bool,
 }
 
-/// User info returned to frontend
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfo {
@@ -101,10 +85,6 @@ pub struct UserInfo {
     pub email: String,
     pub role: String,
 }
-
-// ============================================================================
-// Request/Response Types
-// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,7 +126,7 @@ pub struct RegisterResponse {
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub success: bool,
-    pub is_valid: bool, // For compatibility with SecureAuth
+    pub is_valid: bool, 
     pub user: Option<UserInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -182,29 +162,18 @@ pub struct LogoutResponse {
     pub success: bool,
 }
 
-// Re-export the shared ErrorResponse so existing code in this module still compiles.
 pub use crate::routes::ErrorResponse;
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Generate a random refresh token
 fn generate_refresh_token() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 64)
 }
 
-/// Hash a refresh token for secure storage using SHA-256.
-/// Using a cryptographic hash is important because the hash is stored
-/// in the database and could be a target for pre-image attacks if a
-/// non-cryptographic function (e.g. DefaultHasher) were used instead.
 fn hash_refresh_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
-/// Create access token
 fn create_access_token(
     user_id: &str,
     email: &str,
@@ -228,7 +197,6 @@ fn create_access_token(
     )
 }
 
-/// Verify and decode access token
 pub fn verify_access_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let token_data = decode::<Claims>(
         token,
@@ -238,7 +206,6 @@ pub fn verify_access_token(token: &str) -> Result<Claims, jsonwebtoken::errors::
     Ok(token_data.claims)
 }
 
-/// Extract bearer token from Authorization header
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get("authorization")
@@ -247,15 +214,11 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Check rate limit for an IP.
-///
-/// Also removes stale entries from the map on every write so the HashMap
-/// does not grow without bound as unique IPs accumulate over time.
 async fn check_rate_limit(ip: &str) -> bool {
     #[cfg(test)]
     {
         let _ = ip;
-        return true; // Bypass in tests so validation and credentials are exercised
+        return true; 
     }
 
     #[cfg(not(test))]
@@ -263,35 +226,29 @@ async fn check_rate_limit(ip: &str) -> bool {
         let now = Utc::now().timestamp();
         let mut limits = RATE_LIMIT.write().await;
 
-        // Evict all entries whose window has already expired.
-        // This keeps memory proportional to the number of *active* IPs rather
-        // than the total number of unique IPs seen since startup.
+        
+        
+        
         limits.retain(|_, last| now - *last < RATE_LIMIT_WINDOW_SECS);
 
         if let Some(last_request) = limits.get(ip) {
             if now - last_request < RATE_LIMIT_WINDOW_SECS {
-                return false; // Rate limited
+                return false; 
             }
         }
 
         limits.insert(ip.to_string(), now);
-        true // Allowed
+        true 
     }
 }
 
-// ============================================================================
-// Handlers
-// ============================================================================
-
-/// POST /api/auth/register
-/// Register the first admin user (only works if no admin exists)
 pub async fn register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
     let ip = addr.ip().to_string();
 
-    // Rate limit check
+    
     if !check_rate_limit(&ip).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -303,7 +260,7 @@ pub async fn register(
         );
     }
 
-    // Validate request
+    
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -315,7 +272,7 @@ pub async fn register(
         );
     }
 
-    // Basic email format validation
+    
     if !payload.email.contains('@') {
         return (
             StatusCode::BAD_REQUEST,
@@ -327,7 +284,7 @@ pub async fn register(
         );
     }
 
-    // Password strength validation
+    
     if payload.password.len() < 8 {
         return (
             StatusCode::BAD_REQUEST,
@@ -339,7 +296,7 @@ pub async fn register(
         );
     }
 
-    // Get database pool
+    
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -354,7 +311,7 @@ pub async fn register(
         }
     };
 
-    // Check if any admin user already exists
+    
     let existing_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM admin_users")
         .fetch_one(pool.as_ref())
         .await
@@ -373,7 +330,7 @@ pub async fn register(
         }
     };
 
-    // If any admin exists, registration is closed
+    
     if existing_count.0 > 0 {
         return (
             StatusCode::FORBIDDEN,
@@ -385,8 +342,8 @@ pub async fn register(
         );
     }
 
-    // Hash password — bcrypt is intentionally CPU-intensive; run it outside
-    // the async executor so it doesn't block other in-flight tasks.
+    
+    
     let password_hash =
         match tokio::task::spawn_blocking(move || hash(&payload.password, DEFAULT_COST)).await {
             Ok(Ok(h)) => h,
@@ -414,7 +371,7 @@ pub async fn register(
             }
         };
 
-    // Insert new admin user
+    
     let user_id = uuid::Uuid::new_v4().to_string();
     match sqlx::query(
         r#"
@@ -464,15 +421,13 @@ pub async fn register(
     }
 }
 
-/// POST /api/auth/login
-/// Authenticate user and return tokens
 pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let ip = addr.ip().to_string();
 
-    // Rate limit check
+    
     if !check_rate_limit(&ip).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -486,7 +441,7 @@ pub async fn login(
         );
     }
 
-    // Validate request
+    
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -500,7 +455,7 @@ pub async fn login(
         );
     }
 
-    // Basic email format validation
+    
     if !payload.email.contains('@') {
         return (
             StatusCode::BAD_REQUEST,
@@ -514,8 +469,8 @@ pub async fn login(
         );
     }
 
-    // Authenticate: query admin_users in the DB first; fall back to env-var
-    // credentials when no database is available (e.g. local dev without PG).
+    
+    
     let (user_id, authenticated_email, role): (String, String, String) = match crate::db::get_pool()
     {
         Some(pool) => {
@@ -540,7 +495,7 @@ pub async fn login(
 
             match row {
                 Ok(Some((id, email, password_hash, role, is_active, locked_until))) => {
-                    // Check account lock
+                    
                     if let Some(until) = locked_until {
                         if until > Utc::now() {
                             tracing::warn!("Login attempt on locked account: {}", email);
@@ -560,7 +515,7 @@ pub async fn login(
                         }
                     }
 
-                    // Check account active
+                    
                     if !is_active {
                         return (
                             StatusCode::FORBIDDEN,
@@ -574,7 +529,7 @@ pub async fn login(
                         );
                     }
 
-                    // Verify password — bcrypt is CPU-bound; keep the async executor free.
+                    
                     let pwd = payload.password.clone();
                     let hash_clone = password_hash.clone();
                     let password_ok = tokio::task::spawn_blocking(move || {
@@ -604,7 +559,7 @@ pub async fn login(
                         );
                     }
 
-                    // Update last login metadata
+                    
                     let _ = sqlx::query(
                         "UPDATE admin_users \
                              SET last_login_at = now(), last_login_ip = $1, \
@@ -649,7 +604,7 @@ pub async fn login(
             }
         }
         None => {
-            // No DB — fall back to env-var credentials for dev/no-db mode
+            
             let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
             let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
             if !email_matches || !password_matches {
@@ -672,7 +627,7 @@ pub async fn login(
         }
     };
 
-    // Generate tokens
+    
     let access_token = match create_access_token(&user_id, &authenticated_email, &role) {
         Ok(token) => token,
         Err(e) => {
@@ -694,7 +649,7 @@ pub async fn login(
     let refresh_token_hash = hash_refresh_token(&refresh_token);
     let expires_at = Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
-    // Persist refresh token to DB (admin_refresh_tokens) when available
+    
     if let Some(pool) = crate::db::get_pool() {
         if let Err(e) = sqlx::query(
             r#"INSERT INTO admin_refresh_tokens (admin_user_id, token_hash, expires_at)
@@ -710,7 +665,7 @@ pub async fn login(
         }
     }
 
-    // Also cache in-memory for fast validation (survives until restart)
+    
     {
         let mut tokens = REFRESH_TOKENS.write().await;
         tokens.insert(
@@ -743,8 +698,6 @@ pub async fn login(
     )
 }
 
-/// POST /api/auth/verify
-/// Verify access token and return user info
 pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
     let token = match extract_bearer_token(&headers) {
         Some(t) => t,
@@ -790,8 +743,6 @@ pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
     }
 }
 
-/// POST /api/auth/refresh
-/// Refresh access token using refresh token
 pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
     if payload.refresh_token.is_empty() {
         return (
@@ -808,8 +759,8 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
     let token_hash = hash_refresh_token(&payload.refresh_token);
     let now = Utc::now();
 
-    // Resolve the token owner from DB first, then fall back to in-memory.
-    // This ensures refresh tokens persist across server restarts.
+    
+    
     let token_data: Option<RefreshTokenData> = {
         if let Some(pool) = crate::db::get_pool() {
             match sqlx::query_as::<_, (String, String, String, chrono::DateTime<Utc>, bool)>(
@@ -830,19 +781,19 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                     revoked,
                 }),
                 Ok(None) => {
-                    // Not in DB — check in-memory cache (e.g. no-DB mode)
+                    
                     let tokens = REFRESH_TOKENS.read().await;
                     tokens.get(&token_hash).cloned()
                 }
                 Err(e) => {
                     tracing::error!("DB error during token refresh lookup: {}", e);
-                    // Degrade gracefully: try in-memory
+                    
                     let tokens = REFRESH_TOKENS.read().await;
                     tokens.get(&token_hash).cloned()
                 }
             }
         } else {
-            // No DB — use in-memory only
+            
             let tokens = REFRESH_TOKENS.read().await;
             tokens.get(&token_hash).cloned()
         }
@@ -850,7 +801,7 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
 
     match token_data {
         Some(data) if !data.revoked && data.expires_at > now.timestamp() => {
-            // Create new access token
+            
             let access_token = match create_access_token(&data.user_id, &data.email, &data.role) {
                 Ok(token) => token,
                 Err(e) => {
@@ -867,12 +818,12 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 }
             };
 
-            // Rotate refresh token
+            
             let new_refresh_token = generate_refresh_token();
             let new_token_hash = hash_refresh_token(&new_refresh_token);
             let new_expires_at = now + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
-            // Rotate in DB
+            
             if let Some(pool) = crate::db::get_pool() {
                 let _ = sqlx::query(
                     "UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1",
@@ -892,7 +843,7 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 .await;
             }
 
-            // Rotate in-memory cache
+            
             {
                 let mut tokens = REFRESH_TOKENS.write().await;
                 if let Some(old_data) = tokens.get_mut(&token_hash) {
@@ -932,16 +883,14 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
     }
 }
 
-/// POST /api/auth/logout
-/// Invalidate refresh token(s) in both the DB and the in-memory cache.
 pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> impl IntoResponse {
     let pool = crate::db::get_pool();
 
-    // Revoke a specific refresh token if provided
+    
     if let Some(refresh_token) = payload.refresh_token {
         let token_hash = hash_refresh_token(&refresh_token);
 
-        // Revoke in DB
+        
         if let Some(ref p) = pool {
             let _ =
                 sqlx::query("UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1")
@@ -950,20 +899,20 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                     .await;
         }
 
-        // Revoke in in-memory cache
+        
         let mut tokens = REFRESH_TOKENS.write().await;
         if let Some(data) = tokens.get_mut(&token_hash) {
             data.revoked = true;
         }
     }
 
-    // If an access token is provided, revoke ALL refresh tokens for that user
+    
     if let Some(access_token) = payload
         .access_token
         .or_else(|| extract_bearer_token(&headers))
     {
         if let Ok(claims) = verify_access_token(&access_token) {
-            // Revoke all user's tokens in DB
+            
             if let Some(ref p) = pool {
                 let _ = sqlx::query(
                     "UPDATE admin_refresh_tokens SET revoked = true WHERE admin_user_id = $1",
@@ -973,7 +922,7 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                 .await;
             }
 
-            // Revoke all user's tokens in in-memory cache
+            
             let mut tokens = REFRESH_TOKENS.write().await;
             for data in tokens.values_mut() {
                 if data.user_id == claims.sub {
@@ -983,7 +932,7 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
         }
     }
 
-    // Logout is always idempotent — always return success
+    
     (StatusCode::OK, Json(LogoutResponse { success: true }))
 }
 

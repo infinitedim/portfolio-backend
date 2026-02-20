@@ -1,7 +1,5 @@
-/**
- * Blog Routes
- * CRUD API endpoints for blog posts
- */
+
+
 use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
@@ -16,11 +14,6 @@ use uuid::Uuid;
 use crate::db::{self, models::BlogPost};
 use crate::routes::auth::verify_access_token;
 
-// ============================================================================
-// Request/Response Types
-// ============================================================================
-
-/// Query parameters for GET /api/blog (list)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogListQuery {
@@ -31,17 +24,14 @@ pub struct BlogListQuery {
     pub published: Option<bool>,
 }
 
-/// Default page for list (for tests).
 pub fn default_page() -> i64 {
     1
 }
 
-/// Default page size for list (for tests).
 pub fn default_page_size() -> i64 {
     10
 }
 
-/// Response for GET /api/blog (list)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogListResponse {
@@ -51,7 +41,6 @@ pub struct BlogListResponse {
     pub total: i64,
 }
 
-/// Blog post summary (for list view)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostSummary {
@@ -64,7 +53,6 @@ pub struct BlogPostSummary {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Full blog post response
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostResponse {
@@ -79,7 +67,6 @@ pub struct BlogPostResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Request body for POST /api/blog (create)
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateBlogRequest {
@@ -91,7 +78,6 @@ pub struct CreateBlogRequest {
     pub published: Option<bool>,
 }
 
-/// Request body for PATCH /api/blog/:slug (update)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateBlogRequest {
@@ -102,37 +88,25 @@ pub struct UpdateBlogRequest {
     pub published: Option<bool>,
 }
 
-// Re-export the shared ErrorResponse so existing code in this module still compiles.
 pub use crate::routes::ErrorResponse;
 
-/// Success response (for delete)
 #[derive(Debug, Serialize)]
 pub struct SuccessResponse {
     pub success: bool,
 }
 
-// ============================================================================
-// Validation
-// ============================================================================
-
 lazy_static::lazy_static! {
-    /// Valid slug pattern: lowercase letters, numbers, and hyphens
+    
     static ref SLUG_REGEX: Regex = Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap();
 }
 
-/// Check if slug is valid (for tests).
 pub fn is_valid_slug(slug: &str) -> bool {
     SLUG_REGEX.is_match(slug)
 }
 
-/// Sanitize HTML content using ammonia (for tests).
 pub fn sanitize_html(html: &str) -> String {
     ammonia::clean(html)
 }
-
-// ============================================================================
-// Helper: Extract and verify auth token
-// ============================================================================
 
 fn verify_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let token = headers
@@ -161,11 +135,6 @@ fn verify_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorRespons
     }
 }
 
-// ============================================================================
-// Handlers
-// ============================================================================
-
-/// GET /api/blog - List blog posts with pagination
 pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse {
     let pool = match db::get_pool() {
         Some(p) => p,
@@ -183,12 +152,12 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         }
     };
 
-    // Clamp page_size to max 100
+    
     let page_size = query.page_size.clamp(1, 100);
     let page = query.page.max(1);
     let offset = (page - 1) * page_size;
 
-    // Build query based on published filter
+    
     let (posts, total): (Vec<BlogPost>, i64) = if let Some(published) = query.published {
         let posts = sqlx::query_as::<_, BlogPost>(
             r#"
@@ -270,9 +239,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         .into_response()
 }
 
-/// GET /api/blog/:slug - Get single blog post by slug
 pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
-    // Validate slug
+    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -354,17 +322,16 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
     }
 }
 
-/// POST /api/blog - Create new blog post (auth required)
 pub async fn create_post(
     headers: HeaderMap,
     Json(payload): Json<CreateBlogRequest>,
 ) -> impl IntoResponse {
-    // Verify auth
+    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    // Validate required fields
+    
     if payload.title.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -387,7 +354,7 @@ pub async fn create_post(
             .into_response();
     }
 
-    // Validate slug format
+    
     if !is_valid_slug(&payload.slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -415,8 +382,8 @@ pub async fn create_post(
         }
     };
 
-    // Sanitize HTML content — run in spawn_blocking to avoid blocking
-    // the tokio worker thread with the CPU-bound HTML parser.
+    
+    
     let content_html = if let Some(h) = payload.content_html {
         Some(
             tokio::task::spawn_blocking(move || sanitize_html(&h))
@@ -427,7 +394,7 @@ pub async fn create_post(
         None
     };
 
-    // Insert new post
+    
     match sqlx::query_as::<_, BlogPost>(
         r#"
         INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, created_at, updated_at)
@@ -459,7 +426,7 @@ pub async fn create_post(
             (StatusCode::CREATED, Json(response)).into_response()
         }
         Err(e) => {
-            // Check for unique constraint violation (duplicate slug)
+            
             if e.to_string().contains("duplicate key") || e.to_string().contains("unique constraint") {
                 return (
                     StatusCode::CONFLICT,
@@ -482,18 +449,17 @@ pub async fn create_post(
     }
 }
 
-/// PATCH /api/blog/:slug - Update blog post (auth required)
 pub async fn update_post(
     headers: HeaderMap,
     Path(slug): Path<String>,
     Json(payload): Json<UpdateBlogRequest>,
 ) -> impl IntoResponse {
-    // Verify auth
+    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    // Validate slug
+    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -521,7 +487,7 @@ pub async fn update_post(
         }
     };
 
-    // Sanitize incoming HTML (CPU-bound) outside the async executor.
+    
     let content_html_opt = if let Some(h) = payload.content_html {
         Some(
             tokio::task::spawn_blocking(move || sanitize_html(&h))
@@ -532,8 +498,8 @@ pub async fn update_post(
         None
     };
 
-    // Collapse into a single COALESCE UPDATE — eliminates the prior SELECT
-    // round-trip, and returns 0 rows when the slug does not exist.
+    
+    
     match sqlx::query_as::<_, BlogPost>(
         r#"
         UPDATE blog_posts
@@ -591,14 +557,13 @@ pub async fn update_post(
     }
 }
 
-/// DELETE /api/blog/:slug - Delete blog post (auth required)
 pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl IntoResponse {
-    // Verify auth
+    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    // Validate slug
+    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -626,7 +591,7 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
         }
     };
 
-    // Delete the post
+    
     match sqlx::query("DELETE FROM blog_posts WHERE slug = $1")
         .bind(&slug)
         .execute(pool.as_ref())

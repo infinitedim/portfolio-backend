@@ -1,7 +1,5 @@
-/**
- * Portfolio Routes
- * API endpoints for portfolio data (skills, projects, experience, about)
- */
+
+
 use axum::{
     extract::Query,
     http::{HeaderMap, StatusCode},
@@ -15,18 +13,12 @@ use serde_json::Value;
 use crate::db::{self, models::PortfolioSection};
 use crate::routes::auth::verify_access_token;
 
-// ============================================================================
-// Request/Response Types
-// ============================================================================
-
-/// Query parameters for GET /api/portfolio
 #[derive(Debug, Deserialize)]
 pub struct PortfolioQuery {
     #[serde(default)]
     pub section: String,
 }
 
-/// Response for GET /api/portfolio
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PortfolioResponse {
     pub data: Option<Value>,
@@ -34,14 +26,12 @@ pub struct PortfolioResponse {
     pub error: Option<String>,
 }
 
-/// Request body for PATCH /api/portfolio
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdatePortfolioRequest {
     pub section: String,
     pub data: Value,
 }
 
-/// Response for PATCH /api/portfolio
 #[derive(Debug, Serialize)]
 pub struct UpdatePortfolioResponse {
     pub success: bool,
@@ -51,21 +41,11 @@ pub struct UpdatePortfolioResponse {
     pub error: Option<String>,
 }
 
-// ============================================================================
-// Validation
-// ============================================================================
-
-/// Valid section keys
 pub const VALID_SECTIONS: &[&str] = &["skills", "projects", "experience", "about"];
 
-/// Check if section key is valid (for tests).
 pub fn is_valid_section(section: &str) -> bool {
     VALID_SECTIONS.contains(&section.to_lowercase().as_str())
 }
-
-// ============================================================================
-// Static/Fallback Data (built once, reused on every fallback call)
-// ============================================================================
 
 static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
     serde_json::json!([
@@ -114,7 +94,6 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     })
 });
 
-/// Get static/fallback data for a section (for tests).
 pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
         "projects" => Some(STATIC_PROJECTS.clone()),
@@ -125,14 +104,8 @@ pub fn get_static_data(section: &str) -> Option<Value> {
     }
 }
 
-// ============================================================================
-// Handlers
-// ============================================================================
-
-/// GET /api/portfolio?section=...
-/// Returns portfolio data for the specified section
 pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResponse {
-    // Validate section
+    
     if query.section.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -160,7 +133,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
 
     let section_key = query.section.to_lowercase();
 
-    // Try to get data from database
+    
     if let Some(pool) = db::get_pool() {
         match sqlx::query_as::<_, PortfolioSection>(
             "SELECT key, content, updated_at FROM portfolio_sections WHERE key = $1",
@@ -188,7 +161,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                     .into_response();
             }
             Ok(None) => {
-                // Section not found in DB, return static data
+                
                 tracing::debug!(
                     "Section '{}' not found in database, using static data",
                     section_key
@@ -196,12 +169,12 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             }
             Err(e) => {
                 tracing::error!("Database error fetching portfolio section: {}", e);
-                // Fall through to static data
+                
             }
         }
     }
 
-    // Return static/fallback data
+    
     match get_static_data(&section_key) {
         Some(data) => {
             let mut cache_headers = axum::http::HeaderMap::new();
@@ -233,13 +206,11 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
     }
 }
 
-/// PATCH /api/portfolio
-/// Updates portfolio data for the specified section (requires auth)
 pub async fn update_portfolio(
     headers: HeaderMap,
     Json(payload): Json<UpdatePortfolioRequest>,
 ) -> impl IntoResponse {
-    // Extract and verify token
+    
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -259,7 +230,7 @@ pub async fn update_portfolio(
         }
     };
 
-    // Verify token
+    
     if verify_access_token(token).is_err() {
         return (
             StatusCode::UNAUTHORIZED,
@@ -271,7 +242,7 @@ pub async fn update_portfolio(
         );
     }
 
-    // Validate section
+    
     if !is_valid_section(&payload.section) {
         return (
             StatusCode::BAD_REQUEST,
@@ -288,7 +259,7 @@ pub async fn update_portfolio(
 
     let section_key = payload.section.to_lowercase();
 
-    // Update in database
+    
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -303,7 +274,7 @@ pub async fn update_portfolio(
         }
     };
 
-    // Upsert the section
+    
     match sqlx::query(
         r#"
         INSERT INTO portfolio_sections (key, content, updated_at)

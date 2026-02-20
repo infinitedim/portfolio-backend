@@ -1,26 +1,21 @@
-/**
- * Health Routes
- * Endpoints for checking backend health status
- */
+
+
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-// Track server start time for uptime calculation
 lazy_static::lazy_static! {
     static ref SERVER_START: Instant = Instant::now();
 }
 
-/// Initialize the server start time
 pub fn init_start_time() {
     lazy_static::initialize(&SERVER_START);
 }
 
-/// Health status enum
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] // Reserved for future health API responses
+#[allow(dead_code)] 
 pub enum HealthStatus {
     Ok,
     Healthy,
@@ -31,7 +26,6 @@ pub enum HealthStatus {
     NotReady,
 }
 
-/// Single service check result
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceCheck {
@@ -42,7 +36,6 @@ pub struct ServiceCheck {
     pub error: Option<String>,
 }
 
-/// Detailed health check response
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailedHealthResponse {
@@ -53,14 +46,12 @@ pub struct DetailedHealthResponse {
     pub checks: HealthChecks,
 }
 
-/// Health checks for all services
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthChecks {
     pub database: ServiceCheck,
     pub redis: ServiceCheck,
 }
 
-/// Ready check response
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadyResponse {
@@ -74,32 +65,27 @@ pub struct ReadyResponse {
     pub reason: Option<String>,
 }
 
-/// Ready checks summary
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReadyChecks {
     pub database: String,
     pub redis: String,
 }
 
-/// Simple health response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimpleHealthResponse {
     pub status: String,
 }
 
-/// GET /health - Simple health ping
-/// Returns "OK" or JSON { status: "ok" }
 pub async fn health_ping() -> impl IntoResponse {
     Json(SimpleHealthResponse {
         status: "ok".to_string(),
     })
 }
 
-/// GET /health/detailed - Detailed health with all checks
 pub async fn health_detailed() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    // Check database health
+    
     let database_check = match crate::db::health_check().await {
         Ok(duration) => ServiceCheck {
             status: "healthy".to_string(),
@@ -113,15 +99,15 @@ pub async fn health_detailed() -> impl IntoResponse {
         },
     };
 
-    // TODO: Implement actual Redis check when Redis is connected (Fase 4)
+    
     let redis_check = ServiceCheck {
         status: "unhealthy".to_string(),
         response_time: None,
         error: Some("Redis not configured yet".to_string()),
     };
 
-    // Overall status is "ok" even if DB/Redis are not configured
-    // This allows frontend to know backend is running
+    
+    
     let overall_status = "ok".to_string();
 
     let response = DetailedHealthResponse {
@@ -137,9 +123,8 @@ pub async fn health_detailed() -> impl IntoResponse {
     (StatusCode::OK, Json(response))
 }
 
-/// GET /health/database - Database health check
 pub async fn health_database() -> impl IntoResponse {
-    // Check if database pool is available
+    
     match crate::db::health_check().await {
         Ok(duration) => {
             let check = ServiceCheck {
@@ -160,10 +145,9 @@ pub async fn health_database() -> impl IntoResponse {
     }
 }
 
-/// GET /health/redis - Redis health check
 pub async fn health_redis() -> impl IntoResponse {
-    // TODO: Implement actual Redis check when Redis is connected (Fase 4)
-    // For now, return stub "unhealthy" status
+    
+    
     let check = ServiceCheck {
         status: "unhealthy".to_string(),
         response_time: None,
@@ -173,22 +157,21 @@ pub async fn health_redis() -> impl IntoResponse {
     (StatusCode::OK, Json(check))
 }
 
-/// GET /health/ready - Readiness check
 pub async fn health_ready() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    // Check database health
+    
     let database_status = match crate::db::health_check().await {
         Ok(_) => "healthy".to_string(),
         Err(_) => "unhealthy".to_string(),
     };
 
-    // TODO: Implement actual Redis check when Redis is connected (Fase 4)
+    
     let redis_status = "unhealthy".to_string();
 
-    // Ready logic:
-    // - If DATABASE_URL is set the app requires a healthy database to be ready.
-    // - If DATABASE_URL is not set the app runs in no-DB mode and is always ready.
+    
+    
+    
     let db_configured = std::env::var("DATABASE_URL").is_ok();
     let is_ready = !db_configured || database_status == "healthy";
 

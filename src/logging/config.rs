@@ -1,10 +1,7 @@
-/*!
- * Logging Configuration
- * Configuration types and utilities for logging
- */
+
+
 use serde::{Deserialize, Serialize};
 
-/// Log level enumeration
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {

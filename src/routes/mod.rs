@@ -1,7 +1,5 @@
-/*!
- * Routes Module
- * API route handlers
- */
+
+
 pub mod auth;
 pub mod blog;
 pub mod health;
@@ -10,8 +8,6 @@ pub mod portfolio;
 
 use serde::Serialize;
 
-/// Shared error response type used by all route modules.
-/// Centralised here to avoid duplicate definitions in auth.rs and blog.rs.
 #[derive(Debug, Serialize)]
 #[allow(dead_code)]
 pub struct ErrorResponse {

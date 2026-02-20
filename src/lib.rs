@@ -1,4 +1,4 @@
-//! Portfolio Backend - library for app logic and testing
+
 
 pub mod db;
 pub mod logging;
@@ -15,9 +15,6 @@ use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer,
 };
 
-/// Configure CORS from environment variables.
-/// Uses ALLOWED_ORIGINS (comma-separated) or FRONTEND_ORIGIN.
-/// Falls back to allowing all origins in development.
 pub fn configure_cors() -> CorsLayer {
     let allowed_origins = std::env::var("ALLOWED_ORIGINS")
         .ok()
@@ -55,7 +52,6 @@ pub fn configure_cors() -> CorsLayer {
         .allow_credentials(true)
 }
 
-/// Create and configure the application router.
 pub fn create_app() -> Router {
     let cors = configure_cors();
     tracing::info!("CORS configured");
@@ -90,24 +86,23 @@ pub fn create_app() -> Router {
         .layer(middleware::from_fn(logging::middleware::log_request))
         .layer(logging::middleware::request_id_layer())
         .layer(TraceLayer::new_for_http())
-        // Compress responses with gzip/br/zstd automatically
+        
         .layer(CompressionLayer::new())
-        // Global 2 MB request body cap — prevents unbounded buffering
+        
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(cors)
 }
 
-/// Run the server (used by main).
 pub async fn run() {
     dotenvy::dotenv().ok();
 
-    // Guards MUST be held for the programme's lifetime; dropping them early
-    // shuts down background log-writer threads and loses buffered log lines.
+    
+    
     let _log_guards = logging::init();
 
     routes::health::init_start_time();
 
-    // Refuse to start in production with the insecure default JWT secret.
+    
     let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
     if environment == "production" {
         let secret = std::env::var("JWT_SECRET").unwrap_or_default();
@@ -118,7 +113,7 @@ pub async fn run() {
             );
         }
 
-        // Warn (don't panic) about default admin credentials in production.
+        
         let admin_email = std::env::var("ADMIN_EMAIL").unwrap_or_default();
         let admin_password_set =
             std::env::var("ADMIN_HASH_PASSWORD").is_ok() || std::env::var("ADMIN_PASSWORD").is_ok();
@@ -158,8 +153,8 @@ pub async fn run() {
 
     let app = create_app();
 
-    // Bind address is configurable via HOST / PORT env vars, defaulting to
-    // 127.0.0.1:3001 so existing dev setups keep working unchanged.
+    
+    
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -189,6 +184,6 @@ mod tests {
     #[test]
     fn test_create_app_returns_router() {
         let _app = create_app();
-        // Just test that it compiles and doesn't panic
+        
     }
 }

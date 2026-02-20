@@ -1,7 +1,5 @@
-/*!
- * Logs Route Handler
- * Endpoint for receiving client logs from frontend
- */
+
+
 use axum::{
     extract::{Extension, Json},
     http::StatusCode,
@@ -11,7 +9,6 @@ use tower_http::request_id::RequestId;
 
 use crate::logging::config::{ClientLogBatch, ClientLogEntry, LogResponse};
 
-/// POST /api/logs - Receive client logs
 #[tracing::instrument(skip(logs), fields(batch_size = logs.logs.len()))]
 pub async fn receive_client_logs(
     request_id: Option<Extension<RequestId>>,
@@ -30,7 +27,7 @@ pub async fn receive_client_logs(
 
     let mut processed = 0;
 
-    // Process each log entry
+    
     for log in &logs.logs {
         if let Err(e) = process_client_log(log, req_id) {
             tracing::warn!(
@@ -53,12 +50,11 @@ pub async fn receive_client_logs(
     (StatusCode::ACCEPTED, Json(response))
 }
 
-/// Process a single client log entry
 fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), String> {
-    // Parse log level
+    
     let level = log.level.as_str();
 
-    // Create structured log entry
+    
     let span = tracing::info_span!(
         "client_log",
         request_id = %request_id,
@@ -68,7 +64,7 @@ fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), Stri
 
     let _enter = span.enter();
 
-    // Log based on level
+    
     match level {
         "trace" => tracing::trace!(
             message = %log.message,

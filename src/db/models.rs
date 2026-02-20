@@ -1,4 +1,4 @@
-//! Database Models - structs representing database tables (used by sqlx/serde).
+
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Admin User model (from Prisma schema)
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,
@@ -25,7 +24,6 @@ pub struct AdminUser {
     pub updated_at: DateTime<Utc>,
 }
 
-/// New admin user for insertion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewAdminUser {
     pub email: String,
@@ -35,7 +33,6 @@ pub struct NewAdminUser {
     pub role: Option<String>,
 }
 
-/// User model
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
@@ -45,7 +42,6 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
-/// New user for insertion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewUser {
     pub email: String,
@@ -53,7 +49,6 @@ pub struct NewUser {
     pub role: Option<String>,
 }
 
-/// Refresh token model
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct RefreshToken {
     pub id: Uuid,
@@ -64,7 +59,6 @@ pub struct RefreshToken {
     pub created_at: DateTime<Utc>,
 }
 
-/// New refresh token for insertion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRefreshToken {
     pub user_id: Uuid,
@@ -72,7 +66,6 @@ pub struct NewRefreshToken {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Portfolio section model
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct PortfolioSection {
     pub key: String,
@@ -80,14 +73,12 @@ pub struct PortfolioSection {
     pub updated_at: DateTime<Utc>,
 }
 
-/// New/updated portfolio section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertPortfolioSection {
     pub key: String,
     pub content: serde_json::Value,
 }
 
-/// Blog post model
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPost {
@@ -102,7 +93,6 @@ pub struct BlogPost {
     pub updated_at: DateTime<Utc>,
 }
 
-/// New blog post for creation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewBlogPost {
@@ -114,7 +104,6 @@ pub struct NewBlogPost {
     pub published: Option<bool>,
 }
 
-/// Blog post update
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateBlogPost {
@@ -125,7 +114,6 @@ pub struct UpdateBlogPost {
     pub published: Option<bool>,
 }
 
-/// Blog list response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogListResponse {
