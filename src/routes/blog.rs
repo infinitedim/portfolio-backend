@@ -22,6 +22,9 @@ pub struct BlogListQuery {
     #[serde(default = "default_page_size")]
     pub page_size: i64,
     pub published: Option<bool>,
+    pub search: Option<String>,
+    pub tag: Option<String>,
+    pub sort: Option<String>,
 }
 
 pub fn default_page() -> i64 {
@@ -49,6 +52,8 @@ pub struct BlogPostSummary {
     pub slug: String,
     pub summary: Option<String>,
     pub published: bool,
+    pub tags: Vec<String>,
+    pub reading_time_minutes: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -63,6 +68,9 @@ pub struct BlogPostResponse {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: bool,
+    pub tags: Vec<String>,
+    pub reading_time_minutes: i32,
+    pub view_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -76,6 +84,7 @@ pub struct CreateBlogRequest {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +95,7 @@ pub struct UpdateBlogRequest {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }
 
 pub use crate::routes::ErrorResponse;
@@ -106,6 +116,16 @@ pub fn is_valid_slug(slug: &str) -> bool {
 
 pub fn sanitize_html(html: &str) -> String {
     ammonia::clean(html)
+}
+
+pub fn calculate_reading_time(content_md: Option<&str>) -> i32 {
+    match content_md {
+        Some(text) if !text.is_empty() => {
+            let word_count = text.split_whitespace().count();
+            ((word_count as f64 / 200.0).ceil() as i32).max(1)
+        }
+        _ => 0,
+    }
 }
 
 fn verify_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -157,52 +177,177 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
     let page = query.page.max(1);
     let offset = (page - 1) * page_size;
 
-    
-    let (posts, total): (Vec<BlogPost>, i64) = if let Some(published) = query.published {
-        let posts = sqlx::query_as::<_, BlogPost>(
-            r#"
-            SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html, published, created_at, updated_at
-            FROM blog_posts
-            WHERE published = $1
-            ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
-            "#
-        )
-        .bind(published)
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(pool.as_ref())
-        .await
-        .unwrap_or_default();
+    let search_pattern = query
+        .search
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", s.to_lowercase()));
 
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blog_posts WHERE published = $1")
-            .bind(published)
-            .fetch_one(pool.as_ref())
-            .await
-            .unwrap_or((0,));
+    let tag_filter = query
+        .tag
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
-        (posts, total.0)
-    } else {
-        let posts = sqlx::query_as::<_, BlogPost>(
-            r#"
-            SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html, published, created_at, updated_at
-            FROM blog_posts
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            "#
-        )
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(pool.as_ref())
-        .await
-        .unwrap_or_default();
+    let order_clause = match query.sort.as_deref() {
+        Some("updated") => "ORDER BY updated_at DESC",
+        Some("views") => "ORDER BY view_count DESC",
+        _ => "ORDER BY created_at DESC",
+    };
 
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blog_posts")
-            .fetch_one(pool.as_ref())
-            .await
-            .unwrap_or((0,));
-
-        (posts, total.0)
+    let (posts, total): (Vec<BlogPost>, i64) = match (query.published, &search_pattern, &tag_filter) {
+        (Some(pub_filter), Some(search), Some(tag)) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts
+                   WHERE published = $1
+                     AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)
+                     AND $3 = ANY(tags)
+                   {} LIMIT $4 OFFSET $5"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(pub_filter)
+                .bind(search)
+                .bind(tag)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND (lower(title) LIKE $2 OR lower(summary) LIKE $2) AND $3 = ANY(tags)"
+            )
+            .bind(pub_filter).bind(search).bind(tag)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (Some(pub_filter), Some(search), None) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts
+                   WHERE published = $1
+                     AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)
+                   {} LIMIT $3 OFFSET $4"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(pub_filter).bind(search).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)"
+            )
+            .bind(pub_filter).bind(search)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (Some(pub_filter), None, Some(tag)) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts
+                   WHERE published = $1 AND $2 = ANY(tags)
+                   {} LIMIT $3 OFFSET $4"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(pub_filter).bind(tag).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND $2 = ANY(tags)"
+            )
+            .bind(pub_filter).bind(tag)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (Some(pub_filter), None, None) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts WHERE published = $1 {} LIMIT $2 OFFSET $3"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(pub_filter).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE published = $1"
+            )
+            .bind(pub_filter)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (None, Some(search), Some(tag)) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts
+                   WHERE (lower(title) LIKE $1 OR lower(summary) LIKE $1) AND $2 = ANY(tags)
+                   {} LIMIT $3 OFFSET $4"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(search).bind(tag).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE (lower(title) LIKE $1 OR lower(summary) LIKE $1) AND $2 = ANY(tags)"
+            )
+            .bind(search).bind(tag)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (None, Some(search), None) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts
+                   WHERE lower(title) LIKE $1 OR lower(summary) LIKE $1
+                   {} LIMIT $2 OFFSET $3"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(search).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE lower(title) LIKE $1 OR lower(summary) LIKE $1"
+            )
+            .bind(search)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (None, None, Some(tag)) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts WHERE $1 = ANY(tags) {} LIMIT $2 OFFSET $3"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(tag).bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM blog_posts WHERE $1 = ANY(tags)"
+            )
+            .bind(tag)
+            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
+        (None, None, None) => {
+            let sql = format!(
+                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                       published, tags, reading_time_minutes, view_count, created_at, updated_at
+                   FROM blog_posts {} LIMIT $1 OFFSET $2"#,
+                order_clause
+            );
+            let posts = sqlx::query_as::<_, BlogPost>(&sql)
+                .bind(page_size).bind(offset)
+                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blog_posts")
+                .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            (posts, total.0)
+        }
     };
 
     let items: Vec<BlogPostSummary> = posts
@@ -213,6 +358,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
             slug: p.slug,
             summary: p.summary,
             published: p.published,
+            tags: p.tags,
+            reading_time_minutes: p.reading_time_minutes,
             created_at: p.created_at,
             updated_at: p.updated_at,
         })
@@ -270,9 +417,9 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
 
     match sqlx::query_as::<_, BlogPost>(
         r#"
-        SELECT id, title, slug, summary, content_md, content_html, published, created_at, updated_at
-        FROM blog_posts
+        UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
         WHERE slug = $1
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
         "#,
     )
     .bind(&slug)
@@ -295,6 +442,9 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                 content_md: post.content_md,
                 content_html: post.content_html,
                 published: post.published,
+                tags: post.tags,
+                reading_time_minutes: post.reading_time_minutes,
+                view_count: post.view_count,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -394,12 +544,14 @@ pub async fn create_post(
         None
     };
 
-    
+    let tags = payload.tags.unwrap_or_default();
+    let reading_time = calculate_reading_time(payload.content_md.as_deref());
+
     match sqlx::query_as::<_, BlogPost>(
         r#"
-        INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, now(), now())
-        RETURNING id, title, slug, summary, content_md, content_html, published, created_at, updated_at
+        INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
         "#
     )
     .bind(&payload.title)
@@ -408,6 +560,8 @@ pub async fn create_post(
     .bind(&payload.content_md)
     .bind(&content_html)
     .bind(payload.published.unwrap_or(false))
+    .bind(&tags)
+    .bind(reading_time)
     .fetch_one(pool.as_ref())
     .await
     {
@@ -420,6 +574,9 @@ pub async fn create_post(
                 content_md: post.content_md,
                 content_html: post.content_html,
                 published: post.published,
+                tags: post.tags,
+                reading_time_minutes: post.reading_time_minutes,
+                view_count: post.view_count,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -498,19 +655,24 @@ pub async fn update_post(
         None
     };
 
-    
-    
+    let reading_time_opt = payload
+        .content_md
+        .as_deref()
+        .map(|md| calculate_reading_time(Some(md)));
+
     match sqlx::query_as::<_, BlogPost>(
         r#"
         UPDATE blog_posts
-        SET title        = COALESCE($1, title),
-            summary      = COALESCE($2, summary),
-            content_md   = COALESCE($3, content_md),
-            content_html = COALESCE($4, content_html),
-            published    = COALESCE($5, published),
-            updated_at   = now()
-        WHERE slug = $6
-        RETURNING id, title, slug, summary, content_md, content_html, published, created_at, updated_at
+        SET title                = COALESCE($1, title),
+            summary              = COALESCE($2, summary),
+            content_md           = COALESCE($3, content_md),
+            content_html         = COALESCE($4, content_html),
+            published            = COALESCE($5, published),
+            tags                 = COALESCE($6, tags),
+            reading_time_minutes = COALESCE($7, reading_time_minutes),
+            updated_at           = now()
+        WHERE slug = $8
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
         "#
     )
     .bind(&payload.title)
@@ -518,6 +680,8 @@ pub async fn update_post(
     .bind(&payload.content_md)
     .bind(&content_html_opt)
     .bind(payload.published)
+    .bind(&payload.tags)
+    .bind(reading_time_opt)
     .bind(&slug)
     .fetch_optional(pool.as_ref())
     .await
@@ -531,6 +695,9 @@ pub async fn update_post(
                 content_md: post.content_md,
                 content_html: post.content_html,
                 published: post.published,
+                tags: post.tags,
+                reading_time_minutes: post.reading_time_minutes,
+                view_count: post.view_count,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -624,6 +791,62 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct TagsResponse {
+    pub tags: Vec<String>,
+}
+
+pub async fn list_tags() -> impl IntoResponse {
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Database not available".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match sqlx::query_as::<_, (String,)>(
+        r#"
+        SELECT DISTINCT unnest(tags) AS tag
+        FROM blog_posts
+        WHERE published = true AND array_length(tags, 1) > 0
+        ORDER BY tag ASC
+        "#,
+    )
+    .fetch_all(pool.as_ref())
+    .await
+    {
+        Ok(rows) => {
+            let tags: Vec<String> = rows.into_iter().map(|r| r.0).collect();
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=300, stale-while-revalidate=60"
+                    .parse()
+                    .unwrap(),
+            );
+            (StatusCode::OK, headers, Json(TagsResponse { tags })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Database error fetching tags: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to fetch tags".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +930,7 @@ mod tests {
                 content_md: None,
                 content_html: None,
                 published: Some(false),
+                tags: None,
             },
         )
         .await;

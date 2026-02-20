@@ -1,5 +1,3 @@
-
-
 pub mod db;
 pub mod logging;
 pub mod routes;
@@ -71,6 +69,7 @@ pub fn create_app() -> Router {
             "/api/blog",
             get(routes::blog::list_posts).post(routes::blog::create_post),
         )
+        .route("/api/blog/tags", get(routes::blog::list_tags))
         .route(
             "/api/blog/{slug}",
             get(routes::blog::get_post)
@@ -86,9 +85,7 @@ pub fn create_app() -> Router {
         .layer(middleware::from_fn(logging::middleware::log_request))
         .layer(logging::middleware::request_id_layer())
         .layer(TraceLayer::new_for_http())
-        
         .layer(CompressionLayer::new())
-        
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(cors)
 }
@@ -96,13 +93,10 @@ pub fn create_app() -> Router {
 pub async fn run() {
     dotenvy::dotenv().ok();
 
-    
-    
     let _log_guards = logging::init();
 
     routes::health::init_start_time();
 
-    
     let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
     if environment == "production" {
         let secret = std::env::var("JWT_SECRET").unwrap_or_default();
@@ -113,7 +107,6 @@ pub async fn run() {
             );
         }
 
-        
         let admin_email = std::env::var("ADMIN_EMAIL").unwrap_or_default();
         let admin_password_set =
             std::env::var("ADMIN_HASH_PASSWORD").is_ok() || std::env::var("ADMIN_PASSWORD").is_ok();
@@ -153,8 +146,6 @@ pub async fn run() {
 
     let app = create_app();
 
-    
-    
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -184,6 +175,5 @@ mod tests {
     #[test]
     fn test_create_app_returns_router() {
         let _app = create_app();
-        
     }
 }

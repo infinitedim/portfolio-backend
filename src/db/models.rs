@@ -1,4 +1,3 @@
-
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
@@ -89,6 +88,9 @@ pub struct BlogPost {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: bool,
+    pub tags: Vec<String>,
+    pub reading_time_minutes: i32,
+    pub view_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -102,6 +104,7 @@ pub struct NewBlogPost {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +115,7 @@ pub struct UpdateBlogPost {
     pub content_md: Option<String>,
     pub content_html: Option<String>,
     pub published: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

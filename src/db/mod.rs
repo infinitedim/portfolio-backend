@@ -1,5 +1,3 @@
-
-
 pub mod models;
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -57,17 +55,13 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
         .min_connections(config.min_connections)
-        
         .acquire_timeout(std::time::Duration::from_secs(3))
         .idle_timeout(std::time::Duration::from_secs(config.idle_timeout_secs))
-        
         .max_lifetime(std::time::Duration::from_secs(1800))
-        
         .test_before_acquire(true)
         .connect(&config.url)
         .await?;
 
-    
     sqlx::query("SELECT 1").fetch_one(&pool).await?;
 
     tracing::info!("Database connection pool initialized successfully");
@@ -95,7 +89,6 @@ pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("Running database migrations...");
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS admin_users (
@@ -119,7 +112,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
@@ -130,7 +122,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -145,7 +136,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -161,7 +151,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash 
@@ -171,7 +160,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at 
@@ -181,7 +169,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
@@ -208,7 +195,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS portfolio_sections (
@@ -221,7 +207,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS blog_posts (
@@ -240,9 +225,14 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    
     sqlx::query(
         r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
+            ON blog_posts(slug);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_published
+            ON blog_posts(published);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at
+            ON blog_posts(created_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
             ON blog_posts(slug);
         CREATE INDEX IF NOT EXISTS idx_blog_posts_published
@@ -254,6 +244,26 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_expires_at
             ON admin_refresh_tokens(expires_at)
     "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        ALTER TABLE blog_posts
+            ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}',
+            ADD COLUMN IF NOT EXISTS reading_time_minutes INTEGER NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_tags ON blog_posts USING GIN(tags);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_view_count ON blog_posts(view_count DESC)
+        "#,
     )
     .execute(pool)
     .await?;
@@ -278,7 +288,6 @@ mod tests {
 
     #[test]
     fn test_get_pool_none_before_init() {
-        
         let pool = get_pool();
         assert!(pool.is_none());
     }
