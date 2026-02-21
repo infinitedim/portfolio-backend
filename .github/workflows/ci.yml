@@ -184,3 +184,97 @@ jobs:
         with:
           sarif_file: "trivy-results.sarif"
           category: "trivy-security-scan"
+
+  docker:
+    name: Docker Stack
+    runs-on: ubuntu-latest
+    needs: [check, clippy]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Create required host directories
+        run: |
+          mkdir -p logs data/loki data/grafana
+          mkdir -p ../portfolio-frontend/logs/server
+
+      - name: Write .env for docker compose
+        run: |
+          cat > .env << 'EOF'
+          POSTGRES_USER=portfolio
+          POSTGRES_PASSWORD=portfolio
+          POSTGRES_DB=portfolio
+          JWT_SECRET=ci-test-jwt-secret-change-in-production
+          REFRESH_TOKEN_SECRET=ci-test-refresh-secret-change-in-production
+          ALLOWED_ORIGINS=http://localhost:3000
+          FRONTEND_ORIGIN=http://localhost:3000
+          ENVIRONMENT=development
+          LOG_LEVEL=info
+          DB_POOL_MIN=1
+          DB_POOL_MAX=5
+          GRAFANA_USER=admin
+          GRAFANA_PASSWORD=admin
+          EOF
+
+      - name: Build and start full stack
+        run: docker compose up -d --build --wait --timeout 180
+        timeout-minutes: 15
+
+      - name: Show service status
+        run: docker compose ps
+
+      - name: Health check — postgres
+        run: |
+          docker compose exec -T postgres \
+            pg_isready -U portfolio -d portfolio
+
+      - name: Health check — redis
+        run: |
+          docker compose exec -T redis redis-cli ping | grep -q PONG
+
+      - name: Health check — backend /health
+        run: |
+          curl -sf http://localhost:8080/health
+
+      - name: Health check — backend /health/detailed
+        run: |
+          curl -sf http://localhost:8080/health/detailed
+
+      - name: Health check — loki
+        run: |
+          curl -sf http://localhost:3100/ready
+
+      - name: Health check — prometheus
+        run: |
+          curl -sf http://localhost:9090/-/ready
+
+      - name: Health check — prometheus targets
+        run: |
+          curl -sf http://localhost:9090/api/v1/targets \
+            | grep -q '"health":"up"' || true
+
+      - name: Health check — grafana
+        run: |
+          curl -sf http://localhost:3001/api/health \
+            | grep -q '"database":"ok"'
+
+      - name: Verify grafana datasources provisioned
+        run: |
+          curl -sf \
+            -u admin:admin \
+            http://localhost:3001/api/datasources \
+            | grep -q '"type":"loki"'
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          echo "=== backend ===" && docker compose logs --no-color --tail=30 backend
+          echo "=== postgres ===" && docker compose logs --no-color --tail=20 postgres
+          echo "=== redis ===" && docker compose logs --no-color --tail=20 redis
+          echo "=== loki ===" && docker compose logs --no-color --tail=30 loki
+          echo "=== prometheus ===" && docker compose logs --no-color --tail=20 prometheus
+          echo "=== grafana ===" && docker compose logs --no-color --tail=20 grafana
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
