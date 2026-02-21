@@ -2,4 +2,7 @@
 *.txt
 .env
 .env.development
-*.log.* 
+*.log.*
+data/
+logs/*.log
+logs/**/*.log

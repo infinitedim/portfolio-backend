@@ -1,0 +1,13 @@
+target/
+.git/
+.github/
+.gitignore
+**/*.md
+**/*.log
+**/*.log.*
+.env
+.env.*
+!.env.example
+data/
+logs/
+*.txt
