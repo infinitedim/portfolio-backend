@@ -1,13 +1,9 @@
-# Grafana Alert Rules
-# Configure alerting for critical events
-
 apiVersion: 1
 
 groups:
   - name: portfolio_alerts
     interval: 1m
     rules:
-      # High Error Rate Alert
       - uid: high_error_rate
         title: High Error Rate
         condition: A
@@ -28,7 +24,6 @@ groups:
           severity: critical
           team: platform
 
-      # Slow Response Time Alert
       - uid: slow_response_time
         title: Slow Response Time
         condition: A
@@ -49,7 +44,6 @@ groups:
           severity: warning
           team: platform
 
-      # Security Events Alert
       - uid: security_events
         title: Multiple Failed Login Attempts
         condition: A
@@ -70,7 +64,6 @@ groups:
           severity: high
           team: security
 
-      # Service Down Alert
       - uid: service_down
         title: Service Not Responding
         condition: A
@@ -91,7 +84,6 @@ groups:
           severity: critical
           team: platform
 
-      # High Memory Usage (if metrics available)
       - uid: high_memory
         title: High Memory Usage
         condition: A
@@ -112,7 +104,6 @@ groups:
           severity: critical
           team: platform
 
-      # Rate Limit Abuse
       - uid: rate_limit_abuse
         title: Rate Limit Abuse Detected
         condition: A
@@ -133,7 +124,6 @@ groups:
           severity: high
           team: security
 
-      # Poor Web Vitals
       - uid: poor_web_vitals
         title: Poor Web Vitals - LCP
         condition: A

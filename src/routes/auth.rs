@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, StatusCode},
@@ -18,37 +16,37 @@ use tokio::sync::RwLock;
 use crate::db;
 
 lazy_static::lazy_static! {
-    
+
     pub static ref JWT_SECRET: String = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "default-jwt-secret-change-in-production".to_string());
 
-    
+
     pub static ref REFRESH_SECRET: String = std::env::var("REFRESH_TOKEN_SECRET")
         .unwrap_or_else(|_| JWT_SECRET.clone());
 
-    
+
     pub static ref ADMIN_EMAIL: String = std::env::var("ADMIN_EMAIL")
         .unwrap_or_else(|_| "admin@example.com".to_string());
 
-    
+
     pub static ref ADMIN_PASSWORD_HASH: String = {
-        
+
         if let Ok(hash) = std::env::var("ADMIN_HASH_PASSWORD") {
             hash
         } else if let Ok(plain) = std::env::var("ADMIN_PASSWORD") {
-            
+
             hash(&plain, DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         } else {
-            
+
             hash("admin123", DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         }
     };
 
-    
+
     pub static ref REFRESH_TOKENS: Arc<RwLock<HashMap<String, RefreshTokenData>>> =
         Arc::new(RwLock::new(HashMap::new()));
 
-    
+
     pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, i64>>> =
         Arc::new(RwLock::new(HashMap::new()));
 }
@@ -62,11 +60,11 @@ const RATE_LIMIT_WINDOW_SECS: i64 = 60;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,   
-    pub email: String, 
-    pub role: String,  
-    pub exp: i64,      
-    pub iat: i64,      
+    pub sub: String,
+    pub email: String,
+    pub role: String,
+    pub exp: i64,
+    pub iat: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +124,7 @@ pub struct RegisterResponse {
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub success: bool,
-    pub is_valid: bool, 
+    pub is_valid: bool,
     pub user: Option<UserInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -218,7 +216,7 @@ async fn check_rate_limit(ip: &str) -> bool {
     #[cfg(test)]
     {
         let _ = ip;
-        return true; 
+        return true;
     }
 
     #[cfg(not(test))]
@@ -226,19 +224,16 @@ async fn check_rate_limit(ip: &str) -> bool {
         let now = Utc::now().timestamp();
         let mut limits = RATE_LIMIT.write().await;
 
-        
-        
-        
         limits.retain(|_, last| now - *last < RATE_LIMIT_WINDOW_SECS);
 
         if let Some(last_request) = limits.get(ip) {
             if now - last_request < RATE_LIMIT_WINDOW_SECS {
-                return false; 
+                return false;
             }
         }
 
         limits.insert(ip.to_string(), now);
-        true 
+        true
     }
 }
 
@@ -248,7 +243,6 @@ pub async fn register(
 ) -> impl IntoResponse {
     let ip = addr.ip().to_string();
 
-    
     if !check_rate_limit(&ip).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -260,7 +254,6 @@ pub async fn register(
         );
     }
 
-    
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -272,7 +265,6 @@ pub async fn register(
         );
     }
 
-    
     if !payload.email.contains('@') {
         return (
             StatusCode::BAD_REQUEST,
@@ -284,7 +276,6 @@ pub async fn register(
         );
     }
 
-    
     if payload.password.len() < 8 {
         return (
             StatusCode::BAD_REQUEST,
@@ -296,7 +287,6 @@ pub async fn register(
         );
     }
 
-    
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -311,7 +301,6 @@ pub async fn register(
         }
     };
 
-    
     let existing_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM admin_users")
         .fetch_one(pool.as_ref())
         .await
@@ -330,7 +319,6 @@ pub async fn register(
         }
     };
 
-    
     if existing_count.0 > 0 {
         return (
             StatusCode::FORBIDDEN,
@@ -342,8 +330,6 @@ pub async fn register(
         );
     }
 
-    
-    
     let password_hash =
         match tokio::task::spawn_blocking(move || hash(&payload.password, DEFAULT_COST)).await {
             Ok(Ok(h)) => h,
@@ -371,7 +357,6 @@ pub async fn register(
             }
         };
 
-    
     let user_id = uuid::Uuid::new_v4().to_string();
     match sqlx::query(
         r#"
@@ -427,7 +412,6 @@ pub async fn login(
 ) -> impl IntoResponse {
     let ip = addr.ip().to_string();
 
-    
     if !check_rate_limit(&ip).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -441,7 +425,6 @@ pub async fn login(
         );
     }
 
-    
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -455,7 +438,6 @@ pub async fn login(
         );
     }
 
-    
     if !payload.email.contains('@') {
         return (
             StatusCode::BAD_REQUEST,
@@ -469,8 +451,6 @@ pub async fn login(
         );
     }
 
-    
-    
     let (user_id, authenticated_email, role): (String, String, String) = match crate::db::get_pool()
     {
         Some(pool) => {
@@ -495,7 +475,6 @@ pub async fn login(
 
             match row {
                 Ok(Some((id, email, password_hash, role, is_active, locked_until))) => {
-                    
                     if let Some(until) = locked_until {
                         if until > Utc::now() {
                             tracing::warn!("Login attempt on locked account: {}", email);
@@ -515,7 +494,6 @@ pub async fn login(
                         }
                     }
 
-                    
                     if !is_active {
                         return (
                             StatusCode::FORBIDDEN,
@@ -529,7 +507,6 @@ pub async fn login(
                         );
                     }
 
-                    
                     let pwd = payload.password.clone();
                     let hash_clone = password_hash.clone();
                     let password_ok = tokio::task::spawn_blocking(move || {
@@ -559,7 +536,6 @@ pub async fn login(
                         );
                     }
 
-                    
                     let _ = sqlx::query(
                         "UPDATE admin_users \
                              SET last_login_at = now(), last_login_ip = $1, \
@@ -604,7 +580,6 @@ pub async fn login(
             }
         }
         None => {
-            
             let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
             let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
             if !email_matches || !password_matches {
@@ -627,7 +602,6 @@ pub async fn login(
         }
     };
 
-    
     let access_token = match create_access_token(&user_id, &authenticated_email, &role) {
         Ok(token) => token,
         Err(e) => {
@@ -649,7 +623,6 @@ pub async fn login(
     let refresh_token_hash = hash_refresh_token(&refresh_token);
     let expires_at = Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
-    
     if let Some(pool) = crate::db::get_pool() {
         if let Err(e) = sqlx::query(
             r#"INSERT INTO admin_refresh_tokens (admin_user_id, token_hash, expires_at)
@@ -665,7 +638,6 @@ pub async fn login(
         }
     }
 
-    
     {
         let mut tokens = REFRESH_TOKENS.write().await;
         tokens.insert(
@@ -759,8 +731,6 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
     let token_hash = hash_refresh_token(&payload.refresh_token);
     let now = Utc::now();
 
-    
-    
     let token_data: Option<RefreshTokenData> = {
         if let Some(pool) = crate::db::get_pool() {
             match sqlx::query_as::<_, (String, String, String, chrono::DateTime<Utc>, bool)>(
@@ -781,19 +751,17 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                     revoked,
                 }),
                 Ok(None) => {
-                    
                     let tokens = REFRESH_TOKENS.read().await;
                     tokens.get(&token_hash).cloned()
                 }
                 Err(e) => {
                     tracing::error!("DB error during token refresh lookup: {}", e);
-                    
+
                     let tokens = REFRESH_TOKENS.read().await;
                     tokens.get(&token_hash).cloned()
                 }
             }
         } else {
-            
             let tokens = REFRESH_TOKENS.read().await;
             tokens.get(&token_hash).cloned()
         }
@@ -801,7 +769,6 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
 
     match token_data {
         Some(data) if !data.revoked && data.expires_at > now.timestamp() => {
-            
             let access_token = match create_access_token(&data.user_id, &data.email, &data.role) {
                 Ok(token) => token,
                 Err(e) => {
@@ -818,12 +785,10 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 }
             };
 
-            
             let new_refresh_token = generate_refresh_token();
             let new_token_hash = hash_refresh_token(&new_refresh_token);
             let new_expires_at = now + Duration::days(REFRESH_TOKEN_EXPIRY_DAYS);
 
-            
             if let Some(pool) = crate::db::get_pool() {
                 let _ = sqlx::query(
                     "UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1",
@@ -843,7 +808,6 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 .await;
             }
 
-            
             {
                 let mut tokens = REFRESH_TOKENS.write().await;
                 if let Some(old_data) = tokens.get_mut(&token_hash) {
@@ -886,11 +850,9 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
 pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> impl IntoResponse {
     let pool = crate::db::get_pool();
 
-    
     if let Some(refresh_token) = payload.refresh_token {
         let token_hash = hash_refresh_token(&refresh_token);
 
-        
         if let Some(ref p) = pool {
             let _ =
                 sqlx::query("UPDATE admin_refresh_tokens SET revoked = true WHERE token_hash = $1")
@@ -899,20 +861,17 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                     .await;
         }
 
-        
         let mut tokens = REFRESH_TOKENS.write().await;
         if let Some(data) = tokens.get_mut(&token_hash) {
             data.revoked = true;
         }
     }
 
-    
     if let Some(access_token) = payload
         .access_token
         .or_else(|| extract_bearer_token(&headers))
     {
         if let Ok(claims) = verify_access_token(&access_token) {
-            
             if let Some(ref p) = pool {
                 let _ = sqlx::query(
                     "UPDATE admin_refresh_tokens SET revoked = true WHERE admin_user_id = $1",
@@ -922,7 +881,6 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                 .await;
             }
 
-            
             let mut tokens = REFRESH_TOKENS.write().await;
             for data in tokens.values_mut() {
                 if data.user_id == claims.sub {
@@ -932,7 +890,6 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
         }
     }
 
-    
     (StatusCode::OK, Json(LogoutResponse { success: true }))
 }
 

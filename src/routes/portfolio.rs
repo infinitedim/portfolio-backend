@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::Query,
     http::{HeaderMap, StatusCode},
@@ -105,7 +103,6 @@ pub fn get_static_data(section: &str) -> Option<Value> {
 }
 
 pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResponse {
-    
     if query.section.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -133,7 +130,6 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
 
     let section_key = query.section.to_lowercase();
 
-    
     if let Some(pool) = db::get_pool() {
         match sqlx::query_as::<_, PortfolioSection>(
             "SELECT key, content, updated_at FROM portfolio_sections WHERE key = $1",
@@ -161,7 +157,6 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                     .into_response();
             }
             Ok(None) => {
-                
                 tracing::debug!(
                     "Section '{}' not found in database, using static data",
                     section_key
@@ -169,12 +164,10 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             }
             Err(e) => {
                 tracing::error!("Database error fetching portfolio section: {}", e);
-                
             }
         }
     }
 
-    
     match get_static_data(&section_key) {
         Some(data) => {
             let mut cache_headers = axum::http::HeaderMap::new();
@@ -210,7 +203,6 @@ pub async fn update_portfolio(
     headers: HeaderMap,
     Json(payload): Json<UpdatePortfolioRequest>,
 ) -> impl IntoResponse {
-    
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -230,7 +222,6 @@ pub async fn update_portfolio(
         }
     };
 
-    
     if verify_access_token(token).is_err() {
         return (
             StatusCode::UNAUTHORIZED,
@@ -242,7 +233,6 @@ pub async fn update_portfolio(
         );
     }
 
-    
     if !is_valid_section(&payload.section) {
         return (
             StatusCode::BAD_REQUEST,
@@ -259,7 +249,6 @@ pub async fn update_portfolio(
 
     let section_key = payload.section.to_lowercase();
 
-    
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -274,7 +263,6 @@ pub async fn update_portfolio(
         }
     };
 
-    
     match sqlx::query(
         r#"
         INSERT INTO portfolio_sections (key, content, updated_at)

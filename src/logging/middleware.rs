@@ -1,5 +1,3 @@
-
-
 use axum::{extract::Request, middleware::Next, response::Response};
 use std::time::Instant;
 use tower_http::request_id::{
@@ -19,7 +17,6 @@ pub async fn log_request(request: Request, next: Next) -> Response {
         .unwrap_or("unknown")
         .to_string();
 
-    
     tracing::info!(
         request_id = %req_id,
         method = %method,
@@ -28,14 +25,11 @@ pub async fn log_request(request: Request, next: Next) -> Response {
         "incoming request"
     );
 
-    
     let response = next.run(request).await;
 
-    
     let duration = start.elapsed();
     let status = response.status();
 
-    
     if status.is_server_error() {
         tracing::error!(
             request_id = %req_id,

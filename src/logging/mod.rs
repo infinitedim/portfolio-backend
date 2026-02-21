@@ -1,5 +1,3 @@
-
-
 pub mod config;
 pub mod middleware;
 
@@ -8,25 +6,19 @@ use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 pub fn init() -> Vec<tracing_appender::non_blocking::WorkerGuard> {
-    
     let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
     let is_production = environment == "production";
 
-    
     std::fs::create_dir_all("logs").ok();
 
-    
     let file_appender = rolling::daily("logs", "app.log");
     let (file_writer, file_guard) = non_blocking(file_appender);
 
-    
     let error_appender = rolling::daily("logs", "error.log");
     let (error_writer, error_guard) = non_blocking(error_appender);
 
-    
     let (console_writer, console_guard) = non_blocking(io::stdout());
 
-    
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| {
         if is_production {
             "info".to_string()
@@ -42,11 +34,9 @@ pub fn init() -> Vec<tracing_appender::non_blocking::WorkerGuard> {
         ))
     });
 
-    
     let subscriber = tracing_subscriber::registry().with(env_filter);
 
     if is_production {
-        
         let file_layer = fmt::layer()
             .json()
             .with_writer(file_writer)
@@ -77,7 +67,6 @@ pub fn init() -> Vec<tracing_appender::non_blocking::WorkerGuard> {
             .with(console_layer)
             .init();
     } else {
-        
         let file_layer = fmt::layer()
             .with_writer(file_writer)
             .with_target(true)
@@ -94,12 +83,10 @@ pub fn init() -> Vec<tracing_appender::non_blocking::WorkerGuard> {
             .with_thread_ids(false)
             .with_thread_names(false);
 
-        
         subscriber.with(file_layer).with(console_layer).init();
     }
 
     tracing::info!("Logging initialized for {} environment", environment);
 
-    
     vec![file_guard, error_guard, console_guard]
 }

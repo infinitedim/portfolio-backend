@@ -1,6 +1,3 @@
-# Loki Configuration
-# Log aggregation database configuration
-
 auth_enabled: false
 
 server:
@@ -40,26 +37,17 @@ schema_config:
 ruler:
   alertmanager_url: http://localhost:9093
 
-# Ingestion limits
 limits_config:
-  # Ingestion rate limit (MB/s per stream)
   ingestion_rate_mb: 10
-  # Maximum number of active streams
   ingestion_burst_size_mb: 20
-  # Per-stream rate limit
   per_stream_rate_limit: 10MB
   per_stream_rate_limit_burst: 20MB
-  # Maximum line size
   max_line_size: 256KB
-  # Maximum number of label names per series
   max_label_names_per_series: 30
-  # Reject old samples (older than 30 days)
   reject_old_samples: true
   reject_old_samples_max_age: 720h
-  # Retention period (30 days)
   retention_period: 720h
 
-# Compaction
 compactor:
   working_directory: /loki/compactor
   compaction_interval: 10m
@@ -68,7 +56,6 @@ compactor:
   retention_delete_worker_count: 150
   delete_request_store: filesystem
 
-# Table manager (for retention)
 table_manager:
   retention_deletes_enabled: true
   retention_period: 720h

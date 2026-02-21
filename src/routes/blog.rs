@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
@@ -106,7 +104,7 @@ pub struct SuccessResponse {
 }
 
 lazy_static::lazy_static! {
-    
+
     static ref SLUG_REGEX: Regex = Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap();
 }
 
@@ -172,7 +170,6 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         }
     };
 
-    
     let page_size = query.page_size.clamp(1, 100);
     let page = query.page.max(1);
     let offset = (page - 1) * page_size;
@@ -195,7 +192,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         _ => "ORDER BY created_at DESC",
     };
 
-    let (posts, total): (Vec<BlogPost>, i64) = match (query.published, &search_pattern, &tag_filter) {
+    let (posts, total): (Vec<BlogPost>, i64) = match (query.published, &search_pattern, &tag_filter)
+    {
         (Some(pub_filter), Some(search), Some(tag)) => {
             let sql = format!(
                 r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
@@ -234,8 +232,13 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter).bind(search).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+                .bind(pub_filter)
+                .bind(search)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
             let total: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)"
             )
@@ -253,13 +256,21 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter).bind(tag).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+                .bind(pub_filter)
+                .bind(tag)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
             let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND $2 = ANY(tags)"
+                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND $2 = ANY(tags)",
             )
-            .bind(pub_filter).bind(tag)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+            .bind(pub_filter)
+            .bind(tag)
+            .fetch_one(pool.as_ref())
+            .await
+            .unwrap_or((0,));
             (posts, total.0)
         }
         (Some(pub_filter), None, None) => {
@@ -270,13 +281,18 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE published = $1"
-            )
-            .bind(pub_filter)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+                .bind(pub_filter)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
+            let total: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM blog_posts WHERE published = $1")
+                    .bind(pub_filter)
+                    .fetch_one(pool.as_ref())
+                    .await
+                    .unwrap_or((0,));
             (posts, total.0)
         }
         (None, Some(search), Some(tag)) => {
@@ -289,8 +305,13 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(search).bind(tag).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+                .bind(search)
+                .bind(tag)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
             let total: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM blog_posts WHERE (lower(title) LIKE $1 OR lower(summary) LIKE $1) AND $2 = ANY(tags)"
             )
@@ -308,8 +329,12 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(search).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+                .bind(search)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
             let total: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM blog_posts WHERE lower(title) LIKE $1 OR lower(summary) LIKE $1"
             )
@@ -325,13 +350,18 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(tag).bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE $1 = ANY(tags)"
-            )
-            .bind(tag)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+                .bind(tag)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
+            let total: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM blog_posts WHERE $1 = ANY(tags)")
+                    .bind(tag)
+                    .fetch_one(pool.as_ref())
+                    .await
+                    .unwrap_or((0,));
             (posts, total.0)
         }
         (None, None, None) => {
@@ -342,10 +372,15 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
                 order_clause
             );
             let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(page_size).bind(offset)
-                .fetch_all(pool.as_ref()).await.unwrap_or_default();
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(pool.as_ref())
+                .await
+                .unwrap_or_default();
             let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blog_posts")
-                .fetch_one(pool.as_ref()).await.unwrap_or((0,));
+                .fetch_one(pool.as_ref())
+                .await
+                .unwrap_or((0,));
             (posts, total.0)
         }
     };
@@ -387,7 +422,6 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
 }
 
 pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
-    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -476,12 +510,10 @@ pub async fn create_post(
     headers: HeaderMap,
     Json(payload): Json<CreateBlogRequest>,
 ) -> impl IntoResponse {
-    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    
     if payload.title.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -504,7 +536,6 @@ pub async fn create_post(
             .into_response();
     }
 
-    
     if !is_valid_slug(&payload.slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -532,8 +563,6 @@ pub async fn create_post(
         }
     };
 
-    
-    
     let content_html = if let Some(h) = payload.content_html {
         Some(
             tokio::task::spawn_blocking(move || sanitize_html(&h))
@@ -583,7 +612,7 @@ pub async fn create_post(
             (StatusCode::CREATED, Json(response)).into_response()
         }
         Err(e) => {
-            
+
             if e.to_string().contains("duplicate key") || e.to_string().contains("unique constraint") {
                 return (
                     StatusCode::CONFLICT,
@@ -611,12 +640,10 @@ pub async fn update_post(
     Path(slug): Path<String>,
     Json(payload): Json<UpdateBlogRequest>,
 ) -> impl IntoResponse {
-    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -644,7 +671,6 @@ pub async fn update_post(
         }
     };
 
-    
     let content_html_opt = if let Some(h) = payload.content_html {
         Some(
             tokio::task::spawn_blocking(move || sanitize_html(&h))
@@ -725,12 +751,10 @@ pub async fn update_post(
 }
 
 pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl IntoResponse {
-    
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -758,7 +782,6 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
         }
     };
 
-    
     match sqlx::query("DELETE FROM blog_posts WHERE slug = $1")
         .bind(&slug)
         .execute(pool.as_ref())

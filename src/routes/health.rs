@@ -1,5 +1,3 @@
-
-
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,7 +13,7 @@ pub fn init_start_time() {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] 
+#[allow(dead_code)]
 pub enum HealthStatus {
     Ok,
     Healthy,
@@ -85,7 +83,6 @@ pub async fn health_ping() -> impl IntoResponse {
 pub async fn health_detailed() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    
     let database_check = match crate::db::health_check().await {
         Ok(duration) => ServiceCheck {
             status: "healthy".to_string(),
@@ -99,15 +96,12 @@ pub async fn health_detailed() -> impl IntoResponse {
         },
     };
 
-    
     let redis_check = ServiceCheck {
         status: "unhealthy".to_string(),
         response_time: None,
         error: Some("Redis not configured yet".to_string()),
     };
 
-    
-    
     let overall_status = "ok".to_string();
 
     let response = DetailedHealthResponse {
@@ -124,7 +118,6 @@ pub async fn health_detailed() -> impl IntoResponse {
 }
 
 pub async fn health_database() -> impl IntoResponse {
-    
     match crate::db::health_check().await {
         Ok(duration) => {
             let check = ServiceCheck {
@@ -146,8 +139,6 @@ pub async fn health_database() -> impl IntoResponse {
 }
 
 pub async fn health_redis() -> impl IntoResponse {
-    
-    
     let check = ServiceCheck {
         status: "unhealthy".to_string(),
         response_time: None,
@@ -160,18 +151,13 @@ pub async fn health_redis() -> impl IntoResponse {
 pub async fn health_ready() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    
     let database_status = match crate::db::health_check().await {
         Ok(_) => "healthy".to_string(),
         Err(_) => "unhealthy".to_string(),
     };
 
-    
     let redis_status = "unhealthy".to_string();
 
-    
-    
-    
     let db_configured = std::env::var("DATABASE_URL").is_ok();
     let is_ready = !db_configured || database_status == "healthy";
 

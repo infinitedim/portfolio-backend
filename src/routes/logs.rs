@@ -1,5 +1,3 @@
-
-
 use axum::{
     extract::{Extension, Json},
     http::StatusCode,
@@ -27,7 +25,6 @@ pub async fn receive_client_logs(
 
     let mut processed = 0;
 
-    
     for log in &logs.logs {
         if let Err(e) = process_client_log(log, req_id) {
             tracing::warn!(
@@ -51,10 +48,8 @@ pub async fn receive_client_logs(
 }
 
 fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), String> {
-    
     let level = log.level.as_str();
 
-    
     let span = tracing::info_span!(
         "client_log",
         request_id = %request_id,
@@ -64,7 +59,6 @@ fn process_client_log(log: &ClientLogEntry, request_id: &str) -> Result<(), Stri
 
     let _enter = span.enter();
 
-    
     match level {
         "trace" => tracing::trace!(
             message = %log.message,
