@@ -10,7 +10,8 @@ use axum::{
 };
 use std::net::SocketAddr;
 use tower_http::{
-    compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer,
+    compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer,
+    services::ServeDir, trace::TraceLayer,
 };
 
 pub fn configure_cors() -> CorsLayer {
@@ -54,7 +55,18 @@ pub fn create_app() -> Router {
     let cors = configure_cors();
     tracing::info!("CORS configured");
 
-    Router::new()
+    // Upload routes with higher body limit (10MB)
+    let upload_routes = Router::new()
+        .route("/api/upload/image", post(routes::upload::upload_image))
+        .route(
+            "/api/upload/image/{filename}",
+            axum::routing::delete(routes::upload::delete_image),
+        )
+        .route("/api/upload/images", get(routes::upload::list_images))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
+
+    // Main routes with default body limit (2MB)
+    let main_routes = Router::new()
         .route("/api/logs", post(routes::logs::receive_client_logs))
         .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/login", post(routes::auth::login))
@@ -70,6 +82,7 @@ pub fn create_app() -> Router {
             get(routes::blog::list_posts).post(routes::blog::create_post),
         )
         .route("/api/blog/tags", get(routes::blog::list_tags))
+        .route("/api/rss", get(routes::rss::rss_feed))
         .route(
             "/api/blog/{slug}",
             get(routes::blog::get_post)
@@ -81,12 +94,17 @@ pub fn create_app() -> Router {
         .route("/health/database", get(routes::health::health_database))
         .route("/health/redis", get(routes::health::health_redis))
         .route("/health/ready", get(routes::health::health_ready))
+        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024));
+
+    Router::new()
+        .merge(upload_routes)
+        .merge(main_routes)
+        .nest_service("/uploads", ServeDir::new("uploads"))
         .layer(logging::middleware::propagate_request_id_layer())
         .layer(middleware::from_fn(logging::middleware::log_request))
         .layer(logging::middleware::request_id_layer())
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
-        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(cors)
 }
 

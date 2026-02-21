@@ -573,7 +573,22 @@ pub async fn create_post(
         None
     };
 
-    let tags = payload.tags.unwrap_or_default();
+    let tags: Vec<String> = payload
+        .tags
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| {
+            let trimmed = t.trim().to_string();
+            let mut chars = trimmed.chars();
+            match chars.next() {
+                None => trimmed,
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .filter(|t| !t.is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     let reading_time = calculate_reading_time(payload.content_md.as_deref());
 
     match sqlx::query_as::<_, BlogPost>(
@@ -681,6 +696,22 @@ pub async fn update_post(
         None
     };
 
+    let normalized_tags = payload.tags.map(|tags| {
+        tags.into_iter()
+            .map(|t| {
+                let trimmed = t.trim().to_string();
+                let mut chars = trimmed.chars();
+                match chars.next() {
+                    None => trimmed,
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            })
+            .filter(|t| !t.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<String>>()
+    });
+
     let reading_time_opt = payload
         .content_md
         .as_deref()
@@ -694,7 +725,7 @@ pub async fn update_post(
             content_md           = COALESCE($3, content_md),
             content_html         = COALESCE($4, content_html),
             published            = COALESCE($5, published),
-            tags                 = COALESCE($6, tags),
+            tags                 = COALESCE($6::TEXT[], tags),
             reading_time_minutes = COALESCE($7, reading_time_minutes),
             updated_at           = now()
         WHERE slug = $8
@@ -706,7 +737,7 @@ pub async fn update_post(
     .bind(&payload.content_md)
     .bind(&content_html_opt)
     .bind(payload.published)
-    .bind(&payload.tags)
+    .bind(&normalized_tags)
     .bind(reading_time_opt)
     .bind(&slug)
     .fetch_optional(pool.as_ref())
@@ -819,6 +850,14 @@ pub struct TagsResponse {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TagWithCount {
+    pub name: String,
+    pub slug: String,
+    pub post_count: i64,
+}
+
 pub async fn list_tags() -> impl IntoResponse {
     let pool = match db::get_pool() {
         Some(p) => p,
@@ -834,19 +873,36 @@ pub async fn list_tags() -> impl IntoResponse {
         }
     };
 
-    match sqlx::query_as::<_, (String,)>(
+    match sqlx::query_as::<_, (String, i64)>(
         r#"
-        SELECT DISTINCT unnest(tags) AS tag
-        FROM blog_posts
-        WHERE published = true AND array_length(tags, 1) > 0
-        ORDER BY tag ASC
+        SELECT tag AS name, COUNT(*) AS post_count
+        FROM (
+            SELECT unnest(tags) AS tag
+            FROM blog_posts
+            WHERE published = true AND array_length(tags, 1) > 0
+        ) subq
+        GROUP BY tag
+        ORDER BY post_count DESC, tag ASC
         "#,
     )
     .fetch_all(pool.as_ref())
     .await
     {
         Ok(rows) => {
-            let tags: Vec<String> = rows.into_iter().map(|r| r.0).collect();
+            let tags: Vec<TagWithCount> = rows
+                .into_iter()
+                .map(|(name, post_count)| {
+                    let slug = name
+                        .to_lowercase()
+                        .replace(' ', "-")
+                        .replace(|c: char| !c.is_alphanumeric() && c != '-', "");
+                    TagWithCount {
+                        name,
+                        slug,
+                        post_count,
+                    }
+                })
+                .collect();
             let mut headers = axum::http::HeaderMap::new();
             headers.insert(
                 axum::http::header::CACHE_CONTROL,
@@ -854,7 +910,7 @@ pub async fn list_tags() -> impl IntoResponse {
                     .parse()
                     .unwrap(),
             );
-            (StatusCode::OK, headers, Json(TagsResponse { tags })).into_response()
+            (StatusCode::OK, headers, Json(tags)).into_response()
         }
         Err(e) => {
             tracing::error!("Database error fetching tags: {}", e);

@@ -47,7 +47,7 @@ lazy_static::lazy_static! {
         Arc::new(RwLock::new(HashMap::new()));
 
 
-    pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, i64>>> =
+    pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, Vec<i64>>>> =
         Arc::new(RwLock::new(HashMap::new()));
 }
 
@@ -57,6 +57,9 @@ const REFRESH_TOKEN_EXPIRY_DAYS: i64 = 7;
 
 #[allow(dead_code)]
 const RATE_LIMIT_WINDOW_SECS: i64 = 60;
+
+#[allow(dead_code)]
+const RATE_LIMIT_MAX_REQUESTS: usize = 5;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -224,15 +227,19 @@ async fn check_rate_limit(ip: &str) -> bool {
         let now = Utc::now().timestamp();
         let mut limits = RATE_LIMIT.write().await;
 
-        limits.retain(|_, last| now - *last < RATE_LIMIT_WINDOW_SECS);
+        // Clean up expired entries
+        limits.retain(|_, timestamps| {
+            timestamps.retain(|t| now - *t < RATE_LIMIT_WINDOW_SECS);
+            !timestamps.is_empty()
+        });
 
-        if let Some(last_request) = limits.get(ip) {
-            if now - last_request < RATE_LIMIT_WINDOW_SECS {
-                return false;
-            }
+        let timestamps = limits.entry(ip.to_string()).or_insert_with(Vec::new);
+
+        if timestamps.len() >= RATE_LIMIT_MAX_REQUESTS {
+            return false;
         }
 
-        limits.insert(ip.to_string(), now);
+        timestamps.push(now);
         true
     }
 }

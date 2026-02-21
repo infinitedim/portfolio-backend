@@ -3,6 +3,8 @@ pub mod blog;
 pub mod health;
 pub mod logs;
 pub mod portfolio;
+pub mod rss;
+pub mod upload;
 
 use serde::Serialize;
 
