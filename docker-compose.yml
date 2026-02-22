@@ -80,6 +80,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_HASH_PASSWORD: ${ADMIN_HASH_PASSWORD:-}
+      ROADMAP_AUTH_TOKEN: ${ROADMAP_AUTH_TOKEN:-}
     volumes:
       - ./logs:/app/logs
     networks:

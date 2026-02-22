@@ -102,39 +102,45 @@ scrape_configs:
           __path__: /var/log/frontend/server/combined.log
 
     pipeline_stages:
+      # Step 1: extract top-level fields + the context blob
+      - json:
+          expressions:
+            context: context
+            timestamp: timestamp
+            level: level
+            message: message
+
+      # Step 2: pull source out of context so we can filter on it
+      - json:
+          source: context
+          expressions:
+            source: source
+
+      # Step 3: promote source to a real label
+      - labels:
+          source:
+
+      # Step 4: drop anything that is NOT a client log (action:drop needs no stages)
       - match:
-          selector: '{service="frontend"}'
-          stages:
-            - json:
-                expressions:
-                  context: context
+          selector: '{source!="client"}'
+          action: drop
 
-            - json:
-                source: context
-                expressions:
-                  source: source
+      # Step 5: extract remaining client-specific fields from context
+      - json:
+          source: context
+          expressions:
+            component: component
+            device_type: deviceType
+            user_agent: userAgent
 
-            - match:
-                selector: '{source="client"}'
-                action: keep
+      - labels:
+          level:
+          component:
+          device_type:
 
-            - json:
-                expressions:
-                  timestamp: timestamp
-                  level: level
-                  message: message
-                  component: context.component
-                  user_agent: context.userAgent
-                  device_type: context.deviceType
-
-            - labels:
-                level:
-                component:
-                device_type:
-
-            - timestamp:
-                source: timestamp
-                format: RFC3339
+      - timestamp:
+          source: timestamp
+          format: RFC3339
 
   - job_name: errors
     static_configs:

@@ -57,3 +57,9 @@ sqlx = { version = "0.8", features = [
 # HTML sanitization (blog)
 ammonia = "4"
 regex = "1"
+
+# HTTP client (roadmap.sh proxy)
+reqwest = { version = "0.12", features = [
+  "json",
+  "rustls-tls",
+], default-features = false }

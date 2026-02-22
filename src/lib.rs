@@ -73,6 +73,16 @@ pub fn create_app() -> Router {
         .route("/api/auth/verify", post(routes::auth::verify_token))
         .route("/api/auth/refresh", post(routes::auth::refresh))
         .route("/api/auth/logout", post(routes::auth::logout))
+        .route("/api/roadmap/streak", get(routes::roadmap::get_streak))
+        .route(
+            "/api/roadmap/dashboard",
+            get(routes::roadmap::get_dashboard),
+        )
+        .route("/api/roadmap/teams", get(routes::roadmap::get_teams))
+        .route(
+            "/api/roadmap/favourites",
+            get(routes::roadmap::get_favourites),
+        )
         .route(
             "/api/portfolio",
             get(routes::portfolio::get_portfolio).patch(routes::portfolio::update_portfolio),
