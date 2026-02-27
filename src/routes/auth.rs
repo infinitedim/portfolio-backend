@@ -37,8 +37,11 @@ lazy_static::lazy_static! {
 
             hash(&plain, DEFAULT_COST).unwrap_or_else(|_| "".to_string())
         } else {
-
-            hash("admin123", DEFAULT_COST).unwrap_or_else(|_| "".to_string())
+            tracing::warn!(
+                "SECURITY: Neither ADMIN_HASH_PASSWORD nor ADMIN_PASSWORD is set. \
+                 Fallback login is disabled until one of these env vars is configured."
+            );
+            "".to_string()
         }
     };
 
@@ -523,9 +526,15 @@ pub async fn login(
                     .unwrap_or(false);
                     if !password_ok {
                         let _ = sqlx::query(
-                            "UPDATE admin_users \
-                                 SET login_attempts = login_attempts + 1, updated_at = now() \
-                                 WHERE id = $1",
+                            r#"UPDATE admin_users
+                                 SET login_attempts = login_attempts + 1,
+                                     locked_until   = CASE
+                                         WHEN login_attempts + 1 >= 5
+                                         THEN now() + INTERVAL '15 minutes'
+                                         ELSE locked_until
+                                     END,
+                                     updated_at = now()
+                                 WHERE id = $1"#,
                         )
                         .bind(&id)
                         .execute(pool.as_ref())

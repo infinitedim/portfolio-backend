@@ -233,20 +233,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             ON blog_posts(published);
         CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at
             ON blog_posts(created_at DESC);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
-            ON blog_posts(slug);
-        CREATE INDEX IF NOT EXISTS idx_blog_posts_published
-            ON blog_posts(published);
-        CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at
-            ON blog_posts(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_blog_posts_pub_created
-            ON blog_posts(published, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_expires_at
-            ON admin_refresh_tokens(expires_at)
-    "#,
-    )
-    .execute(pool)
-    .await?;
+
 
     sqlx::query(
         r#"
