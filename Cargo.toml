@@ -41,7 +41,7 @@ lazy_static = "1.4"
 dotenvy = "0.15"
 
 # Auth
-bcrypt = "0.18"
+bcrypt = "0.19"
 jsonwebtoken = "10"
 rand = "0.10"
 sha2 = "0.10"
