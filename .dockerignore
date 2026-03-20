@@ -2,12 +2,17 @@ target/
 .git/
 .github/
 .gitignore
+.vscode/
+.dockerignore
+Dockerfile
+docker-compose*.yml
 **/*.md
 **/*.log
 **/*.log.*
 .env
 .env.*
 !.env.example
+config/
 data/
 logs/
 *.txt

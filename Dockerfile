@@ -1,51 +1,48 @@
-FROM rust:1.88-slim-bookworm AS builder
+# ── Stage 1: Chef base (cached across all builds) ─────────────
+FROM rust:1.88-slim-bookworm AS chef
+
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends musl-tools && \
+  rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --locked
+RUN rustup target add x86_64-unknown-linux-musl
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-  pkg-config \
-  libssl-dev \
-  && rm -rf /var/lib/apt/lists/*
+# ── Stage 2: Compute dependency recipe ────────────────────────
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-COPY Cargo.toml Cargo.lock ./
+# ── Stage 3: Build dependencies then application ──────────────
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
 
-RUN mkdir -p src && \
-  echo 'fn main() { println!("placeholder"); }' > src/main.rs && \
-  echo '' > src/lib.rs
+ENV RUSTFLAGS="-C strip=symbols"
 
-RUN cargo build --release --locked && \
-  rm -rf src
+# Cook dependencies (layer is cached until Cargo.toml/Cargo.lock change)
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
-COPY src ./src
+# Copy full source and build the real binaries
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-musl --locked
 
-RUN touch src/main.rs src/lib.rs && \
-  cargo build --release --locked
+# ── Stage 4: Minimal runtime ──────────────────────────────────
+FROM gcr.io/distroless/static-debian12 AS runtime
 
+COPY --from=builder --chown=1001:1001 \
+  /app/target/x86_64-unknown-linux-musl/release/portfolio-backend \
+  /app/portfolio-backend
 
-FROM debian:bookworm-slim AS runtime
+COPY --from=builder --chown=1001:1001 \
+  /app/target/x86_64-unknown-linux-musl/release/healthcheck \
+  /app/healthcheck
 
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-  ca-certificates \
-  libssl3 \
-  wget \
-  && rm -rf /var/lib/apt/lists/*
-
-RUN useradd -m -u 1001 -s /bin/sh appuser
-
-COPY --from=builder /app/target/release/portfolio-backend /app/portfolio-backend
-
-RUN mkdir -p /app/logs && chown -R appuser:appuser /app
-
-USER appuser
+USER 1001
 
 EXPOSE 8080
 
-ENV HOST=0.0.0.0
-ENV PORT=8080
-
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
+  CMD ["/app/healthcheck"]
 
 CMD ["/app/portfolio-backend"]
