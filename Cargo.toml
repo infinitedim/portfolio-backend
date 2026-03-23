@@ -53,6 +53,7 @@ sqlx = { version = "0.8", default-features = false, features = [
   "postgres",
   "chrono",
   "uuid",
+  "derive",
 ] }
 
 # HTML sanitization (blog)
