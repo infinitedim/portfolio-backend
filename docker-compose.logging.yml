@@ -1,7 +1,6 @@
 version: "3.8"
 
 services:
-  # Loki - Log aggregation database
   loki:
     image: grafana/loki:latest
     container_name: portfolio-loki
@@ -29,7 +28,6 @@ services:
       retries: 3
       start_period: 40s
 
-  # Promtail - Log collector and shipper
   promtail:
     image: grafana/promtail:latest
     container_name: portfolio-promtail
@@ -46,7 +44,6 @@ services:
       - loki
     restart: unless-stopped
 
-  # Grafana - Visualization and dashboards
   grafana:
     image: grafana/grafana:latest
     container_name: portfolio-grafana

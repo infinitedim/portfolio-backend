@@ -9,7 +9,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'sum(rate({level="error"} [5m])) > 5'
               intervalMs: 60000
@@ -29,7 +29,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'quantile_over_time(0.95, {job="portfolio-backend"} | json | duration_ms != "" | unwrap duration_ms [10m]) > 2000'
               intervalMs: 60000
@@ -49,7 +49,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'sum(count_over_time({} |= "authentication failed" [5m])) > 10'
               intervalMs: 60000
@@ -69,9 +69,9 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: prometheus-main
             model:
-              expr: 'sum(count_over_time({job="portfolio-backend"} [5m])) == 0'
+              expr: 'up{job="portfolio-backend"} == 0'
               intervalMs: 60000
               maxDataPoints: 43200
         noDataState: Alerting
@@ -89,7 +89,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'sum(count_over_time({} |= "out of memory" [5m])) > 0'
               intervalMs: 60000
@@ -109,7 +109,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'sum(count_over_time({} |= "Rate limit exceeded" [5m])) > 100'
               intervalMs: 60000
@@ -129,7 +129,7 @@ groups:
         condition: A
         data:
           - refId: A
-            datasourceUid: loki
+            datasourceUid: loki-main
             model:
               expr: 'avg_over_time({service="frontend", log_type="client"} |= "LCP" | json | unwrap value [10m]) > 4000'
               intervalMs: 60000

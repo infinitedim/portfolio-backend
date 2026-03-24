@@ -2,6 +2,7 @@ apiVersion: 1
 
 datasources:
   - name: Loki
+    uid: loki-main
     type: loki
     access: proxy
     url: http://loki:3100
@@ -11,11 +12,7 @@ datasources:
       maxLines: 1000
       timeout: 60
       derivedFields:
-        - datasourceUid: loki
+        - datasourceUid: loki-main
           matcherRegex: "request_id=(\\w+)"
           name: RequestID
-          url: "$${__value.raw}"
-        - datasourceUid: tempo
-          matcherRegex: "trace_id=(\\w+)"
-          name: TraceID
           url: "$${__value.raw}"

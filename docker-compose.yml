@@ -1,10 +1,6 @@
 name: portfolio
 
 services:
-  # ────────────────────────────────────────────────────────────
-  # Core infrastructure
-  # ────────────────────────────────────────────────────────────
-
   postgres:
     image: postgres:16-alpine
     container_name: portfolio-postgres
@@ -93,10 +89,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # ────────────────────────────────────────────────────────────
-  # Logging & observability stack
-  # ────────────────────────────────────────────────────────────
 
   loki:
     image: grafana/loki:3.3.2

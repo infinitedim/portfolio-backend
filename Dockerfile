@@ -1,4 +1,3 @@
-# ── Stage 1: Chef base (cached across all builds) ─────────────
 FROM rust:1.88-slim-bookworm AS chef
 
 RUN apt-get update && \
@@ -9,25 +8,20 @@ RUN rustup target add x86_64-unknown-linux-musl
 
 WORKDIR /app
 
-# ── Stage 2: Compute dependency recipe ────────────────────────
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# ── Stage 3: Build dependencies then application ──────────────
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
 ENV RUSTFLAGS="-C strip=symbols"
 
-# Cook dependencies (layer is cached until Cargo.toml/Cargo.lock change)
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
-# Copy full source and build the real binaries
 COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-musl --locked
 
-# ── Stage 4: Minimal runtime ──────────────────────────────────
 FROM gcr.io/distroless/static-debian12 AS runtime
 
 COPY --from=builder --chown=1001:1001 \

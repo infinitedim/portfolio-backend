@@ -6,7 +6,7 @@ server:
   log_level: info
 
 common:
-  instance_addr: 127.0.0.1
+  instance_addr: 0.0.0.0
   path_prefix: /loki
   storage:
     filesystem:
@@ -55,7 +55,3 @@ compactor:
   retention_delete_delay: 2h
   retention_delete_worker_count: 150
   delete_request_store: filesystem
-
-table_manager:
-  retention_deletes_enabled: true
-  retention_period: 720h
