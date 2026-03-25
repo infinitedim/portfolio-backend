@@ -172,7 +172,7 @@ checksum = "523ab528ce3a7ada6597f8ccf5bd8d85ebe26d5edf311cad4d1d3cfb2d357ac6"
 dependencies = [
  "base64",
  "blowfish",
- "getrandom 0.4.1",
+ "getrandom 0.4.2",
  "subtle",
  "zeroize",
 ]

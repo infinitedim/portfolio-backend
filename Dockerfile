@@ -20,7 +20,7 @@ ENV RUSTFLAGS="-C strip=symbols"
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl --locked
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM gcr.io/distroless/static-debian12 AS runtime
 
