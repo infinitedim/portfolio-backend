@@ -44,7 +44,7 @@ dotenvy = "0.15"
 bcrypt = "0.19"
 jsonwebtoken = "10"
 rand = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [
