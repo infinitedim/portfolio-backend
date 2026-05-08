@@ -45,6 +45,7 @@ bcrypt = "0.19"
 jsonwebtoken = "10"
 rand = "0.10"
 sha2 = "0.11"
+hex = "0.4"
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [

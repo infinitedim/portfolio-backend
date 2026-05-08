@@ -1619,6 +1619,7 @@ dependencies = [
  "bcrypt",
  "chrono",
  "dotenvy",
+ "hex",
  "jsonwebtoken",
  "lazy_static",
  "once_cell",
