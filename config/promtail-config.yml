@@ -41,10 +41,14 @@ scrape_configs:
             status: fields.status
             duration_ms: fields.duration_ms
 
+      # NOTE: request_id is *intentionally* NOT a label.
+      # Loki labels create a separate stream per unique value; request_id is
+      # high-cardinality (one per request) and would explode index size.
+      # request_id stays in the log line and remains queryable via parser
+      # expressions, e.g.  | json | request_id="..."
       - labels:
           level:
           target:
-          request_id:
           method:
           status:
 
@@ -85,7 +89,6 @@ scrape_configs:
       - labels:
           level:
           component:
-          request_id:
 
       - timestamp:
           source: timestamp

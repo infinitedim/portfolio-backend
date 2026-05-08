@@ -34,8 +34,11 @@ schema_config:
         prefix: index_
         period: 24h
 
-ruler:
-  alertmanager_url: http://localhost:9093
+# Alertmanager is not deployed in this stack. Leaving the ruler unconfigured
+# so Loki doesn't spam logs trying to push alerts to a dead address.
+# When Alertmanager is added, set:
+#   ruler:
+#     alertmanager_url: http://alertmanager:9093
 
 limits_config:
   ingestion_rate_mb: 10

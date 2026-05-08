@@ -184,8 +184,10 @@ services:
       GF_ALERTING_ENABLED: "true"
       GF_INSTALL_PLUGINS: ""
     volumes:
-      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
-      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      # Mount the entire provisioning tree so datasources, dashboards, and any
+      # future alerting/notifiers config get picked up by Grafana on boot.
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
       - grafana-data:/var/lib/grafana
     networks:
       - logging

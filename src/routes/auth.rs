@@ -1,29 +1,57 @@
 use axum::{
     extract::ConnectInfo,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-use tokio::sync::RwLock;
+use std::net::SocketAddr;
 
 use crate::db;
 
+/// Minimum length for production HMAC secrets. 32 bytes maps to a 256-bit key,
+/// which matches HS256 strength.
+const MIN_SECRET_LEN: usize = 32;
+
+fn load_secret(var: &str) -> String {
+    let value = std::env::var(var).unwrap_or_default();
+    let is_production = std::env::var("ENVIRONMENT").as_deref() == Ok("production");
+
+    if value.is_empty() {
+        if is_production {
+            panic!(
+                "FATAL: {} must be set in production. Refusing to start without an explicit secret.",
+                var
+            );
+        }
+        tracing::warn!(
+            "{} is not set. Using a randomly generated dev-only secret. \
+             DO NOT rely on this in production.",
+            var
+        );
+        return Alphanumeric.sample_string(&mut rand::rng(), 64);
+    }
+
+    if is_production && value.len() < MIN_SECRET_LEN {
+        panic!(
+            "FATAL: {} is shorter than {} characters. Refusing to start with a weak secret.",
+            var, MIN_SECRET_LEN
+        );
+    }
+
+    value
+}
+
 lazy_static::lazy_static! {
 
-    pub static ref JWT_SECRET: String = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "default-jwt-secret-change-in-production".to_string());
+    pub static ref JWT_SECRET: String = load_secret("JWT_SECRET");
 
-
-    pub static ref REFRESH_SECRET: String = std::env::var("REFRESH_TOKEN_SECRET")
-        .unwrap_or_else(|_| JWT_SECRET.clone());
-
+    pub static ref REFRESH_SECRET: String = load_secret("REFRESH_TOKEN_SECRET");
 
     pub static ref ADMIN_EMAIL: String = std::env::var("ADMIN_EMAIL")
         .unwrap_or_else(|_| "admin@example.com".to_string());
@@ -45,24 +73,94 @@ lazy_static::lazy_static! {
         }
     };
 
+    pub static ref JWT_ISSUER: String = std::env::var("JWT_ISSUER")
+        .unwrap_or_else(|_| "portfolio-backend".to_string());
 
-    pub static ref REFRESH_TOKENS: Arc<RwLock<HashMap<String, RefreshTokenData>>> =
-        Arc::new(RwLock::new(HashMap::new()));
-
-
-    pub static ref RATE_LIMIT: Arc<RwLock<HashMap<String, Vec<i64>>>> =
-        Arc::new(RwLock::new(HashMap::new()));
+    pub static ref JWT_AUDIENCE: String = std::env::var("JWT_AUDIENCE")
+        .unwrap_or_else(|_| "portfolio-frontend".to_string());
 }
 
 const ACCESS_TOKEN_EXPIRY_MINUTES: i64 = 15;
 
 const REFRESH_TOKEN_EXPIRY_DAYS: i64 = 7;
 
-#[allow(dead_code)]
-const RATE_LIMIT_WINDOW_SECS: i64 = 60;
+/// Name of the HttpOnly cookie that holds the refresh token. It is scoped to
+/// `/api/auth` so it is only sent on auth endpoints (login, refresh, logout)
+/// and never on other routes — minimising attack surface even on the same
+/// origin.
+const REFRESH_COOKIE_NAME: &str = "rt";
+const REFRESH_COOKIE_PATH: &str = "/api/auth";
 
-#[allow(dead_code)]
-const RATE_LIMIT_MAX_REQUESTS: usize = 5;
+/// Whether the cookie should be marked `Secure`. Disabled in non-production
+/// so local dev over HTTP still works. In production any value other than
+/// "production" is treated as production by default to avoid accidental
+/// downgrades.
+fn cookie_secure_flag() -> bool {
+    std::env::var("ENVIRONMENT")
+        .map(|v| v != "development" && v != "test")
+        .unwrap_or(true)
+}
+
+fn build_refresh_cookie(token: &str) -> String {
+    let max_age = REFRESH_TOKEN_EXPIRY_DAYS * 24 * 3600;
+    let mut parts = vec![
+        format!("{}={}", REFRESH_COOKIE_NAME, token),
+        format!("Max-Age={}", max_age),
+        format!("Path={}", REFRESH_COOKIE_PATH),
+        "HttpOnly".to_string(),
+        "SameSite=Strict".to_string(),
+    ];
+    if cookie_secure_flag() {
+        parts.push("Secure".to_string());
+    }
+    parts.join("; ")
+}
+
+fn clear_refresh_cookie() -> String {
+    let mut parts = vec![
+        format!("{}=", REFRESH_COOKIE_NAME),
+        "Max-Age=0".to_string(),
+        format!("Path={}", REFRESH_COOKIE_PATH),
+        "HttpOnly".to_string(),
+        "SameSite=Strict".to_string(),
+    ];
+    if cookie_secure_flag() {
+        parts.push("Secure".to_string());
+    }
+    parts.join("; ")
+}
+
+fn extract_refresh_cookie(headers: &HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{}=", REFRESH_COOKIE_NAME);
+    for part in cookie_header.split(';') {
+        let trimmed = part.trim();
+        if let Some(value) = trimmed.strip_prefix(&prefix) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Build a response that returns JSON and attaches the refresh-token cookie.
+fn json_with_cookie<T: serde::Serialize>(
+    status: StatusCode,
+    body: T,
+    cookie: Option<String>,
+) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    if let Some(c) = cookie {
+        match HeaderValue::from_str(&c) {
+            Ok(v) => {
+                response.headers_mut().append(header::SET_COOKIE, v);
+            }
+            Err(e) => {
+                tracing::error!("Failed to build refresh cookie header: {}", e);
+            }
+        }
+    }
+    response
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -71,6 +169,10 @@ pub struct Claims {
     pub role: String,
     pub exp: i64,
     pub iat: i64,
+    #[serde(default)]
+    pub iss: String,
+    #[serde(default)]
+    pub aud: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +184,7 @@ pub struct RefreshTokenData {
     pub revoked: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfo {
     pub user_id: String,
@@ -90,25 +192,36 @@ pub struct UserInfo {
     pub role: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     pub success: bool,
     pub user: Option<UserInfo>,
     pub access_token: Option<String>,
+    /// Deprecated. The refresh token is now delivered as an HttpOnly cookie
+    /// scoped to `/api/auth`. Field is kept (skipped when None) only to ease
+    /// frontend rollout and will be removed in a future release.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
+    /// When true, no access/refresh tokens are issued — the client must
+    /// post `challenge_token` + a TOTP code to `/api/auth/2fa/login` to
+    /// finish authenticating.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub requires2fa: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub challenge_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
     pub email: String,
@@ -117,7 +230,7 @@ pub struct RegisterRequest {
     pub last_name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterResponse {
     pub success: bool,
@@ -126,7 +239,7 @@ pub struct RegisterResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub success: bool,
@@ -136,23 +249,27 @@ pub struct VerifyResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+/// Request body for `/api/auth/refresh`. The refresh token is now read from
+/// the HttpOnly cookie; this struct exists so the endpoint accepts an empty
+/// body without erroring on missing JSON.
+#[derive(Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshRequest {
-    pub refresh_token: String,
+    /// Deprecated — refresh token is read from the HttpOnly `rt` cookie.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub success: bool,
     pub access_token: Option<String>,
-    pub refresh_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutRequest {
     #[serde(default)]
@@ -161,7 +278,7 @@ pub struct LogoutRequest {
     pub refresh_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct LogoutResponse {
     pub success: bool,
 }
@@ -192,22 +309,49 @@ fn create_access_token(
         role: role.to_string(),
         exp: exp.timestamp(),
         iat: now.timestamp(),
+        iss: JWT_ISSUER.clone(),
+        aud: JWT_AUDIENCE.clone(),
     };
 
     encode(
-        &Header::default(),
+        &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(JWT_SECRET.as_bytes()),
     )
+}
+
+/// Build a strict validation config: pin to HS256, require iss/aud/exp/sub/iat,
+/// and disable any default tolerance for missing claims.
+fn access_token_validation() -> Validation {
+    let mut v = Validation::new(Algorithm::HS256);
+    v.set_issuer(&[JWT_ISSUER.as_str()]);
+    v.set_audience(&[JWT_AUDIENCE.as_str()]);
+    v.set_required_spec_claims(&["exp", "iat", "sub", "iss", "aud"]);
+    v.leeway = 30;
+    v
 }
 
 pub fn verify_access_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(JWT_SECRET.as_bytes()),
-        &Validation::default(),
+        &access_token_validation(),
     )?;
     Ok(token_data.claims)
+}
+
+/// Require a valid bearer token whose role is admin-equivalent. Returns the
+/// verified claims on success and an `AppError` mapped to 401/403 otherwise.
+pub fn require_admin(headers: &HeaderMap) -> Result<Claims, crate::routes::AppError> {
+    let token = extract_bearer_token(headers).ok_or(crate::routes::AppError::Unauthorized)?;
+    let claims = verify_access_token(&token).map_err(|_| crate::routes::AppError::Unauthorized)?;
+
+    let role = claims.role.to_ascii_uppercase();
+    let allowed = matches!(role.as_str(), "ADMIN" | "SUPER_ADMIN");
+    if !allowed {
+        return Err(crate::routes::AppError::Forbidden);
+    }
+    Ok(claims)
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -218,52 +362,27 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-async fn check_rate_limit(ip: &str) -> bool {
-    #[cfg(test)]
-    {
-        let _ = ip;
-        return true;
-    }
+// Application-level rate limiting has moved to the `tower-governor`
+// middleware wired up in `lib.rs::create_app`. The previous in-memory
+// HashMap was unbounded, did not honour `X-Forwarded-For`, and was useless
+// behind any reverse proxy or with multiple replicas.
 
-    #[cfg(not(test))]
-    {
-        let now = Utc::now().timestamp();
-        let mut limits = RATE_LIMIT.write().await;
-
-        // Clean up expired entries
-        limits.retain(|_, timestamps| {
-            timestamps.retain(|t| now - *t < RATE_LIMIT_WINDOW_SECS);
-            !timestamps.is_empty()
-        });
-
-        let timestamps = limits.entry(ip.to_string()).or_insert_with(Vec::new);
-
-        if timestamps.len() >= RATE_LIMIT_MAX_REQUESTS {
-            return false;
-        }
-
-        timestamps.push(now);
-        true
-    }
-}
-
+#[utoipa::path(
+    post,
+    path = "/api/auth/register",
+    tag = "Authentication",
+    request_body = RegisterRequest,
+    responses(
+        (status = 201, description = "Registration successful", body = RegisterResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 409, description = "Email already taken", body = ErrorResponse),
+        (status = 429, description = "Too many attempts", body = ErrorResponse),
+    ),
+)]
 pub async fn register(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    let ip = addr.ip().to_string();
-
-    if !check_rate_limit(&ip).await {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(RegisterResponse {
-                success: false,
-                user: None,
-                error: Some("Too many requests. Please try again later.".to_string()),
-            }),
-        );
-    }
-
     if payload.email.is_empty() || payload.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -416,48 +535,53 @@ pub async fn register(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    tag = "Authentication",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful (or 2FA challenge issued — see `requiresTwoFa`)", body = LoginResponse),
+        (status = 400, description = "Missing/invalid email or password", body = ErrorResponse),
+        (status = 401, description = "Invalid credentials", body = ErrorResponse),
+        (status = 429, description = "Too many attempts", body = ErrorResponse),
+    ),
+)]
 pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
-) -> impl IntoResponse {
+) -> Response {
     let ip = addr.ip().to_string();
 
-    if !check_rate_limit(&ip).await {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(LoginResponse {
-                success: false,
-                user: None,
-                access_token: None,
-                refresh_token: None,
-                error: Some("Too many requests. Please try again later.".to_string()),
-            }),
-        );
-    }
-
     if payload.email.is_empty() || payload.password.is_empty() {
-        return (
+        return json_with_cookie(
             StatusCode::BAD_REQUEST,
-            Json(LoginResponse {
+            LoginResponse {
                 success: false,
                 user: None,
                 access_token: None,
                 refresh_token: None,
+                requires2fa: false,
+                challenge_token: None,
                 error: Some("Email and password are required".to_string()),
-            }),
+            },
+            None,
         );
     }
 
     if !payload.email.contains('@') {
-        return (
+        return json_with_cookie(
             StatusCode::BAD_REQUEST,
-            Json(LoginResponse {
+            LoginResponse {
                 success: false,
                 user: None,
                 access_token: None,
                 refresh_token: None,
+                requires2fa: false,
+                challenge_token: None,
                 error: Some("Invalid email format".to_string()),
-            }),
+            },
+            None,
         );
     }
 
@@ -488,32 +612,38 @@ pub async fn login(
                     if let Some(until) = locked_until {
                         if until > Utc::now() {
                             tracing::warn!("Login attempt on locked account: {}", email);
-                            return (
+                            return json_with_cookie(
                                 StatusCode::UNAUTHORIZED,
-                                Json(LoginResponse {
+                                LoginResponse {
                                     success: false,
                                     user: None,
                                     access_token: None,
                                     refresh_token: None,
+                                    requires2fa: false,
+                                    challenge_token: None,
                                     error: Some(
                                         "Account is temporarily locked. Try again later."
                                             .to_string(),
                                     ),
-                                }),
+                                },
+                                None,
                             );
                         }
                     }
 
                     if !is_active {
-                        return (
+                        return json_with_cookie(
                             StatusCode::FORBIDDEN,
-                            Json(LoginResponse {
+                            LoginResponse {
                                 success: false,
                                 user: None,
                                 access_token: None,
                                 refresh_token: None,
+                                requires2fa: false,
+                                challenge_token: None,
                                 error: Some("Account is disabled.".to_string()),
-                            }),
+                            },
+                            None,
                         );
                     }
 
@@ -540,15 +670,18 @@ pub async fn login(
                         .execute(pool.as_ref())
                         .await;
                         tracing::warn!("Failed login attempt for: {}", email);
-                        return (
+                        return json_with_cookie(
                             StatusCode::UNAUTHORIZED,
-                            Json(LoginResponse {
+                            LoginResponse {
                                 success: false,
                                 user: None,
                                 access_token: None,
                                 refresh_token: None,
+                                requires2fa: false,
+                                challenge_token: None,
                                 error: Some("Invalid credentials".to_string()),
-                            }),
+                            },
+                            None,
                         );
                     }
 
@@ -567,30 +700,36 @@ pub async fn login(
                 }
                 Ok(None) => {
                     tracing::warn!("Login attempt for unknown user: {}", payload.email);
-                    return (
+                    return json_with_cookie(
                         StatusCode::UNAUTHORIZED,
-                        Json(LoginResponse {
+                        LoginResponse {
                             success: false,
                             user: None,
                             access_token: None,
                             refresh_token: None,
+                            requires2fa: false,
+                            challenge_token: None,
                             error: Some("Invalid credentials".to_string()),
-                        }),
+                        },
+                        None,
                     );
                 }
                 Err(e) => {
                     tracing::error!("Database error during login: {}", e);
-                    return (
+                    return json_with_cookie(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(LoginResponse {
+                        LoginResponse {
                             success: false,
                             user: None,
                             access_token: None,
                             refresh_token: None,
+                            requires2fa: false,
+                            challenge_token: None,
                             error: Some(
                                 "Authentication service temporarily unavailable.".to_string(),
                             ),
-                        }),
+                        },
+                        None,
                     );
                 }
             }
@@ -599,15 +738,18 @@ pub async fn login(
             let email_matches = payload.email.to_lowercase() == ADMIN_EMAIL.to_lowercase();
             let password_matches = verify(&payload.password, &ADMIN_PASSWORD_HASH).unwrap_or(false);
             if !email_matches || !password_matches {
-                return (
+                return json_with_cookie(
                     StatusCode::UNAUTHORIZED,
-                    Json(LoginResponse {
+                    LoginResponse {
                         success: false,
                         user: None,
                         access_token: None,
                         refresh_token: None,
+                        requires2fa: false,
+                        challenge_token: None,
                         error: Some("Invalid credentials".to_string()),
-                    }),
+                    },
+                    None,
                 );
             }
             (
@@ -618,19 +760,92 @@ pub async fn login(
         }
     };
 
-    let access_token = match create_access_token(&user_id, &authenticated_email, &role) {
+    // Branch on 2FA: if the admin has TOTP enabled, we don't issue any
+    // tokens yet. Instead we mint a short-lived challenge token that the
+    // client must exchange via `/api/auth/2fa/login` together with a valid
+    // TOTP / backup code.
+    let totp_required = if let Some(pool) = crate::db::get_pool() {
+        match crate::routes::twofa::fetch_admin_totp_state_by_email(
+            pool.as_ref(),
+            &authenticated_email,
+        )
+        .await
+        {
+            Ok(Some((_id, enabled))) => enabled,
+            Ok(None) => false,
+            Err(e) => {
+                tracing::error!("Failed to load 2FA state: {}", e);
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    if totp_required {
+        let challenge = match crate::routes::twofa::create_challenge_token(
+            &user_id,
+            &authenticated_email,
+            &role,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to mint 2FA challenge token: {}", e);
+                return json_with_cookie(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    LoginResponse {
+                        success: false,
+                        error: Some("Failed to start 2FA challenge".to_string()),
+                        ..Default::default()
+                    },
+                    None,
+                );
+            }
+        };
+
+        return json_with_cookie(
+            StatusCode::OK,
+            LoginResponse {
+                success: true,
+                requires2fa: true,
+                challenge_token: Some(challenge),
+                user: Some(UserInfo {
+                    user_id,
+                    email: authenticated_email,
+                    role,
+                }),
+                ..Default::default()
+            },
+            None,
+        );
+    }
+
+    issue_login_tokens(&user_id, &authenticated_email, &role, &HeaderMap::new()).await
+}
+
+/// Mint the access token + refresh-token cookie after the caller has been
+/// authenticated. Reused by `login` (no 2FA) and by `twofa::login_challenge`
+/// (post-TOTP). The `_headers` argument is unused for now but kept on the
+/// signature so the helper can later attach IP/UA-bound metadata without a
+/// breaking signature change.
+pub async fn issue_login_tokens(
+    user_id: &str,
+    email: &str,
+    role: &str,
+    _headers: &HeaderMap,
+) -> Response {
+    let access_token = match create_access_token(user_id, email, role) {
         Ok(token) => token,
         Err(e) => {
             tracing::error!("Failed to create access token: {}", e);
-            return (
+            return json_with_cookie(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(LoginResponse {
+                LoginResponse {
                     success: false,
-                    user: None,
-                    access_token: None,
-                    refresh_token: None,
                     error: Some("Failed to create token".to_string()),
-                }),
+                    ..Default::default()
+                },
+                None,
             );
         }
     };
@@ -644,7 +859,7 @@ pub async fn login(
             r#"INSERT INTO admin_refresh_tokens (admin_user_id, token_hash, expires_at)
                VALUES ($1, $2, $3)"#,
         )
-        .bind(&user_id)
+        .bind(user_id)
         .bind(&refresh_token_hash)
         .bind(expires_at)
         .execute(pool.as_ref())
@@ -652,46 +867,49 @@ pub async fn login(
         {
             tracing::error!("Failed to persist refresh token to DB: {}", e);
         }
-    }
-
-    {
-        let mut tokens = REFRESH_TOKENS.write().await;
-        tokens.insert(
-            refresh_token_hash,
-            RefreshTokenData {
-                user_id: user_id.clone(),
-                email: authenticated_email.clone(),
-                role: role.clone(),
-                expires_at: expires_at.timestamp(),
-                revoked: false,
-            },
+    } else {
+        tracing::warn!(
+            "Issuing refresh token without DB persistence \
+             (DATABASE_URL not set). The token will not survive across \
+             restarts and cannot be revoked server-side."
         );
     }
 
-    tracing::info!("Successful login for user: {}", authenticated_email);
+    tracing::info!("Successful login for user: {}", email);
 
-    (
+    let cookie = build_refresh_cookie(&refresh_token);
+    json_with_cookie(
         StatusCode::OK,
-        Json(LoginResponse {
+        LoginResponse {
             success: true,
             user: Some(UserInfo {
-                user_id,
-                email: authenticated_email,
-                role,
+                user_id: user_id.to_string(),
+                email: email.to_string(),
+                role: role.to_string(),
             }),
             access_token: Some(access_token),
-            refresh_token: Some(refresh_token),
-            error: None,
-        }),
+            ..Default::default()
+        },
+        Some(cookie),
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/verify",
+    tag = "Authentication",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Access token is valid", body = VerifyResponse),
+        (status = 401, description = "Missing or invalid token", body = ErrorResponse),
+    ),
+)]
 pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
     let token = match extract_bearer_token(&headers) {
         Some(t) => t,
         None => {
             return (
-                StatusCode::OK,
+                StatusCode::UNAUTHORIZED,
                 Json(VerifyResponse {
                     success: false,
                     is_valid: false,
@@ -719,7 +937,7 @@ pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
         Err(e) => {
             tracing::debug!("Token verification failed: {}", e);
             (
-                StatusCode::OK,
+                StatusCode::UNAUTHORIZED,
                 Json(VerifyResponse {
                     success: false,
                     is_valid: false,
@@ -731,24 +949,47 @@ pub async fn verify_token(headers: HeaderMap) -> impl IntoResponse {
     }
 }
 
-pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
-    if payload.refresh_token.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(RefreshResponse {
-                success: false,
-                access_token: None,
-                refresh_token: None,
-                error: Some("Refresh token is required".to_string()),
-            }),
-        );
-    }
+#[utoipa::path(
+    post,
+    path = "/api/auth/refresh",
+    tag = "Authentication",
+    request_body(content = RefreshRequest, description = "Body is optional — refresh token is read from the HttpOnly `rt` cookie"),
+    responses(
+        (status = 200, description = "New access token issued", body = RefreshResponse),
+        (status = 401, description = "Refresh cookie missing/expired", body = ErrorResponse),
+    ),
+)]
+pub async fn refresh(headers: HeaderMap, body: Option<Json<RefreshRequest>>) -> Response {
+    // Prefer the HttpOnly cookie. We still accept the legacy JSON-body
+    // refresh token for one release cycle so existing clients keep working
+    // through deployment, but new code paths should never rely on it.
+    let cookie_token = extract_refresh_cookie(&headers);
+    let body_token = body
+        .and_then(|Json(req)| req.refresh_token)
+        .filter(|t| !t.is_empty());
+    let refresh_token = match cookie_token.or(body_token) {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return json_with_cookie(
+                StatusCode::UNAUTHORIZED,
+                RefreshResponse {
+                    success: false,
+                    access_token: None,
+                    error: Some("Refresh token is required".to_string()),
+                },
+                None,
+            );
+        }
+    };
 
-    let token_hash = hash_refresh_token(&payload.refresh_token);
+    let token_hash = hash_refresh_token(&refresh_token);
     let now = Utc::now();
 
-    let token_data: Option<RefreshTokenData> = {
-        if let Some(pool) = crate::db::get_pool() {
+    // Refresh tokens live in Postgres only. The previous in-memory fallback
+    // was a dual-source-of-truth bug: a token could be revoked in DB but
+    // still accepted from RAM, or vice versa.
+    let token_data: Option<RefreshTokenData> = match crate::db::get_pool() {
+        Some(pool) => {
             match sqlx::query_as::<_, (String, String, String, chrono::DateTime<Utc>, bool)>(
                 r#"SELECT au.id, au.email, au.role, art.expires_at, art.revoked
                    FROM admin_refresh_tokens art
@@ -766,20 +1007,16 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                     expires_at: expires_at.timestamp(),
                     revoked,
                 }),
-                Ok(None) => {
-                    let tokens = REFRESH_TOKENS.read().await;
-                    tokens.get(&token_hash).cloned()
-                }
+                Ok(None) => None,
                 Err(e) => {
                     tracing::error!("DB error during token refresh lookup: {}", e);
-
-                    let tokens = REFRESH_TOKENS.read().await;
-                    tokens.get(&token_hash).cloned()
+                    None
                 }
             }
-        } else {
-            let tokens = REFRESH_TOKENS.read().await;
-            tokens.get(&token_hash).cloned()
+        }
+        None => {
+            tracing::warn!("Refresh requested but DATABASE_URL is not set; cannot validate token.");
+            None
         }
     };
 
@@ -789,14 +1026,14 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 Ok(token) => token,
                 Err(e) => {
                     tracing::error!("Failed to create access token: {}", e);
-                    return (
+                    return json_with_cookie(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(RefreshResponse {
+                        RefreshResponse {
                             success: false,
                             access_token: None,
-                            refresh_token: None,
                             error: Some("Failed to create token".to_string()),
-                        }),
+                        },
+                        None,
                     );
                 }
             };
@@ -823,50 +1060,49 @@ pub async fn refresh(Json(payload): Json<RefreshRequest>) -> impl IntoResponse {
                 .execute(pool.as_ref())
                 .await;
             }
+            let _ = new_token_hash;
 
-            {
-                let mut tokens = REFRESH_TOKENS.write().await;
-                if let Some(old_data) = tokens.get_mut(&token_hash) {
-                    old_data.revoked = true;
-                }
-                tokens.insert(
-                    new_token_hash,
-                    RefreshTokenData {
-                        user_id: data.user_id,
-                        email: data.email,
-                        role: data.role,
-                        expires_at: new_expires_at.timestamp(),
-                        revoked: false,
-                    },
-                );
-            }
-
-            (
+            let cookie = build_refresh_cookie(&new_refresh_token);
+            json_with_cookie(
                 StatusCode::OK,
-                Json(RefreshResponse {
+                RefreshResponse {
                     success: true,
                     access_token: Some(access_token),
-                    refresh_token: Some(new_refresh_token),
                     error: None,
-                }),
+                },
+                Some(cookie),
             )
         }
-        _ => (
+        _ => json_with_cookie(
             StatusCode::UNAUTHORIZED,
-            Json(RefreshResponse {
+            RefreshResponse {
                 success: false,
                 access_token: None,
-                refresh_token: None,
                 error: Some("Invalid or expired refresh token".to_string()),
-            }),
+            },
+            // Proactively clear a stale or invalid cookie on the client.
+            Some(clear_refresh_cookie()),
         ),
     }
 }
 
-pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> impl IntoResponse {
+#[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    tag = "Authentication",
+    request_body(content = LogoutRequest, description = "Optional. Clears the refresh cookie and revokes the session."),
+    responses(
+        (status = 200, description = "Logout always returns success", body = LogoutResponse),
+    ),
+)]
+pub async fn logout(headers: HeaderMap, body: Option<Json<LogoutRequest>>) -> Response {
     let pool = crate::db::get_pool();
+    let payload = body.map(|Json(p)| p).unwrap_or_default();
 
-    if let Some(refresh_token) = payload.refresh_token {
+    // Refresh token comes from the cookie first, JSON body only as legacy
+    // fallback during rollout.
+    let refresh_token = extract_refresh_cookie(&headers).or(payload.refresh_token);
+    if let Some(refresh_token) = refresh_token {
         let token_hash = hash_refresh_token(&refresh_token);
 
         if let Some(ref p) = pool {
@@ -875,11 +1111,6 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                     .bind(&token_hash)
                     .execute(p.as_ref())
                     .await;
-        }
-
-        let mut tokens = REFRESH_TOKENS.write().await;
-        if let Some(data) = tokens.get_mut(&token_hash) {
-            data.revoked = true;
         }
     }
 
@@ -896,17 +1127,16 @@ pub async fn logout(headers: HeaderMap, Json(payload): Json<LogoutRequest>) -> i
                 .execute(p.as_ref())
                 .await;
             }
-
-            let mut tokens = REFRESH_TOKENS.write().await;
-            for data in tokens.values_mut() {
-                if data.user_id == claims.sub {
-                    data.revoked = true;
-                }
-            }
         }
     }
 
-    (StatusCode::OK, Json(LogoutResponse { success: true }))
+    json_with_cookie(
+        StatusCode::OK,
+        LogoutResponse { success: true },
+        // Always clear the cookie on logout, even if the request didn't carry
+        // one — browsers will simply ignore the expiration of an absent cookie.
+        Some(clear_refresh_cookie()),
+    )
 }
 
 #[cfg(test)]
@@ -1005,40 +1235,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_verify_no_token_returns_error_in_body() {
+    async fn test_verify_no_token_returns_unauthorized() {
         let (status, bytes) = post_empty(auth_router(), "/api/auth/verify").await;
-        assert_eq!(status, StatusCode::OK);
+        // Hardened contract: missing/invalid token must surface as 401, not 200.
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
         let body: VerifyResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(!body.success);
         assert!(!body.is_valid);
     }
 
     #[tokio::test]
-    async fn test_refresh_empty_token_returns_bad_request() {
+    async fn test_refresh_without_cookie_or_body_returns_unauthorized() {
+        // Refresh now reads the token from the HttpOnly `rt` cookie. With
+        // neither cookie nor body the response must be 401, not 400 — the
+        // request is simply unauthenticated.
         let (status, _) = post_json(
             auth_router(),
             "/api/auth/refresh",
             &RefreshRequest {
-                refresh_token: "".to_string(),
+                refresh_token: Some(String::new()),
             },
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn test_logout_returns_success() {
-        let (status, bytes) = post_json(
-            auth_router(),
-            "/api/auth/logout",
-            &LogoutRequest {
-                access_token: None,
-                refresh_token: None,
-            },
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
+    async fn test_refresh_with_invalid_cookie_clears_cookie_and_returns_401() {
+        let req = Request::post("/api/auth/refresh")
+            .header("cookie", "rt=this-is-not-a-real-token")
+            .body(Body::empty())
+            .unwrap();
+        let res = auth_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // Server should proactively clear the bogus cookie on the client.
+        let set_cookie = res
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            set_cookie.contains("rt=") && set_cookie.contains("Max-Age=0"),
+            "expected cookie clear, got: {}",
+            set_cookie
+        );
+    }
+
+    #[tokio::test]
+    async fn test_logout_returns_success_and_clears_cookie() {
+        let req = Request::post("/api/auth/logout")
+            .header("content-type", "application/json")
+            .body(Body::from(b"{}".as_slice()))
+            .unwrap();
+        let res = auth_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let set_cookie = res
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            set_cookie.contains("rt=") && set_cookie.contains("Max-Age=0"),
+            "logout must clear the refresh cookie; got {}",
+            set_cookie
+        );
+
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: LogoutResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(body.success);
+    }
+
+    #[test]
+    fn test_extract_refresh_cookie_parses_simple_header() {
+        let mut h = HeaderMap::new();
+        h.insert("cookie", HeaderValue::from_static("rt=abc123"));
+        assert_eq!(extract_refresh_cookie(&h).as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_extract_refresh_cookie_picks_correct_value_from_multiple() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "cookie",
+            HeaderValue::from_static("foo=bar; rt=secret-value; baz=qux"),
+        );
+        assert_eq!(extract_refresh_cookie(&h).as_deref(), Some("secret-value"));
+    }
+
+    #[test]
+    fn test_build_refresh_cookie_has_security_flags() {
+        std::env::set_var("ENVIRONMENT", "production");
+        let cookie = build_refresh_cookie("token-xyz");
+        assert!(cookie.contains("rt=token-xyz"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(cookie.contains("Secure"));
+        assert!(cookie.contains("Path=/api/auth"));
+        std::env::remove_var("ENVIRONMENT");
     }
 }

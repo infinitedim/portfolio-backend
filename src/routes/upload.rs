@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::routes::auth::verify_access_token;
+use crate::routes::auth::require_admin;
 use crate::routes::ErrorResponse;
 
 const UPLOAD_DIR: &str = "uploads/blog";
@@ -40,31 +40,8 @@ pub struct ImageListResponse {
     pub total: usize,
 }
 
-fn verify_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    match token {
-        Some(t) => match verify_access_token(t) {
-            Ok(_) => Ok(()),
-            Err(_) => Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Invalid or expired token".to_string(),
-                    message: None,
-                }),
-            )),
-        },
-        None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Authorization required".to_string(),
-                message: None,
-            }),
-        )),
-    }
+fn verify_auth(headers: &HeaderMap) -> Result<(), crate::routes::AppError> {
+    require_admin(headers).map(|_| ())
 }
 
 fn validate_image_magic_bytes(bytes: &[u8]) -> Option<&'static str> {
@@ -273,27 +250,32 @@ pub async fn delete_image(headers: HeaderMap, Path(filename): Path<String>) -> i
 
     let file_path = PathBuf::from(UPLOAD_DIR).join(&filename);
 
-    if !file_path.exists() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "File not found".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    if let Err(e) = tokio::fs::remove_file(&file_path).await {
-        tracing::error!("Failed to delete file {}: {}", filename, e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to delete file".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
+    // Use the async metadata + remove pair instead of the blocking
+    // `PathBuf::exists()` check, which would stall the executor on
+    // slow filesystems.
+    match tokio::fs::remove_file(&file_path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "File not found".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("Failed to delete file {}: {}", filename, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to delete file".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
     }
 
     tracing::info!("Image deleted: {}", filename);
@@ -306,21 +288,21 @@ pub async fn list_images(headers: HeaderMap) -> impl IntoResponse {
     }
 
     let upload_path = PathBuf::from(UPLOAD_DIR);
-    if !upload_path.exists() {
-        return (
-            StatusCode::OK,
-            Json(ImageListResponse {
-                images: vec![],
-                total: 0,
-            }),
-        )
-            .into_response();
-    }
-
     let mut images = Vec::new();
 
+    // Async open instead of `PathBuf::exists()` (which is blocking).
     let mut entries = match tokio::fs::read_dir(&upload_path).await {
         Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                StatusCode::OK,
+                Json(ImageListResponse {
+                    images: vec![],
+                    total: 0,
+                }),
+            )
+                .into_response();
+        }
         Err(e) => {
             tracing::error!("Failed to read upload directory: {}", e);
             return (

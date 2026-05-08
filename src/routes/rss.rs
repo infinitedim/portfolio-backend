@@ -15,6 +15,14 @@ fn rfc822(dt: &DateTime<chrono::Utc>) -> String {
     dt.format("%a, %d %b %Y %H:%M:%S +0000").to_string()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/rss",
+    tag = "RSS",
+    responses(
+        (status = 200, description = "RSS 2.0 feed of published posts", content_type = "application/rss+xml"),
+    ),
+)]
 pub async fn rss_feed() -> Response {
     let pool = match db::get_pool() {
         Some(p) => p,
@@ -28,13 +36,13 @@ pub async fn rss_feed() -> Response {
     };
 
     let base_url =
-        std::env::var("SITE_URL").unwrap_or_else(|_| "https://infinitedim.site".to_string());
+        std::env::var("SITE_URL").unwrap_or_else(|_| "https://infinitedim.vercel.app".to_string());
     let site_title =
         std::env::var("SITE_TITLE").unwrap_or_else(|_| "Terminal Portfolio Blog".to_string());
     let site_description = std::env::var("SITE_DESCRIPTION")
         .unwrap_or_else(|_| "Latest articles and insights".to_string());
 
-    let rows: Vec<(String, String, Option<String>, DateTime<chrono::Utc>)> = sqlx::query_as(
+    let rows: Vec<(String, String, Option<String>, DateTime<chrono::Utc>)> = match sqlx::query_as(
         r#"
             SELECT title, slug, summary, created_at
             FROM blog_posts
@@ -45,7 +53,17 @@ pub async fn rss_feed() -> Response {
     )
     .fetch_all(pool.as_ref())
     .await
-    .unwrap_or_default();
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Failed to fetch blog posts for RSS feed: {}", e);
+            return Response::builder()
+                .status(502)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("Bad Gateway: failed to fetch posts"))
+                .unwrap();
+        }
+    };
 
     let mut items = String::new();
     for (title, slug, summary, created_at) in &rows {

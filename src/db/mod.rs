@@ -55,6 +55,9 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
         .min_connections(config.min_connections)
+        // The pool's acquire timeout governs *runtime* checkouts, not the
+        // initial connect. Keep it short so a stalled handler fails fast,
+        // and let `connect_timeout_secs` cover the boot-time TCP/TLS dial.
         .acquire_timeout(std::time::Duration::from_secs(3))
         .idle_timeout(std::time::Duration::from_secs(config.idle_timeout_secs))
         .max_lifetime(std::time::Duration::from_secs(1800))
@@ -70,6 +73,62 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     let _ = DB_POOL.set(pool.clone());
 
     Ok(pool)
+}
+
+/// Retry [`init_pool`] with exponential backoff. Compose, Railway, and most
+/// PaaS schedulers report Postgres as "healthy" the moment `pg_isready`
+/// returns, but the embedded DNS for the service hostname can still be
+/// briefly missing on first boot — and we'd rather wait a few seconds than
+/// crash-loop the container.
+///
+/// Returns `Ok` on the first successful connect, or `Err` once the total
+/// time budget is exhausted. The caller decides whether to panic on `Err`.
+pub async fn init_pool_with_retry(
+    config: Option<DbConfig>,
+    max_total_wait: std::time::Duration,
+) -> Result<Arc<PgPool>, sqlx::Error> {
+    use std::time::{Duration, Instant};
+
+    let started = Instant::now();
+    let mut backoff = Duration::from_millis(500);
+    let max_backoff = Duration::from_secs(5);
+    let mut attempt: u32 = 0;
+
+    loop {
+        attempt += 1;
+        match init_pool(config.clone()).await {
+            Ok(pool) => {
+                if attempt > 1 {
+                    tracing::info!(
+                        attempts = attempt,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "database connection established after retries"
+                    );
+                }
+                return Ok(pool);
+            }
+            Err(e) => {
+                let elapsed = started.elapsed();
+                if elapsed >= max_total_wait {
+                    tracing::error!(
+                        attempts = attempt,
+                        elapsed_ms = elapsed.as_millis() as u64,
+                        "giving up on database connection after exhausting retry budget: {}",
+                        e
+                    );
+                    return Err(e);
+                }
+                tracing::warn!(
+                    attempt = attempt,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "database connection attempt failed: {} — retrying",
+                    e
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = std::cmp::min(backoff.saturating_mul(2), max_backoff);
+            }
+        }
+    }
 }
 
 pub fn get_pool() -> Option<Arc<PgPool>> {
@@ -88,6 +147,10 @@ pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("Running database migrations...");
+
+    sqlx::query(r#"CREATE EXTENSION IF NOT EXISTS pgcrypto"#)
+        .execute(pool)
+        .await?;
 
     sqlx::query(
         r#"
@@ -112,11 +175,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
+    // Multi-statement DDL must go through `raw_sql` (simple query protocol).
+    // `sqlx::query` uses prepared statements and Postgres rejects more than
+    // one command per prepare with: "cannot insert multiple commands into a
+    // prepared statement".
+    sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
         CREATE INDEX IF NOT EXISTS idx_admin_users_is_active ON admin_users(is_active);
-        CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role)
+        CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role);
         "#,
     )
     .execute(pool)
@@ -184,12 +251,12 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
+    sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_token_hash
             ON admin_refresh_tokens(token_hash);
         CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_admin_user_id
-            ON admin_refresh_tokens(admin_user_id)
+            ON admin_refresh_tokens(admin_user_id);
         "#,
     )
     .execute(pool)
@@ -225,7 +292,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
+    sqlx::raw_sql(
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
             ON blog_posts(slug);
@@ -233,7 +300,10 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             ON blog_posts(published);
         CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at
             ON blog_posts(created_at DESC);
-
+        "#,
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         r#"
@@ -246,10 +316,72 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
+    sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_blog_posts_tags ON blog_posts USING GIN(tags);
-        CREATE INDEX IF NOT EXISTS idx_blog_posts_view_count ON blog_posts(view_count DESC)
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_view_count ON blog_posts(view_count DESC);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Sprint 2 feature #11/#19: contact form messages and admin inbox.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS contact_messages (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            subject TEXT,
+            message TEXT NOT NULL,
+            ip_address TEXT,
+            user_agent TEXT,
+            read BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at
+            ON contact_messages(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_contact_messages_read
+            ON contact_messages(read, created_at DESC);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Sprint 2 feature #15: blog scheduling.
+    sqlx::query(
+        r#"
+        ALTER TABLE blog_posts
+            ADD COLUMN IF NOT EXISTS publish_at TIMESTAMPTZ
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_publish_at
+            ON blog_posts(publish_at)
+            WHERE publish_at IS NOT NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Sprint 2 feature #16: TOTP 2FA columns on admin_users.
+    sqlx::query(
+        r#"
+        ALTER TABLE admin_users
+            ADD COLUMN IF NOT EXISTS totp_secret TEXT,
+            ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS totp_backup_codes TEXT[] NOT NULL DEFAULT '{}'
         "#,
     )
     .execute(pool)

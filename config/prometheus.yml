@@ -10,11 +10,15 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  - job_name: portfolio-backend
-    static_configs:
-      - targets: ["backend:8080"]
-    metrics_path: /metrics
-    scrape_interval: 10s
+  # NOTE: portfolio-backend does not yet expose Prometheus metrics on /metrics.
+  # Re-enable this scrape once an axum metrics layer (e.g. axum-prometheus or
+  # opentelemetry-prometheus) is wired up, otherwise we publish a target that
+  # is permanently DOWN.
+  # - job_name: portfolio-backend
+  #   static_configs:
+  #     - targets: ["backend:8080"]
+  #   metrics_path: /metrics
+  #   scrape_interval: 10s
 
   - job_name: loki
     static_configs:

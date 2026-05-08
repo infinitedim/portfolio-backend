@@ -24,7 +24,7 @@ pub enum HealthStatus {
     NotReady,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceCheck {
     pub status: String,
@@ -34,7 +34,7 @@ pub struct ServiceCheck {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailedHealthResponse {
     pub status: String,
@@ -44,13 +44,13 @@ pub struct DetailedHealthResponse {
     pub checks: HealthChecks,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HealthChecks {
     pub database: ServiceCheck,
     pub redis: ServiceCheck,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadyResponse {
     pub status: String,
@@ -63,46 +63,84 @@ pub struct ReadyResponse {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ReadyChecks {
     pub database: String,
     pub redis: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SimpleHealthResponse {
     pub status: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Liveness probe", body = SimpleHealthResponse),
+    ),
+)]
 pub async fn health_ping() -> impl IntoResponse {
     Json(SimpleHealthResponse {
         status: "ok".to_string(),
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/detailed",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Detailed health status incl. db + redis checks", body = DetailedHealthResponse),
+        (status = 503, description = "One or more checks failed", body = DetailedHealthResponse),
+    ),
+)]
 pub async fn health_detailed() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    let database_check = match crate::db::health_check().await {
-        Ok(duration) => ServiceCheck {
-            status: "healthy".to_string(),
-            response_time: Some(duration.as_millis() as u64),
-            error: None,
-        },
-        Err(e) => ServiceCheck {
-            status: "unhealthy".to_string(),
+    // Database is the only required dependency today; redis is optional.
+    let db_configured = std::env::var("DATABASE_URL").is_ok();
+    let database_check = if db_configured {
+        match crate::db::health_check().await {
+            Ok(duration) => ServiceCheck {
+                status: "healthy".to_string(),
+                response_time: Some(duration.as_millis() as u64),
+                error: None,
+            },
+            Err(e) => ServiceCheck {
+                status: "unhealthy".to_string(),
+                response_time: None,
+                error: Some(e.to_string()),
+            },
+        }
+    } else {
+        ServiceCheck {
+            status: "not_configured".to_string(),
             response_time: None,
-            error: Some(e.to_string()),
-        },
+            error: None,
+        }
     };
 
     let redis_check = ServiceCheck {
-        status: "unhealthy".to_string(),
+        status: "not_configured".to_string(),
         response_time: None,
-        error: Some("Redis not configured yet".to_string()),
+        error: None,
     };
 
-    let overall_status = "ok".to_string();
+    let db_required_and_failing = db_configured && database_check.status != "healthy";
+    let overall_status = if db_required_and_failing {
+        "unhealthy"
+    } else {
+        "ok"
+    }
+    .to_string();
+    let status_code = if db_required_and_failing {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
 
     let response = DetailedHealthResponse {
         status: overall_status,
@@ -114,9 +152,18 @@ pub async fn health_detailed() -> impl IntoResponse {
         },
     };
 
-    (StatusCode::OK, Json(response))
+    (status_code, Json(response))
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/database",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Database is healthy", body = ServiceCheck),
+        (status = 503, description = "Database is unhealthy", body = ServiceCheck),
+    ),
+)]
 pub async fn health_database() -> impl IntoResponse {
     match crate::db::health_check().await {
         Ok(duration) => {
@@ -133,21 +180,42 @@ pub async fn health_database() -> impl IntoResponse {
                 response_time: None,
                 error: Some(e.to_string()),
             };
-            (StatusCode::OK, Json(check))
+            // 503 — orchestrators rely on this signal to drain traffic.
+            (StatusCode::SERVICE_UNAVAILABLE, Json(check))
         }
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/redis",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Redis is healthy", body = ServiceCheck),
+        (status = 503, description = "Redis is unhealthy", body = ServiceCheck),
+    ),
+)]
 pub async fn health_redis() -> impl IntoResponse {
+    // Redis is not yet configured; return 200 with a `not_configured` status
+    // so callers know it's intentional rather than a failure.
     let check = ServiceCheck {
-        status: "unhealthy".to_string(),
+        status: "not_configured".to_string(),
         response_time: None,
-        error: Some("Redis not configured yet".to_string()),
+        error: None,
     };
 
     (StatusCode::OK, Json(check))
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Service is ready to accept traffic", body = ReadyResponse),
+        (status = 503, description = "Service is not ready", body = ReadyResponse),
+    ),
+)]
 pub async fn health_ready() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
@@ -245,16 +313,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_health_redis_returns_unhealthy() {
+    async fn test_health_redis_returns_not_configured() {
         let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/redis").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.status, "unhealthy");
+        assert_eq!(body.status, "not_configured");
     }
 
     #[tokio::test]
-    async fn test_health_database_returns_when_no_pool() {
+    async fn test_health_database_returns_503_when_no_pool() {
         let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/database").await;
-        assert_eq!(status, StatusCode::OK);
+        // 503 is the contract: orchestrators rely on this to drain traffic.
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.status, "unhealthy");
     }
 

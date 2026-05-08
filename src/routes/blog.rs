@@ -9,11 +9,16 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::db::{self, models::BlogPost};
-use crate::routes::auth::verify_access_token;
+use crate::db::{
+    self,
+    models::{BlogPost, BlogStatus},
+};
+use crate::routes::auth::require_admin;
+use crate::routes::AppError;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
 pub struct BlogListQuery {
     #[serde(default = "default_page")]
     pub page: i64,
@@ -33,7 +38,7 @@ pub fn default_page_size() -> i64 {
     10
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogListResponse {
     pub items: Vec<BlogPostSummary>,
@@ -42,7 +47,7 @@ pub struct BlogListResponse {
     pub total: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostSummary {
     pub id: Uuid,
@@ -52,11 +57,13 @@ pub struct BlogPostSummary {
     pub published: bool,
     pub tags: Vec<String>,
     pub reading_time_minutes: i32,
+    pub publish_at: Option<DateTime<Utc>>,
+    pub status: BlogStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostResponse {
     pub id: Uuid,
@@ -69,11 +76,13 @@ pub struct BlogPostResponse {
     pub tags: Vec<String>,
     pub reading_time_minutes: i32,
     pub view_count: i64,
+    pub publish_at: Option<DateTime<Utc>>,
+    pub status: BlogStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateBlogRequest {
     pub title: String,
@@ -83,9 +92,14 @@ pub struct CreateBlogRequest {
     pub content_html: Option<String>,
     pub published: Option<bool>,
     pub tags: Option<Vec<String>>,
+    /// Optional ISO-8601 timestamp. If set and in the future, the post is
+    /// in the `Scheduled` state and stays hidden from the public list
+    /// until the timestamp passes (no background job needed — the public
+    /// list filter handles it).
+    pub publish_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateBlogRequest {
     pub title: Option<String>,
@@ -94,11 +108,29 @@ pub struct UpdateBlogRequest {
     pub content_html: Option<String>,
     pub published: Option<bool>,
     pub tags: Option<Vec<String>>,
+    /// `Some(Some(ts))` to schedule, `Some(None)` to clear, `None` to leave
+    /// untouched. We rely on serde's default behaviour of mapping JSON
+    /// `null` to `Some(None)` so the client can explicitly cancel a
+    /// scheduled publish.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[schema(value_type = Option<DateTime<Utc>>, nullable, required = false)]
+    pub publish_at: Option<Option<DateTime<Utc>>>,
+}
+
+/// Distinguish "key absent" (`None`) from "key present but null" (`Some(None)`)
+/// for `Option<Option<T>>`. Without this, serde collapses both into `None`
+/// and we lose the ability to clear the schedule.
+fn deserialize_optional_field<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 pub use crate::routes::ErrorResponse;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SuccessResponse {
     pub success: bool,
 }
@@ -126,49 +158,117 @@ pub fn calculate_reading_time(content_md: Option<&str>) -> i32 {
     }
 }
 
-fn verify_auth(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    match token {
-        Some(t) => match verify_access_token(t) {
-            Ok(_) => Ok(()),
-            Err(_) => Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Invalid or expired token".to_string(),
-                    message: None,
-                }),
-            )),
-        },
-        None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Authorization required".to_string(),
-                message: None,
-            }),
-        )),
-    }
+fn verify_auth(headers: &HeaderMap) -> Result<(), AppError> {
+    require_admin(headers).map(|_| ())
 }
 
-pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse {
-    let pool = match db::get_pool() {
-        Some(p) => p,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(BlogListResponse {
-                    items: vec![],
-                    page: query.page,
-                    page_size: query.page_size,
-                    total: 0,
-                }),
-            )
-                .into_response();
+// Several knobs are currently passed individually rather than bundled into
+// a query struct because each `bind` site needs strong types. Refactor when
+// we add the next parameter; for now the structure is clearer this way.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_blog_list(
+    pool: &sqlx::PgPool,
+    page: i64,
+    page_size: i64,
+    offset: i64,
+    published: Option<bool>,
+    search: Option<&str>,
+    tag: Option<&str>,
+    order_clause: &str,
+) -> Result<(Vec<BlogPost>, i64), sqlx::Error> {
+    // Build WHERE clause + bindings dynamically. Bind indices below match
+    // the order in which we push to `binds`. We never interpolate user input
+    // into the SQL string — the parameterised binds keep this safe.
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut idx = 1usize;
+
+    // `published` is the *public-visibility* filter: scheduled posts whose
+    // time has passed must be treated as published, and explicitly-published
+    // posts with a future schedule (uncommon) must be hidden until the
+    // schedule fires. We collapse the bool into a public/non-public split.
+    if let Some(public) = published {
+        if public {
+            where_clauses.push(
+                "((publish_at IS NOT NULL AND publish_at <= now()) \
+                  OR (publish_at IS NULL AND published = true))"
+                    .to_string(),
+            );
+        } else {
+            where_clauses.push(
+                "NOT ((publish_at IS NOT NULL AND publish_at <= now()) \
+                       OR (publish_at IS NULL AND published = true))"
+                    .to_string(),
+            );
         }
+    }
+    if search.is_some() {
+        where_clauses.push(format!(
+            "(lower(title) LIKE ${idx} OR lower(summary) LIKE ${idx})",
+            idx = idx
+        ));
+        idx += 1;
+    }
+    if tag.is_some() {
+        where_clauses.push(format!("${} = ANY(tags)", idx));
+        idx += 1;
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
     };
+
+    let limit_idx = idx;
+    let offset_idx = idx + 1;
+
+    let select_sql = format!(
+        r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                  published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+           FROM blog_posts {where} {order} LIMIT ${limit} OFFSET ${offset}"#,
+        where = where_sql,
+        order = order_clause,
+        limit = limit_idx,
+        offset = offset_idx,
+    );
+
+    let count_sql = format!("SELECT COUNT(*) FROM blog_posts {}", where_sql);
+
+    // Build the two queries with the same dynamic binds.
+    let mut select_q = sqlx::query_as::<_, BlogPost>(&select_sql);
+    let mut count_q = sqlx::query_as::<_, (i64,)>(&count_sql);
+
+    // The `published` filter is rendered inline (no bind) above, so we
+    // skip binding it here.
+    if let Some(s) = search {
+        select_q = select_q.bind(s.to_string());
+        count_q = count_q.bind(s.to_string());
+    }
+    if let Some(t) = tag {
+        select_q = select_q.bind(t.to_string());
+        count_q = count_q.bind(t.to_string());
+    }
+    select_q = select_q.bind(page_size).bind(offset);
+
+    let _ = page;
+    let posts = select_q.fetch_all(pool).await?;
+    let total = count_q.fetch_one(pool).await?.0;
+
+    Ok((posts, total))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/blog",
+    tag = "Blog",
+    params(BlogListQuery),
+    responses(
+        (status = 200, description = "Paginated list of blog posts", body = BlogListResponse),
+        (status = 503, description = "Database unavailable", body = ErrorResponse),
+    ),
+)]
+pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoResponse, AppError> {
+    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
     let page_size = query.page_size.clamp(1, 100);
     let page = query.page.max(1);
@@ -192,211 +292,35 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
         _ => "ORDER BY created_at DESC",
     };
 
-    let (posts, total): (Vec<BlogPost>, i64) = match (query.published, &search_pattern, &tag_filter)
-    {
-        (Some(pub_filter), Some(search), Some(tag)) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts
-                   WHERE published = $1
-                     AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)
-                     AND $3 = ANY(tags)
-                   {} LIMIT $4 OFFSET $5"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter)
-                .bind(search)
-                .bind(tag)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND (lower(title) LIKE $2 OR lower(summary) LIKE $2) AND $3 = ANY(tags)"
-            )
-            .bind(pub_filter).bind(search).bind(tag)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
-            (posts, total.0)
-        }
-        (Some(pub_filter), Some(search), None) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts
-                   WHERE published = $1
-                     AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)
-                   {} LIMIT $3 OFFSET $4"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter)
-                .bind(search)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND (lower(title) LIKE $2 OR lower(summary) LIKE $2)"
-            )
-            .bind(pub_filter).bind(search)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
-            (posts, total.0)
-        }
-        (Some(pub_filter), None, Some(tag)) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts
-                   WHERE published = $1 AND $2 = ANY(tags)
-                   {} LIMIT $3 OFFSET $4"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter)
-                .bind(tag)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE published = $1 AND $2 = ANY(tags)",
-            )
-            .bind(pub_filter)
-            .bind(tag)
-            .fetch_one(pool.as_ref())
-            .await
-            .unwrap_or((0,));
-            (posts, total.0)
-        }
-        (Some(pub_filter), None, None) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts WHERE published = $1 {} LIMIT $2 OFFSET $3"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(pub_filter)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM blog_posts WHERE published = $1")
-                    .bind(pub_filter)
-                    .fetch_one(pool.as_ref())
-                    .await
-                    .unwrap_or((0,));
-            (posts, total.0)
-        }
-        (None, Some(search), Some(tag)) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts
-                   WHERE (lower(title) LIKE $1 OR lower(summary) LIKE $1) AND $2 = ANY(tags)
-                   {} LIMIT $3 OFFSET $4"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(search)
-                .bind(tag)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE (lower(title) LIKE $1 OR lower(summary) LIKE $1) AND $2 = ANY(tags)"
-            )
-            .bind(search).bind(tag)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
-            (posts, total.0)
-        }
-        (None, Some(search), None) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts
-                   WHERE lower(title) LIKE $1 OR lower(summary) LIKE $1
-                   {} LIMIT $2 OFFSET $3"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(search)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM blog_posts WHERE lower(title) LIKE $1 OR lower(summary) LIKE $1"
-            )
-            .bind(search)
-            .fetch_one(pool.as_ref()).await.unwrap_or((0,));
-            (posts, total.0)
-        }
-        (None, None, Some(tag)) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts WHERE $1 = ANY(tags) {} LIMIT $2 OFFSET $3"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(tag)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM blog_posts WHERE $1 = ANY(tags)")
-                    .bind(tag)
-                    .fetch_one(pool.as_ref())
-                    .await
-                    .unwrap_or((0,));
-            (posts, total.0)
-        }
-        (None, None, None) => {
-            let sql = format!(
-                r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                       published, tags, reading_time_minutes, view_count, created_at, updated_at
-                   FROM blog_posts {} LIMIT $1 OFFSET $2"#,
-                order_clause
-            );
-            let posts = sqlx::query_as::<_, BlogPost>(&sql)
-                .bind(page_size)
-                .bind(offset)
-                .fetch_all(pool.as_ref())
-                .await
-                .unwrap_or_default();
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blog_posts")
-                .fetch_one(pool.as_ref())
-                .await
-                .unwrap_or((0,));
-            (posts, total.0)
-        }
-    };
+    let (posts, total) = fetch_blog_list(
+        pool.as_ref(),
+        page,
+        page_size,
+        offset,
+        query.published,
+        search_pattern.as_deref(),
+        tag_filter.as_deref(),
+        order_clause,
+    )
+    .await?;
 
     let items: Vec<BlogPostSummary> = posts
         .into_iter()
-        .map(|p| BlogPostSummary {
-            id: p.id,
-            title: p.title,
-            slug: p.slug,
-            summary: p.summary,
-            published: p.published,
-            tags: p.tags,
-            reading_time_minutes: p.reading_time_minutes,
-            created_at: p.created_at,
-            updated_at: p.updated_at,
+        .map(|p| {
+            let status = p.status();
+            BlogPostSummary {
+                id: p.id,
+                title: p.title,
+                slug: p.slug,
+                summary: p.summary,
+                published: p.published,
+                tags: p.tags,
+                reading_time_minutes: p.reading_time_minutes,
+                publish_at: p.publish_at,
+                status,
+                created_at: p.created_at,
+                updated_at: p.updated_at,
+            }
         })
         .collect();
 
@@ -408,7 +332,7 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
             .unwrap(),
     );
 
-    (
+    Ok((
         StatusCode::OK,
         headers,
         Json(BlogListResponse {
@@ -418,9 +342,20 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> impl IntoResponse
             total,
         }),
     )
-        .into_response()
+        .into_response())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/blog/{slug}",
+    tag = "Blog",
+    params(("slug" = String, Path, description = "URL-friendly slug")),
+    responses(
+        (status = 200, description = "Single blog post", body = BlogPostResponse),
+        (status = 404, description = "Slug not found", body = ErrorResponse),
+        (status = 503, description = "Database unavailable", body = ErrorResponse),
+    ),
+)]
 pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
     if !is_valid_slug(&slug) {
         return (
@@ -453,7 +388,7 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
         r#"
         UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
         WHERE slug = $1
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
         "#,
     )
     .bind(&slug)
@@ -468,6 +403,7 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                     .parse()
                     .unwrap(),
             );
+            let status = post.status();
             let response = BlogPostResponse {
                 id: post.id,
                 title: post.title,
@@ -479,6 +415,8 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
                 tags: post.tags,
                 reading_time_minutes: post.reading_time_minutes,
                 view_count: post.view_count,
+                publish_at: post.publish_at,
+                status,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -506,6 +444,19 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/blog",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    request_body = CreateBlogRequest,
+    responses(
+        (status = 201, description = "Post created", body = BlogPostResponse),
+        (status = 400, description = "Invalid input", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 409, description = "Slug already exists", body = ErrorResponse),
+    ),
+)]
 pub async fn create_post(
     headers: HeaderMap,
     Json(payload): Json<CreateBlogRequest>,
@@ -593,9 +544,9 @@ pub async fn create_post(
 
     match sqlx::query_as::<_, BlogPost>(
         r#"
-        INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
+        INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, publish_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
         "#
     )
     .bind(&payload.title)
@@ -606,10 +557,12 @@ pub async fn create_post(
     .bind(payload.published.unwrap_or(false))
     .bind(&tags)
     .bind(reading_time)
+    .bind(payload.publish_at)
     .fetch_one(pool.as_ref())
     .await
     {
         Ok(post) => {
+            let status = post.status();
             let response = BlogPostResponse {
                 id: post.id,
                 title: post.title,
@@ -621,6 +574,8 @@ pub async fn create_post(
                 tags: post.tags,
                 reading_time_minutes: post.reading_time_minutes,
                 view_count: post.view_count,
+                publish_at: post.publish_at,
+                status,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -650,6 +605,20 @@ pub async fn create_post(
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/blog/{slug}",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    params(("slug" = String, Path, description = "URL-friendly slug")),
+    request_body = UpdateBlogRequest,
+    responses(
+        (status = 200, description = "Post updated", body = BlogPostResponse),
+        (status = 400, description = "Invalid input", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Slug not found", body = ErrorResponse),
+    ),
+)]
 pub async fn update_post(
     headers: HeaderMap,
     Path(slug): Path<String>,
@@ -717,6 +686,18 @@ pub async fn update_post(
         .as_deref()
         .map(|md| calculate_reading_time(Some(md)));
 
+    // Tri-state mapping for `publish_at` so the client can leave the field
+    // alone, set a new schedule, or clear an existing one:
+    //   - None              → leave column unchanged via $9::BOOLEAN = false
+    //   - Some(None)        → clear column (NULL)
+    //   - Some(Some(ts))    → set to `ts`
+    let (publish_at_value, publish_at_present): (Option<DateTime<Utc>>, bool) =
+        match payload.publish_at {
+            None => (None, false),
+            Some(None) => (None, true),
+            Some(Some(ts)) => (Some(ts), true),
+        };
+
     match sqlx::query_as::<_, BlogPost>(
         r#"
         UPDATE blog_posts
@@ -727,9 +708,10 @@ pub async fn update_post(
             published            = COALESCE($5, published),
             tags                 = COALESCE($6::TEXT[], tags),
             reading_time_minutes = COALESCE($7, reading_time_minutes),
+            publish_at           = CASE WHEN $9 THEN $8 ELSE publish_at END,
             updated_at           = now()
-        WHERE slug = $8
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, created_at, updated_at
+        WHERE slug = $10
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
         "#
     )
     .bind(&payload.title)
@@ -739,11 +721,14 @@ pub async fn update_post(
     .bind(payload.published)
     .bind(&normalized_tags)
     .bind(reading_time_opt)
+    .bind(publish_at_value)
+    .bind(publish_at_present)
     .bind(&slug)
     .fetch_optional(pool.as_ref())
     .await
     {
         Ok(Some(post)) => {
+            let status = post.status();
             let response = BlogPostResponse {
                 id: post.id,
                 title: post.title,
@@ -755,6 +740,8 @@ pub async fn update_post(
                 tags: post.tags,
                 reading_time_minutes: post.reading_time_minutes,
                 view_count: post.view_count,
+                publish_at: post.publish_at,
+                status,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
             };
@@ -781,6 +768,18 @@ pub async fn update_post(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/blog/{slug}",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    params(("slug" = String, Path, description = "URL-friendly slug")),
+    responses(
+        (status = 200, description = "Post deleted", body = SuccessResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Slug not found", body = ErrorResponse),
+    ),
+)]
 pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
@@ -845,12 +844,12 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TagsResponse {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TagWithCount {
     pub name: String,
@@ -858,6 +857,15 @@ pub struct TagWithCount {
     pub post_count: i64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/blog/tags",
+    tag = "Blog",
+    responses(
+        (status = 200, description = "List of tags with usage counts", body = [TagWithCount]),
+        (status = 503, description = "Database unavailable", body = ErrorResponse),
+    ),
+)]
 pub async fn list_tags() -> impl IntoResponse {
     let pool = match db::get_pool() {
         Some(p) => p,
@@ -1010,9 +1018,55 @@ mod tests {
                 content_html: None,
                 published: Some(false),
                 tags: None,
+                publish_at: None,
             },
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn blog_status_derivation() {
+        let now = Utc::now();
+        let mk = |published: bool, publish_at: Option<DateTime<Utc>>| BlogPost {
+            id: Uuid::nil(),
+            title: "t".into(),
+            slug: "s".into(),
+            summary: None,
+            content_md: None,
+            content_html: None,
+            published,
+            tags: vec![],
+            reading_time_minutes: 0,
+            view_count: 0,
+            publish_at,
+            created_at: now,
+            updated_at: now,
+        };
+        let in_future = now + chrono::Duration::days(1);
+        let in_past = now - chrono::Duration::days(1);
+
+        assert_eq!(mk(false, None).status(), BlogStatus::Draft);
+        assert_eq!(mk(true, None).status(), BlogStatus::Published);
+        assert_eq!(mk(false, Some(in_future)).status(), BlogStatus::Scheduled);
+        assert_eq!(mk(false, Some(in_past)).status(), BlogStatus::Published);
+        // Future schedule trumps an ill-advised `published=true`.
+        assert_eq!(mk(true, Some(in_future)).status(), BlogStatus::Scheduled);
+    }
+
+    #[test]
+    fn update_request_distinguishes_unset_from_null_publish_at() {
+        // Field absent ⇒ leave unchanged.
+        let absent: UpdateBlogRequest = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(absent.publish_at.is_none());
+
+        // Explicit null ⇒ clear schedule.
+        let cleared: UpdateBlogRequest = serde_json::from_str(r#"{"publishAt": null}"#).unwrap();
+        assert_eq!(cleared.publish_at, Some(None));
+
+        // Explicit value ⇒ set schedule.
+        let set: UpdateBlogRequest =
+            serde_json::from_str(r#"{"publishAt": "2030-01-01T00:00:00Z"}"#).unwrap();
+        assert!(matches!(set.publish_at, Some(Some(_))));
     }
 }

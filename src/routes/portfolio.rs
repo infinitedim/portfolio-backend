@@ -9,28 +9,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{self, models::PortfolioSection};
-use crate::routes::auth::verify_access_token;
+use crate::routes::auth::require_admin;
+use crate::routes::ErrorResponse;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PortfolioQuery {
     #[serde(default)]
     pub section: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct PortfolioResponse {
+    #[schema(value_type = Option<Object>)]
     pub data: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct UpdatePortfolioRequest {
     pub section: String,
+    #[schema(value_type = Object)]
     pub data: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UpdatePortfolioResponse {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,6 +106,16 @@ pub fn get_static_data(section: &str) -> Option<Value> {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/portfolio",
+    tag = "Portfolio",
+    params(PortfolioQuery),
+    responses(
+        (status = 200, description = "Portfolio section content", body = PortfolioResponse),
+        (status = 400, description = "Missing/invalid section name", body = ErrorResponse),
+    ),
+)]
 pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResponse {
     if query.section.is_empty() {
         return (
@@ -199,36 +213,31 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/portfolio",
+    tag = "Portfolio",
+    security(("bearer_auth" = [])),
+    request_body = UpdatePortfolioRequest,
+    responses(
+        (status = 200, description = "Section updated", body = UpdatePortfolioResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+    ),
+)]
 pub async fn update_portfolio(
     headers: HeaderMap,
     Json(payload): Json<UpdatePortfolioRequest>,
 ) -> impl IntoResponse {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    let token = match token {
-        Some(t) => t,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(UpdatePortfolioResponse {
-                    success: false,
-                    message: None,
-                    error: Some("Authorization required".to_string()),
-                }),
-            );
-        }
-    };
-
-    if verify_access_token(token).is_err() {
+    if let Err(err) = require_admin(&headers) {
+        let status = err.status_code();
+        let message = err.public_message().to_string();
         return (
-            StatusCode::UNAUTHORIZED,
+            status,
             Json(UpdatePortfolioResponse {
                 success: false,
                 message: None,
-                error: Some("Invalid or expired token".to_string()),
+                error: Some(message),
             }),
         );
     }

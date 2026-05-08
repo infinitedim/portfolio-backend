@@ -17,6 +17,13 @@ tower-http = { version = "0.6", features = [
   "limit",
   "fs",
 ] }
+# Production-grade rate limiter. Replaces the in-memory HashMap that was
+# broken behind the Railway/Vercel proxy (no X-Forwarded-For parsing) and
+# allowed unbounded memory growth.
+tower_governor = { version = "0.8", default-features = false, features = [
+  "axum",
+  "tracing",
+] }
 once_cell = "1"
 
 # Logging and tracing
@@ -42,7 +49,7 @@ dotenvy = "0.15"
 
 # Auth
 bcrypt = "0.19"
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 rand = "0.10"
 sha2 = "0.11"
 hex = "0.4"
@@ -61,8 +68,25 @@ sqlx = { version = "0.8", default-features = false, features = [
 ammonia = "4"
 regex = "1"
 
-# HTTP client (roadmap.sh proxy)
+# HTTP client (roadmap.sh proxy, Resend mailer)
 reqwest = { version = "0.12", features = [
   "json",
   "rustls-tls",
 ], default-features = false }
+
+# Async trait support — needed for `dyn Mailer` since axum 0.8 dropped
+# the `async_trait` re-export and Rust's native AFIT is not yet
+# dyn-compatible without a wrapper.
+async-trait = "0.1"
+
+# TOTP for admin 2FA (#16). `gen_secret` enables base32 random secret
+# generation; `qr` is intentionally NOT enabled — we ship the otpauth URI
+# and let the frontend render the QR code with a pure-JS library to avoid
+# pulling cairo/SVG dependencies into the Rust build.
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+
+# OpenAPI / Swagger documentation. `axum_extras` lets utoipa parse path /
+# query params automatically; `uuid` and `chrono` map our DB types to
+# OpenAPI string formats. Swagger UI is mounted under `/api/docs/`.
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
