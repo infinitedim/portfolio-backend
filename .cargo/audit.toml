@@ -1,0 +1,46 @@
+# cargo-audit configuration. See:
+# https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
+#
+# Use `ignore` sparingly — every entry should be paired with a code-level
+# justification of why we are not affected (or cannot be fixed today). Revisit
+# on every dependency bump and remove entries the moment a patched version
+# becomes available upstream.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin attack (potential key recovery through timing
+    # sidechannels in the `rsa` crate). Status upstream: "No fixed upgrade is
+    # available!" so there is no version we can update to today.
+    #
+    # Why we are not affected:
+    #   * Pulled in by `sqlx-mysql`, which is only depended on by
+    #     `sqlx-macros-core` for compile-time query checking. Our runtime
+    #     `sqlx` configuration uses Postgres exclusively (see Cargo.toml:
+    #     `default-features = false, features = [..., "postgres", ...]`),
+    #     so the MySQL/RSA code path is never executed.
+    #   * Pulled in by `jsonwebtoken` 10 with the `rust_crypto` backend. RSA
+    #     is only exercised for RS*/PS* algorithms; we sign and verify all
+    #     access tokens with HS256 (`Algorithm::HS256` in
+    #     `src/routes/auth.rs`).
+    #
+    # Re-evaluate when `rsa` ships a constant-time fix or when we migrate
+    # `jsonwebtoken` to the `aws_lc_rs` backend.
+    "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0097 — `rand` is unsound when combined with a custom
+    # logger that calls back into `rand::rng()`. Status upstream: no fixed
+    # version is available — the advisory matches `rand` 0.8, 0.9 and 0.10
+    # alike (we transitively pull all three via `sqlx`, `totp-rs`, `governor`,
+    # `quinn-proto`, plus our direct dependency).
+    #
+    # Why we are not affected:
+    #   * We use `tracing` / `tracing-subscriber` for logging. Neither calls
+    #     back into `rand` during initialisation, so the unsound code path
+    #     is unreachable at runtime.
+    #   * Our direct calls to `rand::rng()` (`src/routes/auth.rs`,
+    #     `src/routes/twofa.rs`) happen after the subscriber is wired up
+    #     and never re-enter `rand` from inside a log handler.
+    #
+    # Re-evaluate as soon as `rand` ships a patched release.
+    "RUSTSEC-2026-0097",
+]
