@@ -199,7 +199,7 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-#[derive(Debug, Default, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     pub success: bool,
@@ -213,6 +213,7 @@ pub struct LoginResponse {
     /// When true, no access/refresh tokens are issued — the client must
     /// post `challenge_token` + a TOTP code to `/api/auth/2fa/login` to
     /// finish authenticating.
+    #[serde(default)]
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub requires2fa: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,7 +231,7 @@ pub struct RegisterRequest {
     pub last_name: Option<String>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterResponse {
     pub success: bool,
@@ -260,7 +261,7 @@ pub struct RefreshRequest {
     pub refresh_token: Option<String>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub success: bool,
@@ -295,7 +296,7 @@ fn hash_refresh_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn create_access_token(
+pub(crate) fn create_access_token(
     user_id: &str,
     email: &str,
     role: &str,
@@ -1151,10 +1152,34 @@ mod tests {
     fn auth_router() -> Router {
         use axum::extract::connect_info::MockConnectInfo;
         Router::new()
+            .route("/api/auth/register", post(register))
             .route("/api/auth/login", post(login))
             .route("/api/auth/verify", post(verify_token))
             .route("/api/auth/refresh", post(refresh))
             .route("/api/auth/logout", post(logout))
+            .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
+    }
+
+    fn auth_and_twofa_router() -> Router {
+        use axum::extract::connect_info::MockConnectInfo;
+        use axum::routing::get;
+        Router::new()
+            .route("/api/auth/register", post(register))
+            .route("/api/auth/login", post(login))
+            .route("/api/auth/verify", post(verify_token))
+            .route("/api/auth/refresh", post(refresh))
+            .route("/api/auth/logout", post(logout))
+            .route("/api/auth/2fa/status", get(crate::routes::twofa::status))
+            .route("/api/auth/2fa/setup", post(crate::routes::twofa::setup))
+            .route(
+                "/api/auth/2fa/verify",
+                post(crate::routes::twofa::verify_setup),
+            )
+            .route("/api/auth/2fa/disable", post(crate::routes::twofa::disable))
+            .route(
+                "/api/auth/2fa/login",
+                post(crate::routes::twofa::login_challenge),
+            )
             .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
     }
 
@@ -1337,5 +1362,325 @@ mod tests {
         assert!(cookie.contains("Secure"));
         assert!(cookie.contains("Path=/api/auth"));
         std::env::remove_var("ENVIRONMENT");
+    }
+
+    fn first_nonempty_rt_from_set_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+        for raw in headers.get_all(header::SET_COOKIE) {
+            if let Ok(s) = raw.to_str() {
+                for part in s.split(';') {
+                    let p = part.trim();
+                    if let Some(v) = p.strip_prefix("rt=") {
+                        if !v.is_empty() {
+                            return Some(v.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_verify_valid_bearer_minted_via_test_support() {
+        let bearer = crate::test_support::admin_bearer();
+        let req = Request::post("/api/auth/verify")
+            .header("authorization", bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = auth_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: VerifyResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.success && body.is_valid);
+        assert_eq!(
+            body.user.as_ref().unwrap().email,
+            crate::test_support::DEFAULT_TEST_ADMIN_EMAIL
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_password_too_short_returns_bad_request() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/register",
+            &RegisterRequest {
+                email: "valid@example.com".to_string(),
+                password: "short".to_string(),
+                first_name: None,
+                last_name: None,
+            },
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn db_register_first_admin_then_second_closed() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = auth_router();
+        let (st1, b1) = post_json(
+            app.clone(),
+            "/api/auth/register",
+            &RegisterRequest {
+                email: "first@admin.test".to_string(),
+                password: "longenough".to_string(),
+                first_name: Some("A".to_string()),
+                last_name: Some("B".to_string()),
+            },
+        )
+        .await;
+        assert_eq!(st1, StatusCode::CREATED);
+        let r1: RegisterResponse = serde_json::from_slice(&b1).unwrap();
+        assert!(r1.success);
+
+        let (st2, b2) = post_json(
+            app,
+            "/api/auth/register",
+            &RegisterRequest {
+                email: "second@admin.test".to_string(),
+                password: "longenough2".to_string(),
+                first_name: None,
+                last_name: None,
+            },
+        )
+        .await;
+        assert_eq!(st2, StatusCode::FORBIDDEN);
+        let r2: RegisterResponse = serde_json::from_slice(&b2).unwrap();
+        assert!(!r2.success);
+        assert!(r2.error.unwrap().contains("closed"));
+    }
+
+    #[tokio::test]
+    async fn db_login_refresh_logout_revokes_refresh() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "loginflow@admin.test";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed admin");
+
+        let app = auth_router();
+        let login_http = Request::post("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&LoginRequest {
+                    email: email.to_string(),
+                    password: password.to_string(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_login = app.clone().oneshot(login_http).await.unwrap();
+        assert_eq!(res_login.status(), StatusCode::OK);
+        let rt = first_nonempty_rt_from_set_cookie(res_login.headers()).expect("rt cookie");
+        let body_bytes = axum::body::to_bytes(res_login.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let login_res: LoginResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(login_res.success);
+        let access = login_res.access_token.expect("access token");
+
+        let req_ref = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", rt))
+            .body(Body::empty())
+            .unwrap();
+        let res_ref = app.clone().oneshot(req_ref).await.unwrap();
+        assert_eq!(res_ref.status(), StatusCode::OK);
+        let ref_body: RefreshResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res_ref.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(ref_body.success);
+        assert!(ref_body.access_token.is_some());
+
+        let req_out = Request::post("/api/auth/logout")
+            .header("cookie", format!("rt={}", rt))
+            .header("authorization", format!("Bearer {}", access))
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let res_out = app.clone().oneshot(req_out).await.unwrap();
+        assert_eq!(res_out.status(), StatusCode::OK);
+
+        let req_ref2 = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", rt))
+            .body(Body::empty())
+            .unwrap();
+        let res_ref2 = app.oneshot(req_ref2).await.unwrap();
+        assert_eq!(res_ref2.status(), StatusCode::UNAUTHORIZED);
+
+        let _ = uid;
+    }
+
+    #[tokio::test]
+    async fn db_login_inactive_account_forbidden() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "inactive@admin.test";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed");
+        sqlx::query("UPDATE admin_users SET is_active = false WHERE id = $1")
+            .bind(&uid)
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        let (st, bytes) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let body: LoginResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.error.unwrap().contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn db_login_locked_account_unauthorized() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "locked@admin.test";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed");
+        sqlx::query(
+            "UPDATE admin_users SET locked_until = now() + interval '1 hour' WHERE id = $1",
+        )
+        .bind(&uid)
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        let (st, bytes) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let body: LoginResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(body.error.unwrap().to_lowercase().contains("locked"));
+    }
+
+    #[tokio::test]
+    async fn db_login_with_totp_enabled_issues_challenge_then_exchanges() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "twofa@admin.test";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed");
+
+        let bearer = crate::test_support::admin_bearer_for(&uid, email, "SUPER_ADMIN");
+        let app = auth_and_twofa_router();
+
+        let req_setup = Request::post("/api/auth/2fa/setup")
+            .header("authorization", bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        let res_setup = app.clone().oneshot(req_setup).await.unwrap();
+        assert_eq!(res_setup.status(), StatusCode::OK);
+        let setup_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_setup.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let secret_b32 = setup_json["secret"].as_str().unwrap().to_string();
+
+        let code = {
+            use totp_rs::{Algorithm as TotpAlg, Secret, TOTP};
+            let secret_bytes = Secret::Encoded(secret_b32.clone())
+                .to_bytes()
+                .expect("secret bytes");
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.site".to_string());
+            let totp = TOTP::new(
+                TotpAlg::SHA1,
+                6,
+                1,
+                30,
+                secret_bytes,
+                Some(issuer),
+                email.to_string(),
+            )
+            .expect("totp");
+            totp.generate_current().expect("code")
+        };
+
+        let req_verify = Request::post("/api/auth/2fa/verify")
+            .header("authorization", bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "code": code }).to_string().into_bytes(),
+            ))
+            .unwrap();
+        let res_verify = app.clone().oneshot(req_verify).await.unwrap();
+        assert_eq!(res_verify.status(), StatusCode::OK);
+
+        let (st_login, login_bytes) = post_json(
+            app.clone(),
+            "/api/auth/login",
+            &LoginRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+            },
+        )
+        .await;
+        assert_eq!(st_login, StatusCode::OK);
+        let login_json: LoginResponse = serde_json::from_slice(&login_bytes).unwrap();
+        assert!(login_json.requires2fa);
+        let challenge = login_json.challenge_token.expect("challenge");
+
+        let req_finish = Request::post("/api/auth/2fa/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "challengeToken": challenge,
+                    "code": code,
+                })
+                .to_string()
+                .into_bytes(),
+            ))
+            .unwrap();
+        let res_finish = app.oneshot(req_finish).await.unwrap();
+        assert_eq!(res_finish.status(), StatusCode::OK);
+        let had_rt = first_nonempty_rt_from_set_cookie(res_finish.headers()).is_some();
+        let finish: LoginResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res_finish.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(finish.success);
+        assert!(!finish.requires2fa);
+        assert!(finish.access_token.is_some());
+        assert!(had_rt);
     }
 }

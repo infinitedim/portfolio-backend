@@ -69,3 +69,85 @@ pub fn request_id_layer() -> SetRequestIdLayer<MakeRequestUuid> {
 pub fn propagate_request_id_layer() -> PropagateRequestIdLayer {
     PropagateRequestIdLayer::x_request_id()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        middleware,
+        routing::get,
+        Router,
+    };
+    use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn request_id_is_added_and_propagated() {
+        let app = Router::new()
+            .route("/", get(|| async { StatusCode::OK }))
+            .layer(propagate_request_id_layer())
+            .layer(request_id_layer());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert!(response.headers().contains_key("x-request-id"));
+    }
+
+    #[tokio::test]
+    async fn existing_request_id_is_preserved() {
+        let app = Router::new()
+            .route("/", get(|| async { StatusCode::OK }))
+            .layer(propagate_request_id_layer())
+            .layer(request_id_layer());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("x-request-id", "test-request-id")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("test-request-id")
+        );
+    }
+
+    #[tokio::test]
+    async fn log_request_middleware_passes_response_through() {
+        let app = Router::new()
+            .route("/", get(|| async { StatusCode::CREATED }))
+            .layer(propagate_request_id_layer())
+            .layer(request_id_layer())
+            .layer(middleware::from_fn(log_request));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert!(response.headers().contains_key("x-request-id"));
+    }
+}

@@ -557,6 +557,11 @@ pub async fn login_challenge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::{get, post};
+    use axum::Router;
+    use tower::ServiceExt;
 
     #[test]
     fn backup_code_hash_is_case_insensitive() {
@@ -584,5 +589,273 @@ mod tests {
         // must fail — proves the two token types don't cross-validate.
         let res = crate::routes::auth::verify_access_token(&token);
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn status_returns_unauthorized_without_bearer() {
+        let app = Router::new().route("/api/auth/2fa/status", get(status));
+        let req = Request::get("/api/auth/2fa/status")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn status_returns_service_unavailable_when_pool_cleared_under_lock() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new().route("/api/auth/2fa/status", get(status));
+        let bearer = crate::test_support::admin_bearer();
+        crate::db::clear_test_pool();
+        let req = Request::get("/api/auth/2fa/status")
+            .header("authorization", bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        crate::db::set_test_pool(db.pool.clone());
+    }
+
+    #[tokio::test]
+    async fn login_challenge_rejects_malformed_challenge_without_db() {
+        let app = Router::new()
+            .route("/api/auth/2fa/login", post(login_challenge))
+            .layer(crate::test_support::mock_connect_info());
+        let req = Request::post("/api/auth/2fa/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"challengeToken":"not-a-jwt","code":"123456"}"#.as_bytes(),
+            ))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_challenge_returns_503_when_pool_cleared_under_lock() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let challenge = create_challenge_token("orphan-id", "orphan@test.local", "ADMIN").unwrap();
+        crate::db::clear_test_pool();
+        let app = Router::new()
+            .route("/api/auth/2fa/login", post(login_challenge))
+            .layer(crate::test_support::mock_connect_info());
+        let req = Request::post("/api/auth/2fa/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "challengeToken": challenge,
+                    "code": "123456"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        crate::db::set_test_pool(db.pool.clone());
+    }
+
+    #[tokio::test]
+    async fn db_setup_rejected_when_totp_already_enabled() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "twofa-setup-dup@test.local";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed");
+        let bearer = crate::test_support::admin_bearer_for(&uid, email, "SUPER_ADMIN");
+        let app = Router::new()
+            .route("/api/auth/2fa/setup", post(setup))
+            .route("/api/auth/2fa/verify", post(verify_setup))
+            .layer(crate::test_support::mock_connect_info());
+
+        let res_s1 = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/setup")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_s1.status(), axum::http::StatusCode::OK);
+        let setup: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_s1.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let secret_b32 = setup["secret"].as_str().unwrap();
+        let code = {
+            use totp_rs::{Algorithm as TotpAlg, Secret, TOTP};
+            let secret_bytes = Secret::Encoded(secret_b32.to_string())
+                .to_bytes()
+                .expect("bytes");
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.site".to_string());
+            TOTP::new(
+                TotpAlg::SHA1,
+                6,
+                1,
+                30,
+                secret_bytes,
+                Some(issuer),
+                email.to_string(),
+            )
+            .expect("totp")
+            .generate_current()
+            .expect("code")
+        };
+
+        let res_v = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/verify")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "code": code }).to_string().into_bytes(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_v.status(), axum::http::StatusCode::OK);
+
+        let res_s2 = app
+            .oneshot(
+                Request::post("/api/auth/2fa/setup")
+                    .header("authorization", bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_s2.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn db_login_challenge_rejects_wrong_totp_code() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "twofa-wrong@test.local";
+        let password = "longenough!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed");
+        let bearer = crate::test_support::admin_bearer_for(&uid, email, "SUPER_ADMIN");
+        let app = Router::new()
+            .route("/api/auth/2fa/setup", post(setup))
+            .route("/api/auth/2fa/verify", post(verify_setup))
+            .route("/api/auth/2fa/login", post(login_challenge))
+            .layer(crate::test_support::mock_connect_info());
+
+        let res_s1 = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/setup")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let setup: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_s1.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let secret_b32 = setup["secret"].as_str().unwrap();
+        let code = {
+            use totp_rs::{Algorithm as TotpAlg, Secret, TOTP};
+            let secret_bytes = Secret::Encoded(secret_b32.to_string())
+                .to_bytes()
+                .expect("bytes");
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.site".to_string());
+            TOTP::new(
+                TotpAlg::SHA1,
+                6,
+                1,
+                30,
+                secret_bytes,
+                Some(issuer),
+                email.to_string(),
+            )
+            .expect("totp")
+            .generate_current()
+            .expect("code")
+        };
+
+        let res_v = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/verify")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "code": code }).to_string().into_bytes(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_v.status(), axum::http::StatusCode::OK);
+
+        let login_payload = crate::routes::auth::LoginRequest {
+            email: email.to_string(),
+            password: password.to_string(),
+        };
+        // Obtain challenge via auth login — use crate routes auth::login
+        use axum::extract::connect_info::MockConnectInfo;
+        use std::net::SocketAddr;
+        let auth_app = axum::Router::new()
+            .route("/api/auth/login", post(crate::routes::auth::login))
+            .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+        let res_login = auth_app
+            .oneshot(
+                Request::post("/api/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&login_payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_login.status(), axum::http::StatusCode::OK);
+        let login_body: crate::routes::auth::LoginResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res_login.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let ch = login_body.challenge_token.expect("challenge");
+
+        let res_bad = app
+            .oneshot(
+                Request::post("/api/auth/2fa/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "challengeToken": ch,
+                            "code": "000000"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_bad.status(), axum::http::StatusCode::UNAUTHORIZED);
+        let _ = uid;
     }
 }

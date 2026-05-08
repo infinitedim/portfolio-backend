@@ -4,6 +4,12 @@ pub mod logging;
 pub mod openapi;
 pub mod routes;
 
+// Test-only helpers (Postgres pool, admin tokens, isolated upload dir, etc.)
+// shared by `mod tests` blocks across the crate. Gated behind `cfg(test)` so
+// it never leaks into release builds and adds no overhead to production.
+#[cfg(test)]
+pub mod test_support;
+
 use axum::{
     http::{HeaderValue, Method},
     middleware,
@@ -358,9 +364,110 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::{Mutex, OnceLock};
+    use tower::util::ServiceExt;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_create_app_returns_router() {
         let _app = create_app();
+    }
+
+    #[tokio::test]
+    async fn create_app_exposes_health_route() {
+        let app = create_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("health response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // `env_lock` must serialize env mutations across the whole test.
+    async fn swagger_ui_can_be_disabled_via_env() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("ENABLE_SWAGGER_UI", "false");
+        let app = create_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/docs")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("docs response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        std::env::remove_var("ENABLE_SWAGGER_UI");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn swagger_ui_enabled_by_default() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::remove_var("ENABLE_SWAGGER_UI");
+        let app = create_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/docs")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("docs response");
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cors_uses_allowed_origins_over_frontend_origin() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("ALLOWED_ORIGINS", "https://allowed.example");
+        std::env::set_var("FRONTEND_ORIGIN", "https://frontend.example");
+
+        let app = Router::new()
+            .route("/check", get(|| async { StatusCode::OK }))
+            .layer(configure_cors());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/check")
+                    .header("origin", "https://allowed.example")
+                    .header("access-control-request-method", "GET")
+                    .body(Body::empty())
+                    .expect("preflight request"),
+            )
+            .await
+            .expect("preflight response");
+
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://allowed.example")
+        );
+
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("FRONTEND_ORIGIN");
     }
 }

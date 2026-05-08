@@ -11,9 +11,21 @@ use uuid::Uuid;
 use crate::routes::auth::require_admin;
 use crate::routes::ErrorResponse;
 
-const UPLOAD_DIR: &str = "uploads/blog";
+/// Default on-disk location for uploaded blog images. Used when the
+/// `UPLOAD_DIR` env var is unset — overriding it lets tests redirect writes
+/// into an isolated temp directory without touching the real `uploads/blog`
+/// tree (see `crate::test_support::isolated_upload_dir`).
+const DEFAULT_UPLOAD_DIR: &str = "uploads/blog";
 const MAX_FILE_SIZE: usize = 5 * 1024 * 1024; // 5MB
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
+
+/// Resolve the on-disk upload directory. Reads `UPLOAD_DIR` at call time so
+/// tests can override it per-test via [`std::env::set_var`] without forcing
+/// a process restart. Production builds simply fall through to
+/// [`DEFAULT_UPLOAD_DIR`].
+fn upload_dir() -> PathBuf {
+    PathBuf::from(std::env::var("UPLOAD_DIR").unwrap_or_else(|_| DEFAULT_UPLOAD_DIR.to_string()))
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +97,7 @@ pub async fn upload_image(headers: HeaderMap, mut multipart: Multipart) -> impl 
     }
 
     // Ensure upload directory exists
-    let upload_path = PathBuf::from(UPLOAD_DIR);
+    let upload_path = upload_dir();
     if let Err(e) = tokio::fs::create_dir_all(&upload_path).await {
         tracing::error!("Failed to create upload directory: {}", e);
         return (
@@ -248,7 +260,7 @@ pub async fn delete_image(headers: HeaderMap, Path(filename): Path<String>) -> i
             .into_response();
     }
 
-    let file_path = PathBuf::from(UPLOAD_DIR).join(&filename);
+    let file_path = upload_dir().join(&filename);
 
     // Use the async metadata + remove pair instead of the blocking
     // `PathBuf::exists()` check, which would stall the executor on
@@ -287,7 +299,7 @@ pub async fn list_images(headers: HeaderMap) -> impl IntoResponse {
         return err_response.into_response();
     }
 
-    let upload_path = PathBuf::from(UPLOAD_DIR);
+    let upload_path = upload_dir();
     let mut images = Vec::new();
 
     // Async open instead of `PathBuf::exists()` (which is blocking).
@@ -360,4 +372,196 @@ pub async fn list_images(headers: HeaderMap) -> impl IntoResponse {
 
     let total = images.len();
     (StatusCode::OK, Json(ImageListResponse { images, total })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::{delete, get, post};
+    use axum::Router;
+    use tower::ServiceExt;
+
+    use crate::test_support;
+
+    fn upload_router() -> Router {
+        Router::new()
+            .route("/api/upload/image", post(upload_image))
+            .route("/api/upload/image/{filename}", delete(delete_image))
+            .route("/api/upload/images", get(list_images))
+            .layer(test_support::mock_connect_info())
+    }
+
+    fn auth_header() -> String {
+        test_support::admin_bearer()
+    }
+
+    async fn call(
+        app: Router,
+        req: Request<Body>,
+    ) -> (StatusCode, axum::body::Bytes, axum::http::HeaderMap) {
+        let res = app.oneshot(req).await.expect("request should succeed");
+        let status = res.status();
+        let headers = res.headers().clone();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        (status, body, headers)
+    }
+
+    fn multipart_body(boundary: &str, filename: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
+                filename
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+        body
+    }
+
+    #[tokio::test]
+    async fn upload_requires_admin_auth() {
+        let boundary = "upload-test-boundary";
+        let png = [0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3];
+        let req = Request::post("/api/upload/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "image.png", &png)))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_and_delete_require_admin_auth() {
+        let list_req = Request::get("/api/upload/images")
+            .body(Body::empty())
+            .expect("request should build");
+        let (list_status, _, _) = call(upload_router(), list_req).await;
+        assert_eq!(list_status, StatusCode::UNAUTHORIZED);
+
+        let delete_req = Request::delete("/api/upload/image/file.png")
+            .body(Body::empty())
+            .expect("request should build");
+        let (delete_status, _, _) = call(upload_router(), delete_req).await;
+        assert_eq!(delete_status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_unsupported_extension() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let boundary = "upload-test-boundary";
+        let png = [0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3];
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "payload.txt", &png)))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_invalid_magic_bytes() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let boundary = "upload-test-boundary";
+        let junk = b"not-an-image-at-all";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "image.png", junk)))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_list_and_delete_roundtrip_with_isolated_dir() {
+        let dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let boundary = "upload-test-boundary";
+        let png = [0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3, 4, 5];
+        let upload_req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "photo.png", &png)))
+            .expect("request should build");
+        let (upload_status, upload_body, _) = call(upload_router(), upload_req).await;
+        assert_eq!(upload_status, StatusCode::CREATED);
+
+        let uploaded: serde_json::Value =
+            serde_json::from_slice(&upload_body).expect("valid upload response JSON");
+        let filename = uploaded["filename"]
+            .as_str()
+            .expect("filename should be present")
+            .to_string();
+        assert!(dir.path.join(&filename).exists());
+        assert_eq!(
+            uploaded["mimeType"].as_str(),
+            Some("image/png"),
+            "mime type should be detected from magic bytes"
+        );
+
+        let list_req = Request::get("/api/upload/images")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (list_status, list_body, _) = call(upload_router(), list_req).await;
+        assert_eq!(list_status, StatusCode::OK);
+        let listed: serde_json::Value =
+            serde_json::from_slice(&list_body).expect("valid list JSON");
+        assert_eq!(listed["total"].as_u64(), Some(1));
+        assert_eq!(
+            listed["images"][0]["filename"].as_str(),
+            Some(filename.as_str())
+        );
+
+        let delete_req = Request::delete(format!("/api/upload/image/{}", filename))
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (delete_status, _, _) = call(upload_router(), delete_req).await;
+        assert_eq!(delete_status, StatusCode::NO_CONTENT);
+        assert!(!dir.path.join(&filename).exists());
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_path_traversal_filename() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let req = Request::delete("/api/upload/image/..evil.png")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }

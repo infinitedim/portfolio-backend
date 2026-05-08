@@ -489,6 +489,90 @@ pub async fn delete_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::{get, post};
+    use axum::Router;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    use crate::email::{Mailer, MailerError};
+    use crate::test_support;
+
+    #[derive(Debug)]
+    struct TestMailer {
+        send_count: AtomicUsize,
+        should_fail: bool,
+    }
+
+    impl TestMailer {
+        fn ok() -> Arc<Self> {
+            Arc::new(Self {
+                send_count: AtomicUsize::new(0),
+                should_fail: false,
+            })
+        }
+
+        fn failing() -> Arc<Self> {
+            Arc::new(Self {
+                send_count: AtomicUsize::new(0),
+                should_fail: true,
+            })
+        }
+
+        fn sent(&self) -> usize {
+            self.send_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl Mailer for TestMailer {
+        async fn send_contact_notification(
+            &self,
+            _msg: &crate::db::models::ContactMessage,
+        ) -> Result<(), MailerError> {
+            self.send_count.fetch_add(1, Ordering::SeqCst);
+            if self.should_fail {
+                Err(MailerError::Transport("forced test failure".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn contact_router(mailer: Arc<dyn Mailer>) -> Router {
+        Router::new()
+            .route("/api/contact", post(submit_contact_message))
+            .route("/api/admin/messages", get(list_messages))
+            .route(
+                "/api/admin/messages/{id}",
+                get(get_message)
+                    .patch(update_message)
+                    .delete(delete_message),
+            )
+            .with_state(mailer)
+            .layer(test_support::mock_connect_info())
+    }
+
+    async fn call(app: Router, req: Request<Body>) -> (StatusCode, axum::body::Bytes) {
+        let res = app.oneshot(req).await.expect("request should succeed");
+        let status = res.status();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        (status, body)
+    }
+
+    fn valid_payload_json() -> serde_json::Value {
+        serde_json::json!({
+            "name": "Alice",
+            "email": "alice@example.com",
+            "subject": "Need help",
+            "message": "Hello there from contact form",
+            "website": null
+        })
+    }
 
     #[test]
     fn email_validator_accepts_normal_addresses() {
@@ -535,5 +619,126 @@ mod tests {
     fn sanitize_text_strips_control_chars_but_keeps_newlines() {
         let cleaned = sanitize_text("hello\u{0007}\nworld\t!\u{0000}");
         assert_eq!(cleaned, "hello\nworld\t!");
+    }
+
+    #[tokio::test]
+    async fn submit_returns_service_unavailable_without_db() {
+        let mailer = TestMailer::ok();
+        let req = Request::post("/api/contact")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&valid_payload_json()).expect("json body"),
+            ))
+            .expect("request should build");
+        let (status, _) = call(contact_router(mailer), req).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn honeypot_returns_ok_and_does_not_persist() {
+        let Some(db) = test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let mailer = TestMailer::ok();
+        let mut payload = valid_payload_json();
+        payload["website"] = serde_json::Value::String("https://spam-bot.invalid".to_string());
+        let req = Request::post("/api/contact")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload).expect("json body")))
+            .expect("request should build");
+
+        let (status, body) = call(contact_router(mailer.clone()), req).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value =
+            serde_json::from_slice(&body).expect("valid response JSON");
+        let nil = Uuid::nil().to_string();
+        assert_eq!(response["id"].as_str(), Some(nil.as_str()));
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contact_messages")
+            .fetch_one(db.pool.as_ref())
+            .await
+            .expect("count query should succeed");
+        assert_eq!(count, 0);
+        assert_eq!(mailer.sent(), 0);
+    }
+
+    #[tokio::test]
+    async fn submit_and_admin_crud_roundtrip_with_non_fatal_mailer_error() {
+        let Some(db) = test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let mailer = TestMailer::failing();
+        let payload = valid_payload_json();
+        let submit_req = Request::post("/api/contact")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "203.0.113.7, 10.0.0.1")
+            .header("user-agent", "integration-test-agent/1.0")
+            .body(Body::from(serde_json::to_vec(&payload).expect("json body")))
+            .expect("request should build");
+
+        let (submit_status, submit_body) = call(contact_router(mailer.clone()), submit_req).await;
+        assert_eq!(submit_status, StatusCode::CREATED);
+        let created: serde_json::Value =
+            serde_json::from_slice(&submit_body).expect("valid submit response JSON");
+        let created_id = created["id"]
+            .as_str()
+            .expect("created id should be present")
+            .to_string();
+        assert_ne!(created_id, Uuid::nil().to_string());
+
+        // The handler sends mail on a detached task. Give it a short moment so
+        // we can assert that mail failures do not break persistence.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(mailer.sent(), 1);
+
+        let bearer = test_support::admin_bearer();
+        let list_req = Request::get("/api/admin/messages?page=1&pageSize=10")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .expect("request should build");
+        let (list_status, list_body) = call(contact_router(mailer.clone()), list_req).await;
+        assert_eq!(list_status, StatusCode::OK);
+        let list: serde_json::Value =
+            serde_json::from_slice(&list_body).expect("valid list response");
+        assert_eq!(list["total"].as_i64(), Some(1));
+        assert_eq!(list["unread"].as_i64(), Some(1));
+        assert_eq!(list["items"][0]["id"].as_str(), Some(created_id.as_str()));
+
+        let get_req = Request::get(format!("/api/admin/messages/{}", created_id))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .expect("request should build");
+        let (get_status, get_body) = call(contact_router(mailer.clone()), get_req).await;
+        assert_eq!(get_status, StatusCode::OK);
+        let fetched: serde_json::Value =
+            serde_json::from_slice(&get_body).expect("valid get response");
+        assert_eq!(fetched["email"].as_str(), Some("alice@example.com"));
+        assert_eq!(fetched["ipAddress"].as_str(), Some("203.0.113.7"));
+
+        let update_req = Request::patch(format!("/api/admin/messages/{}", created_id))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(br#"{"read":true}"#.as_slice()))
+            .expect("request should build");
+        let (update_status, update_body) = call(contact_router(mailer.clone()), update_req).await;
+        assert_eq!(update_status, StatusCode::OK);
+        let updated: serde_json::Value =
+            serde_json::from_slice(&update_body).expect("valid update response");
+        assert_eq!(updated["read"].as_bool(), Some(true));
+
+        let delete_req = Request::delete(format!("/api/admin/messages/{}", created_id))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .expect("request should build");
+        let (delete_status, _) = call(contact_router(mailer), delete_req).await;
+        assert_eq!(delete_status, StatusCode::NO_CONTENT);
+
+        let db_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contact_messages")
+            .fetch_one(db.pool.as_ref())
+            .await
+            .expect("count query should succeed");
+        assert_eq!(db_count, 0);
     }
 }

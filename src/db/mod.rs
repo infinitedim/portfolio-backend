@@ -132,7 +132,63 @@ pub async fn init_pool_with_retry(
 }
 
 pub fn get_pool() -> Option<Arc<PgPool>> {
+    #[cfg(test)]
+    {
+        if let Some(pool) = test_override::current() {
+            return Some(pool);
+        }
+    }
     DB_POOL.get().cloned()
+}
+
+/// Test-only override for the process-wide pool.
+///
+/// Production code reads `DB_POOL` (a `OnceCell`) which can only be set once.
+/// Tests need to install their own pool (per-schema isolation, see
+/// [`crate::test_support`]) and clear it again at the end of the test, which
+/// `OnceCell` cannot express. This module provides a separate slot consulted
+/// only under `cfg(test)`; it never appears in release builds.
+#[cfg(test)]
+pub(crate) mod test_override {
+    use super::*;
+    use std::sync::RwLock;
+
+    static OVERRIDE: once_cell::sync::Lazy<RwLock<Option<Arc<PgPool>>>> =
+        once_cell::sync::Lazy::new(|| RwLock::new(None));
+
+    pub(crate) fn current() -> Option<Arc<PgPool>> {
+        OVERRIDE.read().ok().and_then(|g| g.clone())
+    }
+
+    pub(crate) fn set(pool: Arc<PgPool>) {
+        if let Ok(mut g) = OVERRIDE.write() {
+            *g = Some(pool);
+        }
+    }
+
+    pub(crate) fn clear() {
+        if let Ok(mut g) = OVERRIDE.write() {
+            *g = None;
+        }
+    }
+}
+
+/// Install a pool as the value returned by [`get_pool`] for the current test.
+///
+/// Tests should hold the global serialization lock from [`crate::test_support`]
+/// while this override is active so concurrent tests do not see each other's
+/// pools. Pair with [`clear_test_pool`] at the end of the test (the helper
+/// guard returned by `test_support::acquire_test_pool` does this on `Drop`).
+#[cfg(test)]
+pub(crate) fn set_test_pool(pool: Arc<PgPool>) {
+    test_override::set(pool);
+}
+
+/// Drop the test-only pool override and let `get_pool` fall back to the real
+/// `DB_POOL` (which is normally unset in tests, so handlers will see "no DB").
+#[cfg(test)]
+pub(crate) fn clear_test_pool() {
+    test_override::clear();
 }
 
 pub async fn health_check() -> Result<std::time::Duration, sqlx::Error> {
@@ -395,14 +451,35 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_db_config_default_uses_env_or_fallback() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("DATABASE_URL", "postgresql://example/testdb");
+        std::env::set_var("DB_POOL_MAX", "17");
+        std::env::set_var("DB_POOL_MIN", "3");
+        std::env::set_var("DB_CONNECT_TIMEOUT", "22");
+        std::env::set_var("DB_IDLE_TIMEOUT", "44");
+
         let config = DbConfig::default();
-        assert!(config.max_connections >= 1);
-        assert!(config.connect_timeout_secs >= 1);
-        assert!(config.idle_timeout_secs >= 1);
-        assert!(!config.url.is_empty());
+        assert_eq!(config.url, "postgresql://example/testdb");
+        assert_eq!(config.max_connections, 17);
+        assert_eq!(config.min_connections, 3);
+        assert_eq!(config.connect_timeout_secs, 22);
+        assert_eq!(config.idle_timeout_secs, 44);
+
+        std::env::remove_var("DATABASE_URL");
+        std::env::remove_var("DB_POOL_MAX");
+        std::env::remove_var("DB_POOL_MIN");
+        std::env::remove_var("DB_CONNECT_TIMEOUT");
+        std::env::remove_var("DB_IDLE_TIMEOUT");
     }
 
     #[test]
@@ -415,5 +492,33 @@ mod tests {
     async fn test_health_check_fails_without_pool() {
         let result = health_check().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_retry_returns_error_for_invalid_url_quickly() {
+        let config = DbConfig {
+            url: "this-is-not-a-postgres-url".to_string(),
+            max_connections: 1,
+            min_connections: 0,
+            connect_timeout_secs: 1,
+            idle_timeout_secs: 1,
+        };
+
+        let result = init_pool_with_retry(Some(config), Duration::from_millis(20)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_migrations_is_idempotent_when_test_db_available() {
+        let Some(test_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        run_migrations(test_db.pool.as_ref())
+            .await
+            .expect("second migration run should succeed");
+        run_migrations(test_db.pool.as_ref())
+            .await
+            .expect("third migration run should also succeed");
     }
 }

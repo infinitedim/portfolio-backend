@@ -38,7 +38,7 @@ pub fn default_page_size() -> i64 {
     10
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogListResponse {
     pub items: Vec<BlogPostSummary>,
@@ -47,7 +47,7 @@ pub struct BlogListResponse {
     pub total: i64,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostSummary {
     pub id: Uuid,
@@ -63,7 +63,7 @@ pub struct BlogPostSummary {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlogPostResponse {
     pub id: Uuid,
@@ -849,7 +849,7 @@ pub struct TagsResponse {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TagWithCount {
     pub name: String,
@@ -947,10 +947,12 @@ mod tests {
     fn blog_router() -> Router {
         Router::new()
             .route("/api/blog", get(list_posts).post(create_post))
+            .route("/api/blog/tags", get(list_tags))
             .route(
                 "/api/blog/{slug}",
                 get(get_post).patch(update_post).delete(delete_post),
             )
+            .layer(crate::test_support::mock_connect_info())
     }
 
     async fn get_status(app: Router, uri: &str) -> StatusCode {
@@ -1068,5 +1070,310 @@ mod tests {
         let set: UpdateBlogRequest =
             serde_json::from_str(r#"{"publishAt": "2030-01-01T00:00:00Z"}"#).unwrap();
         assert!(matches!(set.publish_at, Some(Some(_))));
+    }
+
+    async fn get_status_body(app: Router, uri: &str) -> (StatusCode, axum::body::Bytes) {
+        let req = Request::get(uri).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let st = res.status();
+        let b = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (st, b)
+    }
+
+    async fn post_json_auth(
+        app: Router,
+        uri: &str,
+        bearer: Option<&str>,
+        json: &impl serde::Serialize,
+    ) -> (StatusCode, axum::body::Bytes) {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let mut req = Request::post(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
+        if let Some(b) = bearer {
+            req.headers_mut().insert(
+                axum::http::header::AUTHORIZATION,
+                b.parse().expect("bearer header"),
+            );
+        }
+        let res = app.oneshot(req).await.unwrap();
+        let st = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (st, bytes)
+    }
+
+    async fn patch_json_auth(
+        app: Router,
+        uri: &str,
+        bearer: &str,
+        json: &impl serde::Serialize,
+    ) -> (StatusCode, axum::body::Bytes) {
+        let body = Body::from(serde_json::to_vec(json).unwrap());
+        let req = Request::patch(uri)
+            .header("content-type", "application/json")
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(body)
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let st = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (st, bytes)
+    }
+
+    async fn delete_auth(app: Router, uri: &str, bearer: &str) -> StatusCode {
+        let req = Request::delete(uri)
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        res.status()
+    }
+
+    #[tokio::test]
+    async fn db_blog_create_list_get_update_delete_roundtrip() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Hello DB".to_string(),
+                slug: "hello-db".to_string(),
+                summary: Some("S".to_string()),
+                content_md: Some("one two three four five".to_string()),
+                content_html: None,
+                published: Some(true),
+                tags: Some(vec!["alpha".to_string(), "beta".to_string()]),
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        let (st_list, list_bytes) =
+            get_status_body(app.clone(), "/api/blog?page=1&pageSize=10").await;
+        assert_eq!(st_list, StatusCode::OK);
+        let list: BlogListResponse = serde_json::from_slice(&list_bytes).unwrap();
+        assert_eq!(list.total, 1);
+        assert_eq!(list.items[0].slug, "hello-db");
+
+        let (st_get, get_bytes) = get_status_body(app.clone(), "/api/blog/hello-db").await;
+        assert_eq!(st_get, StatusCode::OK);
+        let post: BlogPostResponse = serde_json::from_slice(&get_bytes).unwrap();
+        assert_eq!(post.reading_time_minutes, 1);
+
+        let (st_patch, patched) = patch_json_auth(
+            app.clone(),
+            "/api/blog/hello-db",
+            &bearer,
+            &serde_json::json!({ "title": "Updated" }),
+        )
+        .await;
+        assert_eq!(st_patch, StatusCode::OK);
+        let updated: BlogPostResponse = serde_json::from_slice(&patched).unwrap();
+        assert_eq!(updated.title, "Updated");
+
+        let st_del = delete_auth(app.clone(), "/api/blog/hello-db", &bearer).await;
+        assert_eq!(st_del, StatusCode::OK);
+
+        let (st_404, _) = get_status_body(app, "/api/blog/hello-db").await;
+        assert_eq!(st_404, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn db_blog_duplicate_slug_returns_conflict() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let body = CreateBlogRequest {
+            title: "A".to_string(),
+            slug: "dup-slug".to_string(),
+            summary: None,
+            content_md: None,
+            content_html: None,
+            published: Some(false),
+            tags: None,
+            publish_at: None,
+        };
+        let (st1, _) = post_json_auth(app.clone(), "/api/blog", Some(&bearer), &body).await;
+        assert_eq!(st1, StatusCode::CREATED);
+        let (st2, _) = post_json_auth(app, "/api/blog", Some(&bearer), &body).await;
+        assert_eq!(st2, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn db_blog_invalid_slug_on_create_returns_bad_request() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app,
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "T".to_string(),
+                slug: "Bad_Slug".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn db_blog_html_sanitized_on_create() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "HTML".to_string(),
+                slug: "html-safe".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: Some("<p>x</p><script>evil()</script>".to_string()),
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let (_, get_bytes) = get_status_body(app, "/api/blog/html-safe").await;
+        let post: BlogPostResponse = serde_json::from_slice(&get_bytes).unwrap();
+        let html = post.content_html.unwrap();
+        assert!(!html.to_lowercase().contains("<script"));
+        assert!(html.contains("x") || html.contains("<p"));
+    }
+
+    #[tokio::test]
+    async fn db_blog_tags_normalized_and_deduped() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Tags".to_string(),
+                slug: "tag-norm".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(true),
+                tags: Some(vec![
+                    "rust".to_string(),
+                    "Rust".to_string(),
+                    "  go ".to_string(),
+                ]),
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let (_, get_bytes) = get_status_body(app, "/api/blog/tag-norm").await;
+        let post: BlogPostResponse = serde_json::from_slice(&get_bytes).unwrap();
+        assert_eq!(post.tags.len(), 2);
+        assert!(post.tags.contains(&"Rust".to_string()));
+        assert!(post.tags.contains(&"Go".to_string()));
+    }
+
+    #[tokio::test]
+    async fn db_blog_scheduled_future_hidden_from_public_list() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let future = Utc::now() + chrono::Duration::days(7);
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Future".to_string(),
+                slug: "future-post".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: Some(future),
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        let (_, list_bytes) =
+            get_status_body(app.clone(), "/api/blog?published=true&page=1&pageSize=10").await;
+        let list: BlogListResponse = serde_json::from_slice(&list_bytes).unwrap();
+        assert!(
+            list.items.iter().all(|i| i.slug != "future-post"),
+            "scheduled future post must not appear as published"
+        );
+
+        let (_, admin_list) = get_status_body(app, "/api/blog?published=false").await;
+        let draftish: BlogListResponse = serde_json::from_slice(&admin_list).unwrap();
+        assert!(draftish.items.iter().any(|i| i.slug == "future-post"));
+    }
+
+    #[tokio::test]
+    async fn db_blog_list_tags_counts_published() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Tagged".to_string(),
+                slug: "tagged-one".to_string(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(true),
+                tags: Some(vec!["News".to_string()]),
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        let (_, tags_bytes) = get_status_body(app, "/api/blog/tags").await;
+        let tags: Vec<TagWithCount> = serde_json::from_slice(&tags_bytes).unwrap();
+        let news = tags.iter().find(|t| t.name == "News");
+        assert!(news.is_some());
+        assert!(news.unwrap().post_count >= 1);
     }
 }

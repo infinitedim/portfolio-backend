@@ -110,3 +110,41 @@ impl Modify for SecurityAddon {
     )
 )]
 pub struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use utoipa::OpenApi;
+
+    #[test]
+    fn generated_spec_contains_expected_metadata() {
+        let spec = ApiDoc::openapi();
+        let info = &spec.info;
+        assert_eq!(info.title, "Portfolio API");
+        assert_eq!(info.version, "1.0.0");
+        assert!(info
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Rust"));
+    }
+
+    #[test]
+    fn generated_spec_includes_bearer_auth_security_scheme() {
+        let spec = ApiDoc::openapi();
+        let security = spec
+            .components
+            .as_ref()
+            .and_then(|c| c.security_schemes.get("bearer_auth"));
+        assert!(security.is_some(), "bearer_auth should be present");
+    }
+
+    #[test]
+    fn generated_spec_includes_critical_paths() {
+        let spec = ApiDoc::openapi();
+        assert!(spec.paths.paths.contains_key("/api/auth/login"));
+        assert!(spec.paths.paths.contains_key("/api/blog"));
+        assert!(spec.paths.paths.contains_key("/api/contact"));
+        assert!(spec.paths.paths.contains_key("/health/ready"));
+    }
+}

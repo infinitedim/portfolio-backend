@@ -27,6 +27,13 @@ use serde_json::json;
 
 use crate::db::models::ContactMessage;
 
+fn resend_config_from_env() -> Option<(String, String, String)> {
+    let api_key = std::env::var("RESEND_API_KEY").ok()?;
+    let from = std::env::var("RESEND_FROM").unwrap_or_else(|_| "noreply@example.com".to_string());
+    let to = std::env::var("CONTACT_EMAIL").unwrap_or_else(|_| from.clone());
+    Some((api_key, from, to))
+}
+
 /// Outcome of an attempted send. The error variant is informational only;
 /// callers that don't care about delivery success should ignore it.
 #[derive(Debug)]
@@ -100,11 +107,8 @@ impl ResendMailer {
             client: reqwest::Client::new(),
         }
     }
-}
 
-#[async_trait]
-impl Mailer for ResendMailer {
-    async fn send_contact_notification(&self, msg: &ContactMessage) -> Result<(), MailerError> {
+    fn build_payload(&self, msg: &ContactMessage) -> serde_json::Value {
         let subject = match msg.subject.as_deref() {
             Some(s) if !s.trim().is_empty() => format!("[Portfolio] {}", s.trim()),
             _ => "[Portfolio] New contact message".to_string(),
@@ -124,13 +128,20 @@ impl Mailer for ResendMailer {
             msg.created_at,
         );
 
-        let payload = json!({
+        json!({
             "from": self.from,
             "to": [self.to],
             "reply_to": msg.email,
             "subject": subject,
             "text": body,
-        });
+        })
+    }
+}
+
+#[async_trait]
+impl Mailer for ResendMailer {
+    async fn send_contact_notification(&self, msg: &ContactMessage) -> Result<(), MailerError> {
+        let payload = self.build_payload(msg);
 
         let res = self
             .client
@@ -157,14 +168,84 @@ impl Mailer for ResendMailer {
 /// [`NoopMailer`] if no transport is configured. Logs which transport was
 /// selected so operators can verify config at boot.
 pub fn from_env() -> Arc<dyn Mailer> {
-    if let Ok(api_key) = std::env::var("RESEND_API_KEY") {
-        let from =
-            std::env::var("RESEND_FROM").unwrap_or_else(|_| "noreply@example.com".to_string());
-        let to = std::env::var("CONTACT_EMAIL").unwrap_or_else(|_| from.clone());
+    if let Some((api_key, from, to)) = resend_config_from_env() {
         tracing::info!(from = %from, to = %to, "Mailer: Resend transport enabled");
         return Arc::new(ResendMailer::new(api_key, from, to));
     }
 
     tracing::info!("Mailer: no transport configured, using NoopMailer");
     Arc::new(NoopMailer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::{Mutex, OnceLock};
+    use uuid::Uuid;
+
+    fn sample_message(subject: Option<&str>) -> ContactMessage {
+        ContactMessage {
+            id: Uuid::new_v4(),
+            name: "Test User".to_string(),
+            email: "test@example.com".to_string(),
+            subject: subject.map(ToString::to_string),
+            message: "Hello from tests".to_string(),
+            ip_address: None,
+            user_agent: None,
+            read: false,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[tokio::test]
+    async fn noop_mailer_is_always_ok() {
+        let mailer = NoopMailer;
+        let result = mailer
+            .send_contact_notification(&sample_message(None))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resend_payload_uses_subject_or_default() {
+        let mailer = ResendMailer::new(
+            "key".to_string(),
+            "from@example.com".to_string(),
+            "to@example.com".to_string(),
+        );
+
+        let payload_with_subject = mailer.build_payload(&sample_message(Some("  Subject  ")));
+        assert_eq!(payload_with_subject["subject"], "[Portfolio] Subject");
+        assert_eq!(payload_with_subject["reply_to"], "test@example.com");
+        assert_eq!(payload_with_subject["from"], "from@example.com");
+        assert_eq!(payload_with_subject["to"][0], "to@example.com");
+
+        let payload_without_subject = mailer.build_payload(&sample_message(None));
+        assert_eq!(
+            payload_without_subject["subject"],
+            "[Portfolio] New contact message"
+        );
+    }
+
+    #[test]
+    fn resend_config_from_env_defaults_to_from() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("RESEND_API_KEY", "test-api-key");
+        std::env::set_var("RESEND_FROM", "sender@example.com");
+        std::env::remove_var("CONTACT_EMAIL");
+
+        let config = resend_config_from_env().expect("expected resend config");
+        assert_eq!(config.0, "test-api-key");
+        assert_eq!(config.1, "sender@example.com");
+        assert_eq!(config.2, "sender@example.com");
+
+        std::env::remove_var("RESEND_API_KEY");
+        std::env::remove_var("RESEND_FROM");
+    }
 }
