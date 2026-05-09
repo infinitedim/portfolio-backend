@@ -18,7 +18,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 ///   * `LOG_DIR` unset:
 ///       - In `ENVIRONMENT=production` we default to **stdout-only** (the
 ///         expected 12-factor configuration for ephemeral container
-///         platforms like Railway, Fly.io, ECS, Kubernetes — they all
+///         platforms like Fly.io, ECS, Kubernetes — they all
 ///         aggregate logs from stdout/stderr; writing to disk on a
 ///         distroless / read-only / ephemeral filesystem just panics
 ///         the process at startup).
@@ -60,8 +60,8 @@ fn prepare_log_dir(dir: &Path) -> Option<PathBuf> {
     // `create_dir_all` succeeds on read-only mounts when the directory
     // already exists, so probe writeability with a touch file. This catches
     // the case where the deploy target has the directory but no write
-    // permission for the runtime user (e.g. Railway running our distroless
-    // container as UID 1001 against the read-only image filesystem).
+    // permission for the runtime user (e.g. distroless/container image as
+    // UID 1001 on a read-only filesystem).
     let probe = dir.join(".portfolio-backend-write-probe");
     match std::fs::File::create(&probe) {
         Ok(_) => {

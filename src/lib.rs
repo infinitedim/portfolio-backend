@@ -71,7 +71,8 @@ pub fn create_app() -> Router {
     // — gives roughly five attempts per minute, which is the contract the old
     // ad-hoc rate limiter promised. SmartIpKeyExtractor reads
     // X-Forwarded-For/X-Real-IP/Forwarded so it works correctly behind the
-    // Railway/Vercel proxy. ConnectInfo<SocketAddr> is kept as a fallback.
+    // Reverse-proxy headers (Vercel, load balancers, etc.). ConnectInfo<SocketAddr>
+    // is kept as a fallback when headers are absent.
     let auth_governor = std::sync::Arc::new(
         GovernorConfigBuilder::default()
             .per_millisecond(12_000)
@@ -224,6 +225,38 @@ pub fn create_app() -> Router {
         .layer(cors)
 }
 
+/// Production-only checks for secrets, admin bootstrap, and CORS allowlist.
+/// Panics when `ENVIRONMENT=production` and configuration is unsafe.
+pub(crate) fn assert_production_environment_or_panic() {
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
+    if environment != "production" {
+        return;
+    }
+
+    // Touch the lazy_static secrets so any misconfiguration panics at
+    // startup, not on the first request that hits the auth handler.
+    let _ = &*routes::auth::JWT_SECRET;
+    let _ = &*routes::auth::REFRESH_SECRET;
+
+    let admin_email = std::env::var("ADMIN_EMAIL").unwrap_or_default();
+    let admin_password_set =
+        std::env::var("ADMIN_HASH_PASSWORD").is_ok() || std::env::var("ADMIN_PASSWORD").is_ok();
+
+    if admin_email.is_empty() || admin_email == "admin@example.com" {
+        panic!("FATAL: ADMIN_EMAIL must be set to a real address in production.");
+    }
+    if !admin_password_set {
+        panic!("FATAL: ADMIN_HASH_PASSWORD or ADMIN_PASSWORD must be set in production.");
+    }
+
+    if std::env::var("ALLOWED_ORIGINS").is_err() && std::env::var("FRONTEND_ORIGIN").is_err() {
+        panic!(
+            "FATAL: ALLOWED_ORIGINS (or FRONTEND_ORIGIN) must be set in production. \
+             Refusing to start with a localhost CORS allowlist."
+        );
+    }
+}
+
 pub async fn run() {
     dotenvy::dotenv().ok();
 
@@ -231,32 +264,9 @@ pub async fn run() {
 
     routes::health::init_start_time();
 
+    assert_production_environment_or_panic();
+
     let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
-    if environment == "production" {
-        // Touch the lazy_static secrets so any misconfiguration panics at
-        // startup, not on the first request that hits the auth handler.
-        let _ = &*routes::auth::JWT_SECRET;
-        let _ = &*routes::auth::REFRESH_SECRET;
-
-        let admin_email = std::env::var("ADMIN_EMAIL").unwrap_or_default();
-        let admin_password_set =
-            std::env::var("ADMIN_HASH_PASSWORD").is_ok() || std::env::var("ADMIN_PASSWORD").is_ok();
-
-        if admin_email.is_empty() || admin_email == "admin@example.com" {
-            panic!("FATAL: ADMIN_EMAIL must be set to a real address in production.");
-        }
-        if !admin_password_set {
-            panic!("FATAL: ADMIN_HASH_PASSWORD or ADMIN_PASSWORD must be set in production.");
-        }
-
-        if std::env::var("ALLOWED_ORIGINS").is_err() && std::env::var("FRONTEND_ORIGIN").is_err() {
-            panic!(
-                "FATAL: ALLOWED_ORIGINS (or FRONTEND_ORIGIN) must be set in production. \
-                 Refusing to start with a localhost CORS allowlist."
-            );
-        }
-    }
-
     let is_production = environment == "production";
 
     if std::env::var("DATABASE_URL").is_ok() {
@@ -308,7 +318,7 @@ pub async fn run() {
     let app = create_app();
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    // Default 8080 to match Docker/Compose/Railway conventions.
+    // Default 8080 to match Docker/Compose conventions.
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -333,7 +343,7 @@ pub async fn run() {
     tracing::info!("Server shut down cleanly.");
 }
 
-/// Wait for SIGTERM (Kubernetes/Railway/Docker stop) or Ctrl-C and let in-flight
+/// Wait for SIGTERM (Kubernetes/Docker stop) or Ctrl-C and let in-flight
 /// requests finish before the runtime exits.
 async fn shutdown_signal() {
     use tokio::signal;

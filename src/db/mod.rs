@@ -75,7 +75,7 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     Ok(pool)
 }
 
-/// Retry [`init_pool`] with exponential backoff. Compose, Railway, and most
+/// Retry [`init_pool`] with exponential backoff. Compose and most
 /// PaaS schedulers report Postgres as "healthy" the moment `pg_isready`
 /// returns, but the embedded DNS for the service hostname can still be
 /// briefly missing on first boot — and we'd rather wait a few seconds than

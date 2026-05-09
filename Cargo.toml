@@ -18,7 +18,7 @@ tower-http = { version = "0.6", features = [
   "fs",
 ] }
 # Production-grade rate limiter. Replaces the in-memory HashMap that was
-# broken behind the Railway/Vercel proxy (no X-Forwarded-For parsing) and
+# broken behind reverse proxies without X-Forwarded-For parsing and
 # allowed unbounded memory growth.
 tower_governor = { version = "0.8", default-features = false, features = [
   "axum",
