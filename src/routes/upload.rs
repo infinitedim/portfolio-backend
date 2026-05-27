@@ -27,7 +27,7 @@ fn upload_dir() -> PathBuf {
     PathBuf::from(std::env::var("UPLOAD_DIR").unwrap_or_else(|_| DEFAULT_UPLOAD_DIR.to_string()))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadResponse {
     pub url: String,
@@ -36,7 +36,7 @@ pub struct UploadResponse {
     pub mime_type: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
     pub filename: String,
@@ -45,7 +45,7 @@ pub struct ImageInfo {
     pub created_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageListResponse {
     pub images: Vec<ImageInfo>,
@@ -91,6 +91,17 @@ fn sanitize_filename(filename: &str) -> bool {
         && !filename.contains('\0')
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/upload/image",
+    tag = "Upload",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Image uploaded", body = UploadResponse),
+        (status = 400, description = "Invalid file", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+    )
+)]
 pub async fn upload_image(headers: HeaderMap, mut multipart: Multipart) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
@@ -243,6 +254,18 @@ pub async fn upload_image(headers: HeaderMap, mut multipart: Multipart) -> impl 
         .into_response()
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/upload/image/{filename}",
+    tag = "Upload",
+    security(("bearer_auth" = [])),
+    params(("filename" = String, Path, description = "Uploaded filename")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Not found", body = ErrorResponse),
+    )
+)]
 pub async fn delete_image(headers: HeaderMap, Path(filename): Path<String>) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
@@ -294,6 +317,16 @@ pub async fn delete_image(headers: HeaderMap, Path(filename): Path<String>) -> i
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/upload/images",
+    tag = "Upload",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Image list", body = ImageListResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+    )
+)]
 pub async fn list_images(headers: HeaderMap) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();

@@ -1,6 +1,7 @@
 pub mod db;
 pub mod email;
 pub mod logging;
+pub mod metrics;
 pub mod openapi;
 pub mod routes;
 
@@ -13,7 +14,7 @@ pub mod test_support;
 use axum::{
     http::{HeaderValue, Method},
     middleware,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use std::net::SocketAddr;
@@ -59,11 +60,14 @@ pub fn configure_cors() -> CorsLayer {
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static("x-api-key"),
         ])
         .allow_credentials(true)
 }
 
 pub fn create_app() -> Router {
+    let _metrics = metrics::init();
+
     let cors = configure_cors();
     tracing::info!("CORS configured");
 
@@ -115,6 +119,61 @@ pub fn create_app() -> Router {
             .use_headers()
             .finish()
             .expect("gate governor config"),
+    );
+
+    // Pageview beacons: generous cap for SPA navigation bursts.
+    let analytics_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(30)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("analytics governor config"),
+    );
+
+    // GitHub proxy: cached upstream; limit abuse of our egress.
+    let github_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(2)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("github governor config"),
+    );
+
+    // Spotify now playing: 30s cache; tight burst to match widget polling.
+    let spotify_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("spotify governor config"),
+    );
+
+    // Newsletter broadcast: admin-only, tight cap.
+    let newsletter_broadcast_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(30)
+            .burst_size(2)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("newsletter broadcast governor config"),
+    );
+
+    // Public newsletter subscribe/unsubscribe.
+    let newsletter_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(10)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("newsletter governor config"),
     );
 
     let gate_config = routes::gate::GateConfig::from_env();
@@ -176,10 +235,36 @@ pub fn create_app() -> Router {
         .route("/api/logs", post(routes::logs::receive_client_logs))
         .layer(GovernorLayer::new(logs_governor));
 
+    let analytics_routes = Router::new()
+        .route(
+            "/api/analytics/pageview",
+            post(metrics::record_pageview),
+        )
+        .layer(GovernorLayer::new(analytics_governor));
+
+    let github_routes = Router::new()
+        .route(
+            "/api/github/user/{username}",
+            get(routes::github::get_user),
+        )
+        .route(
+            "/api/github/stats/{username}",
+            get(routes::github::get_stats),
+        )
+        .layer(GovernorLayer::new(github_governor));
+
+    let spotify_routes = Router::new()
+        .route(
+            "/api/spotify/now-playing",
+            get(routes::spotify::now_playing),
+        )
+        .layer(GovernorLayer::new(spotify_governor));
+
     // Contact + admin inbox routes. Contact submission is public but
     // rate-limited; admin endpoints are guarded inside the handler via
     // `require_admin` so they don't need a separate auth middleware here.
     let mailer: Arc<dyn email::Mailer> = email::from_env();
+    let mailer_for_newsletter = mailer.clone();
     let contact_public = Router::new()
         .route(
             "/api/contact",
@@ -191,11 +276,110 @@ pub fn create_app() -> Router {
     let admin_messages_routes = Router::new()
         .route("/api/admin/messages", get(routes::contact::list_messages))
         .route(
+            "/api/admin/messages/bulk",
+            patch(routes::contact::bulk_mark_messages_read)
+                .delete(routes::contact::bulk_delete_messages),
+        )
+        .route(
             "/api/admin/messages/{id}",
             get(routes::contact::get_message)
                 .patch(routes::contact::update_message)
                 .delete(routes::contact::delete_message),
         );
+
+    let admin_series_routes = Router::new()
+        .route(
+            "/api/admin/series",
+            get(routes::series::list_series_admin).post(routes::series::create_series),
+        )
+        .route(
+            "/api/admin/series/{slug}",
+            get(routes::series::get_series_admin)
+                .patch(routes::series::update_series)
+                .delete(routes::series::delete_series),
+        );
+
+    let admin_blog_routes = Router::new()
+        .route(
+            "/api/admin/blog/translations/link",
+            post(routes::blog::link_translations),
+        )
+        .route(
+            "/api/admin/blog/translations",
+            get(routes::blog::get_translation_group),
+        );
+
+    let admin_portfolio_routes = Router::new()
+        .route(
+            "/api/admin/portfolio/versions",
+            get(routes::portfolio::list_portfolio_versions),
+        )
+        .route(
+            "/api/admin/portfolio/versions/{id}/restore",
+            post(routes::portfolio::restore_portfolio_version),
+        );
+
+    let playground_routes = Router::new()
+        .route(
+            "/api/playground/snippets",
+            post(routes::playground::create_snippet),
+        )
+        .route(
+            "/api/playground/snippets/{id}",
+            get(routes::playground::get_snippet),
+        );
+
+    let newsletter_public = Router::new()
+        .route(
+            "/api/newsletter/subscribe",
+            post(routes::newsletter::subscribe),
+        )
+        .route("/api/newsletter/confirm", get(routes::newsletter::confirm))
+        .route(
+            "/api/newsletter/unsubscribe",
+            post(routes::newsletter::unsubscribe),
+        )
+        .layer(GovernorLayer::new(newsletter_governor))
+        .with_state(mailer_for_newsletter.clone());
+
+    let newsletter_admin = Router::new()
+        .route(
+            "/api/admin/newsletter/subscribers",
+            get(routes::newsletter::list_subscribers),
+        )
+        .route(
+            "/api/admin/newsletter/broadcast",
+            post(routes::newsletter::broadcast),
+        )
+        .layer(GovernorLayer::new(newsletter_broadcast_governor))
+        .with_state(mailer_for_newsletter);
+
+    let cms_state = routes::cms::CmsState::from_env();
+    let cms_routes = Router::new()
+        .route("/api/v1/content/blog", get(routes::cms::list_blog))
+        .route(
+            "/api/v1/content/blog/{slug}",
+            get(routes::cms::get_blog_post).patch(routes::cms::update_blog_post),
+        )
+        .route(
+            "/api/v1/content/portfolio",
+            get(routes::cms::get_portfolio),
+        )
+        .layer(middleware::from_fn_with_state(
+            cms_state.clone(),
+            routes::cms::require_api_key,
+        ))
+        .with_state(cms_state);
+
+    let ai_state = routes::ai::AiState::from_env();
+    let ai_routes = Router::new()
+        .route("/api/ai/chat", post(routes::ai::chat))
+        .with_state(ai_state);
+
+    let presence_state = routes::presence::PresenceState::new();
+    let presence_routes = Router::new()
+        .route("/ws/presence", get(routes::presence::ws_handler))
+        .with_state(presence_state);
 
     // Main routes with default body limit (2MB)
     let main_routes = Router::new()
@@ -225,19 +409,37 @@ pub fn create_app() -> Router {
                 .patch(routes::blog::update_post)
                 .delete(routes::blog::delete_post),
         )
+        .route("/api/blog/series", get(routes::series::list_series_public))
+        .route(
+            "/api/blog/series/{slug}",
+            get(routes::series::get_series_public),
+        )
         .route("/health", get(routes::health::health_ping))
         .route("/health/detailed", get(routes::health::health_detailed))
         .route("/health/database", get(routes::health::health_database))
         .route("/health/redis", get(routes::health::health_redis))
         .route("/health/ready", get(routes::health::health_ready))
+        .route("/metrics", get(metrics::metrics_handler))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024));
 
     let mut app = Router::new()
         .merge(upload_routes)
         .merge(auth_routes)
         .merge(logs_routes)
+        .merge(analytics_routes)
+        .merge(github_routes)
+        .merge(spotify_routes)
         .merge(contact_public)
+        .merge(newsletter_public)
+        .merge(newsletter_admin)
+        .merge(playground_routes)
+        .merge(cms_routes)
+        .merge(ai_routes)
+        .merge(presence_routes)
         .merge(admin_messages_routes)
+        .merge(admin_series_routes)
+        .merge(admin_blog_routes)
+        .merge(admin_portfolio_routes)
         .merge(gate_routes)
         .merge(main_routes);
 
@@ -257,6 +459,7 @@ pub fn create_app() -> Router {
     }
 
     app.nest_service("/uploads", ServeDir::new("uploads"))
+        .layer(middleware::from_fn(metrics::track_http_metrics))
         .layer(logging::middleware::propagate_request_id_layer())
         .layer(middleware::from_fn(logging::middleware::log_request))
         .layer(logging::middleware::request_id_layer())
@@ -427,6 +630,22 @@ mod tests {
     #[test]
     fn test_create_app_returns_router() {
         let _app = create_app();
+    }
+
+    #[tokio::test]
+    async fn create_app_exposes_metrics_route() {
+        let app = create_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("metrics response");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

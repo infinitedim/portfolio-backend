@@ -71,6 +71,29 @@ pub trait Mailer: Send + Sync {
     /// Implementations may render their own subject/body — the message
     /// content is provided as plain fields for convenience.
     async fn send_contact_notification(&self, msg: &ContactMessage) -> Result<(), MailerError>;
+
+    /// Double opt-in confirmation link for newsletter subscribers.
+    async fn send_newsletter_confirmation(
+        &self,
+        email: &str,
+        confirm_url: &str,
+    ) -> Result<(), MailerError> {
+        let _ = (email, confirm_url);
+        tracing::debug!("Mailer: send_newsletter_confirmation not implemented for this transport");
+        Ok(())
+    }
+
+    /// Broadcast email to a confirmed subscriber.
+    async fn send_newsletter_broadcast(
+        &self,
+        email: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<(), MailerError> {
+        let _ = (email, subject, body);
+        tracing::debug!("Mailer: send_newsletter_broadcast not implemented for this transport");
+        Ok(())
+    }
 }
 
 /// No-op transport. Used when no provider is configured. Always returns Ok.
@@ -136,6 +159,39 @@ impl ResendMailer {
             "text": body,
         })
     }
+
+    async fn send_raw_email(
+        &self,
+        to: &str,
+        subject: &str,
+        text: &str,
+    ) -> Result<(), MailerError> {
+        let payload = json!({
+            "from": self.from,
+            "to": [to],
+            "subject": subject,
+            "text": text,
+        });
+
+        let res = self
+            .client
+            .post("https://api.resend.com/emails")
+            .bearer_auth(&self.api_key)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| MailerError::Transport(e.to_string()))?;
+
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            return Err(MailerError::Provider {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -161,6 +217,30 @@ impl Mailer for ResendMailer {
             });
         }
         Ok(())
+    }
+
+    async fn send_newsletter_confirmation(
+        &self,
+        email: &str,
+        confirm_url: &str,
+    ) -> Result<(), MailerError> {
+        let subject = "Confirm your newsletter subscription";
+        let body = format!(
+            "Thanks for subscribing to the portfolio newsletter.\n\n\
+             Please confirm your subscription by visiting:\n{}\n\n\
+             If you did not request this, you can ignore this email.",
+            confirm_url
+        );
+        self.send_raw_email(email, subject, &body).await
+    }
+
+    async fn send_newsletter_broadcast(
+        &self,
+        email: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<(), MailerError> {
+        self.send_raw_email(email, subject, body).await
     }
 }
 

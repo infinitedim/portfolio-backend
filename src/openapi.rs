@@ -64,11 +64,19 @@ impl Modify for SecurityAddon {
         (name = "Authentication", description = "Admin login, registration, and token lifecycle"),
         (name = "Two-Factor Auth", description = "TOTP enrollment + 2FA login challenge"),
         (name = "Blog", description = "Blog posts CRUD + tag listing"),
+        (name = "Blog Series", description = "Blog series / collections"),
         (name = "Portfolio", description = "Portfolio sections (skills, projects, about, experience)"),
         (name = "Contact", description = "Public contact-form submission and admin inbox"),
         (name = "Health", description = "Liveness / readiness probes"),
         (name = "RSS", description = "RSS feed for blog posts"),
         (name = "Gate", description = "Terminal gate puzzle verification"),
+        (name = "Upload", description = "Blog image upload (admin)"),
+        (name = "Logs", description = "Client log ingestion"),
+        (name = "Roadmap", description = "Roadmap.sh proxy"),
+        (name = "Analytics", description = "Lightweight page view beacons"),
+        (name = "GitHub", description = "GitHub API proxy"),
+        (name = "Spotify", description = "Spotify now playing widget"),
+        (name = "Metrics", description = "Prometheus scrape endpoint"),
     ),
     modifiers(&SecurityAddon),
     paths(
@@ -91,15 +99,33 @@ impl Modify for SecurityAddon {
         routes::blog::update_post,
         routes::blog::delete_post,
         routes::blog::list_tags,
+        routes::blog::link_translations,
+        routes::blog::get_translation_group,
+        // Blog series
+        routes::series::list_series_public,
+        routes::series::get_series_public,
+        routes::series::list_series_admin,
+        routes::series::create_series,
+        routes::series::get_series_admin,
+        routes::series::update_series,
+        routes::series::delete_series,
         // Portfolio
         routes::portfolio::get_portfolio,
         routes::portfolio::update_portfolio,
+        routes::portfolio::list_portfolio_versions,
+        routes::portfolio::restore_portfolio_version,
         // Contact
         routes::contact::submit_contact_message,
         routes::contact::list_messages,
         routes::contact::get_message,
         routes::contact::update_message,
         routes::contact::delete_message,
+        routes::contact::bulk_mark_messages_read,
+        routes::contact::bulk_delete_messages,
+        // Upload
+        routes::upload::upload_image,
+        routes::upload::delete_image,
+        routes::upload::list_images,
         // Health
         routes::health::health_ping,
         routes::health::health_detailed,
@@ -112,7 +138,51 @@ impl Modify for SecurityAddon {
         routes::gate::status,
         routes::gate::verify,
         routes::gate::unlock,
-    )
+        routes::gate::challenge_2_stub,
+        routes::gate::challenge_2_manifest,
+        routes::gate::challenge_2_trigger,
+        routes::gate::challenge_3_crash,
+        routes::gate::challenge_3_run,
+        // Logs
+        routes::logs::receive_client_logs,
+        // Roadmap
+        routes::roadmap::get_streak,
+        routes::roadmap::get_dashboard,
+        routes::roadmap::get_teams,
+        routes::roadmap::get_favourites,
+        // Analytics
+        crate::metrics::record_pageview,
+        // GitHub
+        routes::github::get_user,
+        routes::github::get_stats,
+        // Spotify
+        routes::spotify::now_playing,
+    ),
+    components(schemas(
+        crate::metrics::PageviewRequest,
+        crate::metrics::PageviewResponse,
+        routes::github::GitHubUserResponse,
+        routes::github::GitHubStatsResponse,
+        routes::github::GitHubRepoSummary,
+        routes::github::GitHubProfileStats,
+        routes::spotify::NowPlayingResponse,
+        routes::upload::UploadResponse,
+        routes::upload::ImageInfo,
+        routes::upload::ImageListResponse,
+        routes::contact::BulkMessageIdsRequest,
+        routes::contact::BulkMessageActionResponse,
+        routes::gate::StubRequest,
+        routes::gate::StubResponse,
+        routes::gate::ManifestRequest,
+        routes::gate::TriggerRequest,
+        routes::gate::TriggerResponse,
+        routes::gate::CrashRequest,
+        routes::gate::CrashResponse,
+        routes::gate::RunRequest,
+        routes::gate::RunResponse,
+        crate::logging::config::ClientLogBatch,
+        crate::logging::config::LogResponse,
+    ))
 )]
 pub struct ApiDoc;
 
@@ -151,5 +221,9 @@ mod tests {
         assert!(spec.paths.paths.contains_key("/api/blog"));
         assert!(spec.paths.paths.contains_key("/api/contact"));
         assert!(spec.paths.paths.contains_key("/health/ready"));
+        assert!(spec.paths.paths.contains_key("/api/analytics/pageview"));
+        assert!(spec.paths.paths.contains_key("/api/github/user/{username}"));
+        assert!(spec.paths.paths.contains_key("/api/blog/series"));
+        assert!(spec.paths.paths.contains_key("/api/admin/portfolio/versions"));
     }
 }

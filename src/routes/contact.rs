@@ -122,6 +122,18 @@ pub struct UpdateMessageRequest {
     pub read: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkMessageIdsRequest {
+    pub ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkMessageActionResponse {
+    pub affected: u64,
+}
+
 /// Cheap, RFC-5322-ish email check. We deliberately don't pull in a
 /// dedicated email-validation crate: the goal here is to reject obvious
 /// garbage at the boundary, not to verify deliverability — that responsibility
@@ -292,6 +304,8 @@ pub async fn submit_contact_message(
         from = %email,
         "Stored new contact message"
     );
+
+    crate::metrics::record_contact_submission();
 
     Ok((
         StatusCode::CREATED,
@@ -484,6 +498,90 @@ pub async fn delete_message(
         return Err(AppError::NotFound);
     }
     Ok((StatusCode::NO_CONTENT, ()).into_response())
+}
+
+fn validate_bulk_ids(ids: &[Uuid]) -> Result<(), AppError> {
+    if ids.is_empty() {
+        return Err(AppError::BadRequest("ids must not be empty".to_string()));
+    }
+    if ids.len() > 100 {
+        return Err(AppError::BadRequest(
+            "ids must contain at most 100 items".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/admin/messages/bulk",
+    tag = "Contact",
+    security(("bearer_auth" = [])),
+    request_body = BulkMessageIdsRequest,
+    responses(
+        (status = 200, description = "Messages updated", body = BulkMessageActionResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
+    ),
+)]
+pub async fn bulk_mark_messages_read(
+    headers: HeaderMap,
+    Json(payload): Json<BulkMessageIdsRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers)?;
+    validate_bulk_ids(&payload.ids)?;
+    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+
+    let result = sqlx::query(
+        "UPDATE contact_messages SET read = true WHERE id = ANY($1::uuid[])",
+    )
+    .bind(&payload.ids)
+    .execute(pool.as_ref())
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(BulkMessageActionResponse {
+            affected: result.rows_affected(),
+        }),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/admin/messages/bulk",
+    tag = "Contact",
+    security(("bearer_auth" = [])),
+    request_body = BulkMessageIdsRequest,
+    responses(
+        (status = 200, description = "Messages deleted", body = BulkMessageActionResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
+    ),
+)]
+pub async fn bulk_delete_messages(
+    headers: HeaderMap,
+    Json(payload): Json<BulkMessageIdsRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers)?;
+    validate_bulk_ids(&payload.ids)?;
+    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+
+    let result = sqlx::query("DELETE FROM contact_messages WHERE id = ANY($1::uuid[])")
+        .bind(&payload.ids)
+        .execute(pool.as_ref())
+        .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(BulkMessageActionResponse {
+            affected: result.rows_affected(),
+        }),
+    )
+        .into_response())
 }
 
 #[cfg(test)]

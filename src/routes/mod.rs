@@ -1,12 +1,20 @@
+pub mod ai;
 pub mod auth;
 pub mod blog;
+pub mod cms;
 pub mod contact;
 pub mod gate;
+pub mod github;
 pub mod health;
 pub mod logs;
+pub mod newsletter;
+pub mod playground;
 pub mod portfolio;
+pub mod presence;
 pub mod roadmap;
 pub mod rss;
+pub mod series;
+pub mod spotify;
 pub mod twofa;
 pub mod upload;
 

@@ -41,6 +41,16 @@ const REDACT_KEY_FRAGMENTS: &[&str] = &[
 
 const REDACTED: &str = "[REDACTED]";
 
+#[utoipa::path(
+    post,
+    path = "/api/logs",
+    tag = "Logs",
+    request_body = ClientLogBatch,
+    responses(
+        (status = 200, description = "Logs accepted", body = LogResponse),
+        (status = 413, description = "Batch too large", body = LogResponse),
+    )
+)]
 #[tracing::instrument(skip(logs, headers), fields(batch_size = logs.logs.len()))]
 pub async fn receive_client_logs(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

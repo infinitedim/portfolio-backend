@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Web framework
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = [
@@ -69,11 +69,16 @@ sqlx = { version = "0.8", default-features = false, features = [
 ammonia = "4"
 regex = "1"
 
-# HTTP client (roadmap.sh proxy, Resend mailer)
+# HTTP client (roadmap.sh proxy, Resend mailer, Gemini SSE)
 reqwest = { version = "0.12", features = [
   "json",
+  "stream",
   "rustls-tls",
 ], default-features = false }
+
+# SSE streaming for AI chat responses
+futures-util = "0.3"
+tokio-stream = "0.1"
 
 # Async trait support — needed for `dyn Mailer` since axum 0.8 dropped
 # the `async_trait` re-export and Rust's native AFIT is not yet
@@ -85,6 +90,10 @@ async-trait = "0.1"
 # and let the frontend render the QR code with a pure-JS library to avoid
 # pulling cairo/SVG dependencies into the Rust build.
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+
+# Prometheus metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
 
 # OpenAPI / Swagger documentation. `axum_extras` lets utoipa parse path /
 # query params automatically; `uuid` and `chrono` map our DB types to

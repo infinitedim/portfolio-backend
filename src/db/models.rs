@@ -99,8 +99,33 @@ pub struct BlogPost {
     /// the past, the post is treated as published regardless of the
     /// `published` flag (so admins don't have to flip it manually).
     pub publish_at: Option<DateTime<Utc>>,
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
+    pub locale: String,
+    pub translation_group_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BlogSeries {
+    pub id: Uuid,
+    pub title: String,
+    pub slug: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioVersion {
+    pub id: Uuid,
+    pub section_key: String,
+    #[schema(value_type = Object)]
+    pub content: serde_json::Value,
+    pub created_at: DateTime<Utc>,
 }
 
 impl BlogPost {
@@ -181,5 +206,49 @@ pub struct ContactMessage {
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
     pub read: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaygroundSnippet {
+    pub id: Uuid,
+    pub title: String,
+    pub language: String,
+    pub code: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsletterSubscriber {
+    pub id: Uuid,
+    pub email: String,
+    pub confirmed: bool,
+    pub confirm_token: Option<String>,
+    pub unsubscribe_token: String,
+    pub subscribed_at: DateTime<Utc>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub unsubscribed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ApiKeyRecord {
+    pub id: Uuid,
+    pub name: String,
+    pub key_hash: String,
+    pub scope: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ContentEmbeddingRow {
+    pub id: Uuid,
+    pub source_type: String,
+    pub source_id: String,
+    pub chunk_index: i32,
+    pub chunk_text: String,
     pub created_at: DateTime<Utc>,
 }

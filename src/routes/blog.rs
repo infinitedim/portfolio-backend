@@ -28,6 +28,18 @@ pub struct BlogListQuery {
     pub search: Option<String>,
     pub tag: Option<String>,
     pub sort: Option<String>,
+    /// Filter posts belonging to a series (by series slug).
+    pub series: Option<String>,
+    /// BCP-47-ish locale code (defaults to `en` when omitted).
+    pub locale: Option<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct BlogSlugQuery {
+    #[serde(default = "default_locale")]
+    pub locale: String,
 }
 
 pub fn default_page() -> i64 {
@@ -36,6 +48,18 @@ pub fn default_page() -> i64 {
 
 pub fn default_page_size() -> i64 {
     10
+}
+
+pub fn default_locale() -> String {
+    "en".to_string()
+}
+
+pub fn is_valid_locale(locale: &str) -> bool {
+    !locale.is_empty()
+        && locale.len() <= 10
+        && locale
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -59,6 +83,9 @@ pub struct BlogPostSummary {
     pub reading_time_minutes: i32,
     pub publish_at: Option<DateTime<Utc>>,
     pub status: BlogStatus,
+    pub locale: String,
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -78,6 +105,10 @@ pub struct BlogPostResponse {
     pub view_count: i64,
     pub publish_at: Option<DateTime<Utc>>,
     pub status: BlogStatus,
+    pub locale: String,
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
+    pub translation_group_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -97,6 +128,10 @@ pub struct CreateBlogRequest {
     /// until the timestamp passes (no background job needed — the public
     /// list filter handles it).
     pub publish_at: Option<DateTime<Utc>>,
+    pub locale: Option<String>,
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
+    pub translation_group_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -115,6 +150,10 @@ pub struct UpdateBlogRequest {
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     #[schema(value_type = Option<DateTime<Utc>>, nullable, required = false)]
     pub publish_at: Option<Option<DateTime<Utc>>>,
+    pub locale: Option<String>,
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
+    pub translation_group_id: Option<Uuid>,
 }
 
 /// Distinguish "key absent" (`None`) from "key present but null" (`Some(None)`)
@@ -174,6 +213,8 @@ async fn fetch_blog_list(
     published: Option<bool>,
     search: Option<&str>,
     tag: Option<&str>,
+    series_slug: Option<&str>,
+    locale: Option<&str>,
     order_clause: &str,
 ) -> Result<(Vec<BlogPost>, i64), sqlx::Error> {
     // Build WHERE clause + bindings dynamically. Bind indices below match
@@ -212,6 +253,17 @@ async fn fetch_blog_list(
         where_clauses.push(format!("${} = ANY(tags)", idx));
         idx += 1;
     }
+    if series_slug.is_some() {
+        where_clauses.push(format!(
+            "series_id = (SELECT id FROM blog_series WHERE slug = ${idx})",
+            idx = idx
+        ));
+        idx += 1;
+    }
+    if locale.is_some() {
+        where_clauses.push(format!("locale = ${idx}", idx = idx));
+        idx += 1;
+    }
 
     let where_sql = if where_clauses.is_empty() {
         String::new()
@@ -224,7 +276,8 @@ async fn fetch_blog_list(
 
     let select_sql = format!(
         r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
-                  published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+                  published, tags, reading_time_minutes, view_count, publish_at,
+                  series_id, series_order, locale, translation_group_id, created_at, updated_at
            FROM blog_posts {where} {order} LIMIT ${limit} OFFSET ${offset}"#,
         where = where_sql,
         order = order_clause,
@@ -247,6 +300,14 @@ async fn fetch_blog_list(
     if let Some(t) = tag {
         select_q = select_q.bind(t.to_string());
         count_q = count_q.bind(t.to_string());
+    }
+    if let Some(s) = series_slug {
+        select_q = select_q.bind(s.to_string());
+        count_q = count_q.bind(s.to_string());
+    }
+    if let Some(l) = locale {
+        select_q = select_q.bind(l.to_string());
+        count_q = count_q.bind(l.to_string());
     }
     select_q = select_q.bind(page_size).bind(offset);
 
@@ -286,6 +347,18 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
+    let series_filter = query
+        .series
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let locale_filter = query
+        .locale
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase());
+
     let order_clause = match query.sort.as_deref() {
         Some("updated") => "ORDER BY updated_at DESC",
         Some("views") => "ORDER BY view_count DESC",
@@ -300,6 +373,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         query.published,
         search_pattern.as_deref(),
         tag_filter.as_deref(),
+        series_filter.as_deref(),
+        locale_filter.as_deref(),
         order_clause,
     )
     .await?;
@@ -318,6 +393,9 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
                 reading_time_minutes: p.reading_time_minutes,
                 publish_at: p.publish_at,
                 status,
+                locale: p.locale,
+                series_id: p.series_id,
+                series_order: p.series_order,
                 created_at: p.created_at,
                 updated_at: p.updated_at,
             }
@@ -345,11 +423,44 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         .into_response())
 }
 
+fn post_to_response(post: BlogPost) -> BlogPostResponse {
+    let status = post.status();
+    BlogPostResponse {
+        id: post.id,
+        title: post.title,
+        slug: post.slug,
+        summary: post.summary,
+        content_md: post.content_md,
+        content_html: post.content_html,
+        published: post.published,
+        tags: post.tags,
+        reading_time_minutes: post.reading_time_minutes,
+        view_count: post.view_count,
+        publish_at: post.publish_at,
+        status,
+        locale: post.locale,
+        series_id: post.series_id,
+        series_order: post.series_order,
+        translation_group_id: post.translation_group_id,
+        created_at: post.created_at,
+        updated_at: post.updated_at,
+    }
+}
+
+const BLOG_POST_RETURNING: &str = r#"
+        id, title, slug, summary, content_md, content_html, published, tags,
+        reading_time_minutes, view_count, publish_at, series_id, series_order,
+        locale, translation_group_id, created_at, updated_at
+"#;
+
 #[utoipa::path(
     get,
     path = "/api/blog/{slug}",
     tag = "Blog",
-    params(("slug" = String, Path, description = "URL-friendly slug")),
+    params(
+        ("slug" = String, Path, description = "URL-friendly slug"),
+        BlogSlugQuery,
+    ),
     responses(
         (status = 200, description = "Single blog post", body = BlogPostResponse),
         (status = 404, description = "Slug not found", body = ErrorResponse),
@@ -359,6 +470,7 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
 pub async fn get_post(
     headers: HeaderMap,
     Path(slug): Path<String>,
+    Query(query): Query<BlogSlugQuery>,
 ) -> impl IntoResponse {
     if !is_valid_slug(&slug) {
         return (
@@ -368,6 +480,18 @@ pub async fn get_post(
                 message: Some(
                     "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
                 ),
+            }),
+        )
+            .into_response();
+    }
+
+    let locale = query.locale.to_lowercase();
+    if !is_valid_locale(&locale) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid locale".to_string(),
+                message: None,
             }),
         )
             .into_response();
@@ -390,23 +514,28 @@ pub async fn get_post(
     let is_admin = require_admin(&headers).is_ok();
 
     let sql = if is_admin {
-        r#"
+        format!(
+            r#"
         UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
-        WHERE slug = $1
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+        WHERE slug = $1 AND locale = $2
+        RETURNING {BLOG_POST_RETURNING}
         "#
+        )
     } else {
-        r#"
+        format!(
+            r#"
         UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
-        WHERE slug = $1
+        WHERE slug = $1 AND locale = $2
           AND ((publish_at IS NOT NULL AND publish_at <= now())
                OR (publish_at IS NULL AND published = true))
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+        RETURNING {BLOG_POST_RETURNING}
         "#
+        )
     };
 
-    match sqlx::query_as::<_, BlogPost>(sql)
+    match sqlx::query_as::<_, BlogPost>(&sql)
     .bind(&slug)
+    .bind(&locale)
     .fetch_optional(pool.as_ref())
     .await
     {
@@ -418,24 +547,7 @@ pub async fn get_post(
                     .parse()
                     .unwrap(),
             );
-            let status = post.status();
-            let response = BlogPostResponse {
-                id: post.id,
-                title: post.title,
-                slug: post.slug,
-                summary: post.summary,
-                content_md: post.content_md,
-                content_html: post.content_html,
-                published: post.published,
-                tags: post.tags,
-                reading_time_minutes: post.reading_time_minutes,
-                view_count: post.view_count,
-                publish_at: post.publish_at,
-                status,
-                created_at: post.created_at,
-                updated_at: post.updated_at,
-            };
-            (StatusCode::OK, headers, Json(response)).into_response()
+            (StatusCode::OK, headers, Json(post_to_response(post))).into_response()
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -515,6 +627,22 @@ pub async fn create_post(
             .into_response();
     }
 
+    let locale = payload
+        .locale
+        .as_deref()
+        .unwrap_or("en")
+        .to_lowercase();
+    if !is_valid_locale(&locale) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid locale".to_string(),
+                message: None,
+            }),
+        )
+            .into_response();
+    }
+
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -557,13 +685,19 @@ pub async fn create_post(
         .collect();
     let reading_time = calculate_reading_time(payload.content_md.as_deref());
 
-    match sqlx::query_as::<_, BlogPost>(
+    let insert_sql = format!(
         r#"
-        INSERT INTO blog_posts (title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, publish_at, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+        INSERT INTO blog_posts (
+            title, slug, summary, content_md, content_html, published, tags,
+            reading_time_minutes, publish_at, locale, series_id, series_order,
+            translation_group_id, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
+        RETURNING {BLOG_POST_RETURNING}
         "#
-    )
+    );
+
+    match sqlx::query_as::<_, BlogPost>(&insert_sql)
     .bind(&payload.title)
     .bind(&payload.slug)
     .bind(&payload.summary)
@@ -573,29 +707,14 @@ pub async fn create_post(
     .bind(&tags)
     .bind(reading_time)
     .bind(payload.publish_at)
+    .bind(&locale)
+    .bind(payload.series_id)
+    .bind(payload.series_order)
+    .bind(payload.translation_group_id)
     .fetch_one(pool.as_ref())
     .await
     {
-        Ok(post) => {
-            let status = post.status();
-            let response = BlogPostResponse {
-                id: post.id,
-                title: post.title,
-                slug: post.slug,
-                summary: post.summary,
-                content_md: post.content_md,
-                content_html: post.content_html,
-                published: post.published,
-                tags: post.tags,
-                reading_time_minutes: post.reading_time_minutes,
-                view_count: post.view_count,
-                publish_at: post.publish_at,
-                status,
-                created_at: post.created_at,
-                updated_at: post.updated_at,
-            };
-            (StatusCode::CREATED, Json(response)).into_response()
-        }
+        Ok(post) => (StatusCode::CREATED, Json(post_to_response(post))).into_response(),
         Err(e) => {
 
             if e.to_string().contains("duplicate key") || e.to_string().contains("unique constraint") {
@@ -625,7 +744,10 @@ pub async fn create_post(
     path = "/api/blog/{slug}",
     tag = "Blog",
     security(("bearer_auth" = [])),
-    params(("slug" = String, Path, description = "URL-friendly slug")),
+    params(
+        ("slug" = String, Path, description = "URL-friendly slug"),
+        BlogSlugQuery,
+    ),
     request_body = UpdateBlogRequest,
     responses(
         (status = 200, description = "Post updated", body = BlogPostResponse),
@@ -637,6 +759,7 @@ pub async fn create_post(
 pub async fn update_post(
     headers: HeaderMap,
     Path(slug): Path<String>,
+    Query(query): Query<BlogSlugQuery>,
     Json(payload): Json<UpdateBlogRequest>,
 ) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
@@ -651,6 +774,18 @@ pub async fn update_post(
                 message: Some(
                     "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
                 ),
+            }),
+        )
+            .into_response();
+    }
+
+    let locale = query.locale.to_lowercase();
+    if !is_valid_locale(&locale) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid locale".to_string(),
+                message: None,
             }),
         )
             .into_response();
@@ -713,7 +848,7 @@ pub async fn update_post(
             Some(Some(ts)) => (Some(ts), true),
         };
 
-    match sqlx::query_as::<_, BlogPost>(
+    let update_sql = format!(
         r#"
         UPDATE blog_posts
         SET title                = COALESCE($1, title),
@@ -724,11 +859,16 @@ pub async fn update_post(
             tags                 = COALESCE($6::TEXT[], tags),
             reading_time_minutes = COALESCE($7, reading_time_minutes),
             publish_at           = CASE WHEN $9 THEN $8 ELSE publish_at END,
+            series_id            = COALESCE($10, series_id),
+            series_order         = COALESCE($11, series_order),
+            translation_group_id = COALESCE($12, translation_group_id),
             updated_at           = now()
-        WHERE slug = $10
-        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+        WHERE slug = $13 AND locale = $14
+        RETURNING {BLOG_POST_RETURNING}
         "#
-    )
+    );
+
+    match sqlx::query_as::<_, BlogPost>(&update_sql)
     .bind(&payload.title)
     .bind(&payload.summary)
     .bind(&payload.content_md)
@@ -738,30 +878,15 @@ pub async fn update_post(
     .bind(reading_time_opt)
     .bind(publish_at_value)
     .bind(publish_at_present)
+    .bind(payload.series_id)
+    .bind(payload.series_order)
+    .bind(payload.translation_group_id)
     .bind(&slug)
+    .bind(&locale)
     .fetch_optional(pool.as_ref())
     .await
     {
-        Ok(Some(post)) => {
-            let status = post.status();
-            let response = BlogPostResponse {
-                id: post.id,
-                title: post.title,
-                slug: post.slug,
-                summary: post.summary,
-                content_md: post.content_md,
-                content_html: post.content_html,
-                published: post.published,
-                tags: post.tags,
-                reading_time_minutes: post.reading_time_minutes,
-                view_count: post.view_count,
-                publish_at: post.publish_at,
-                status,
-                created_at: post.created_at,
-                updated_at: post.updated_at,
-            };
-            (StatusCode::OK, Json(response)).into_response()
-        }
+        Ok(Some(post)) => (StatusCode::OK, Json(post_to_response(post))).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -788,14 +913,21 @@ pub async fn update_post(
     path = "/api/blog/{slug}",
     tag = "Blog",
     security(("bearer_auth" = [])),
-    params(("slug" = String, Path, description = "URL-friendly slug")),
+    params(
+        ("slug" = String, Path, description = "URL-friendly slug"),
+        BlogSlugQuery,
+    ),
     responses(
         (status = 200, description = "Post deleted", body = SuccessResponse),
         (status = 401, description = "Auth required", body = ErrorResponse),
         (status = 404, description = "Slug not found", body = ErrorResponse),
     ),
 )]
-pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl IntoResponse {
+pub async fn delete_post(
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Query(query): Query<BlogSlugQuery>,
+) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
@@ -808,6 +940,18 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
                 message: Some(
                     "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
                 ),
+            }),
+        )
+            .into_response();
+    }
+
+    let locale = query.locale.to_lowercase();
+    if !is_valid_locale(&locale) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid locale".to_string(),
+                message: None,
             }),
         )
             .into_response();
@@ -827,8 +971,9 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
         }
     };
 
-    match sqlx::query("DELETE FROM blog_posts WHERE slug = $1")
+    match sqlx::query("DELETE FROM blog_posts WHERE slug = $1 AND locale = $2")
         .bind(&slug)
+        .bind(&locale)
         .execute(pool.as_ref())
         .await
     {
@@ -857,6 +1002,213 @@ pub async fn delete_post(headers: HeaderMap, Path(slug): Path<String>) -> impl I
                 .into_response()
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkTranslationRequest {
+    pub slug_a: String,
+    #[serde(default = "default_locale")]
+    pub locale_a: String,
+    pub slug_b: String,
+    #[serde(default = "default_locale")]
+    pub locale_b: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationGroupResponse {
+    pub translation_group_id: Uuid,
+    pub posts: Vec<BlogPostSummary>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct TranslationGroupQuery {
+    pub group_id: Uuid,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/blog/translations/link",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    request_body = LinkTranslationRequest,
+    responses(
+        (status = 200, description = "Posts linked as translations", body = TranslationGroupResponse),
+        (status = 400, description = "Invalid input", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Post not found", body = ErrorResponse),
+    ),
+)]
+pub async fn link_translations(
+    headers: HeaderMap,
+    Json(payload): Json<LinkTranslationRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers)?;
+
+    if !is_valid_slug(&payload.slug_a) || !is_valid_slug(&payload.slug_b) {
+        return Err(AppError::BadRequest(
+            "Invalid slug format".to_string(),
+        ));
+    }
+
+    let locale_a = payload.locale_a.to_lowercase();
+    let locale_b = payload.locale_b.to_lowercase();
+    if !is_valid_locale(&locale_a) || !is_valid_locale(&locale_b) {
+        return Err(AppError::BadRequest("Invalid locale".to_string()));
+    }
+
+    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+
+    let post_a = sqlx::query_as::<_, BlogPost>(
+        &format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"),
+    )
+    .bind(&payload.slug_a)
+    .bind(&locale_a)
+    .fetch_optional(pool.as_ref())
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let post_b = sqlx::query_as::<_, BlogPost>(
+        &format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"),
+    )
+    .bind(&payload.slug_b)
+    .bind(&locale_b)
+    .fetch_optional(pool.as_ref())
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let group_id = post_a
+        .translation_group_id
+        .or(post_b.translation_group_id)
+        .unwrap_or_else(Uuid::new_v4);
+
+    sqlx::query(
+        "UPDATE blog_posts SET translation_group_id = $1, updated_at = now() WHERE id = ANY($2)",
+    )
+    .bind(group_id)
+    .bind(&[post_a.id, post_b.id][..])
+    .execute(pool.as_ref())
+    .await?;
+
+    let posts = sqlx::query_as::<_, BlogPost>(
+        &format!(
+            r#"
+            SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+                   published, tags, reading_time_minutes, view_count, publish_at,
+                   series_id, series_order, locale, translation_group_id, created_at, updated_at
+            FROM blog_posts
+            WHERE translation_group_id = $1
+            ORDER BY locale ASC
+            "#
+        ),
+    )
+    .bind(group_id)
+    .fetch_all(pool.as_ref())
+    .await?;
+
+    let summaries: Vec<BlogPostSummary> = posts
+        .into_iter()
+        .map(|p| {
+            let status = p.status();
+            BlogPostSummary {
+                id: p.id,
+                title: p.title,
+                slug: p.slug,
+                summary: p.summary,
+                published: p.published,
+                tags: p.tags,
+                reading_time_minutes: p.reading_time_minutes,
+                publish_at: p.publish_at,
+                status,
+                locale: p.locale,
+                series_id: p.series_id,
+                series_order: p.series_order,
+                created_at: p.created_at,
+                updated_at: p.updated_at,
+            }
+        })
+        .collect();
+
+    Ok((
+        StatusCode::OK,
+        Json(TranslationGroupResponse {
+            translation_group_id: group_id,
+            posts: summaries,
+        }),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/blog/translations",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    params(TranslationGroupQuery),
+    responses(
+        (status = 200, description = "Posts in a translation group", body = TranslationGroupResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Group not found", body = ErrorResponse),
+    ),
+)]
+pub async fn get_translation_group(
+    headers: HeaderMap,
+    Query(query): Query<TranslationGroupQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+
+    let posts = sqlx::query_as::<_, BlogPost>(
+        r#"
+        SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
+               published, tags, reading_time_minutes, view_count, publish_at,
+               series_id, series_order, locale, translation_group_id, created_at, updated_at
+        FROM blog_posts
+        WHERE translation_group_id = $1
+        ORDER BY locale ASC
+        "#,
+    )
+    .bind(query.group_id)
+    .fetch_all(pool.as_ref())
+    .await?;
+
+    if posts.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    let summaries: Vec<BlogPostSummary> = posts
+        .into_iter()
+        .map(|p| {
+            let status = p.status();
+            BlogPostSummary {
+                id: p.id,
+                title: p.title,
+                slug: p.slug,
+                summary: p.summary,
+                published: p.published,
+                tags: p.tags,
+                reading_time_minutes: p.reading_time_minutes,
+                publish_at: p.publish_at,
+                status,
+                locale: p.locale,
+                series_id: p.series_id,
+                series_order: p.series_order,
+                created_at: p.created_at,
+                updated_at: p.updated_at,
+            }
+        })
+        .collect();
+
+    Ok((
+        StatusCode::OK,
+        Json(TranslationGroupResponse {
+            translation_group_id: query.group_id,
+            posts: summaries,
+        }),
+    ))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -1038,6 +1390,10 @@ mod tests {
                 published: Some(false),
                 tags: None,
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1059,6 +1415,10 @@ mod tests {
             reading_time_minutes: 0,
             view_count: 0,
             publish_at,
+            series_id: None,
+            series_order: None,
+            locale: "en".into(),
+            translation_group_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -1173,6 +1533,10 @@ mod tests {
                 published: Some(true),
                 tags: Some(vec!["alpha".to_string(), "beta".to_string()]),
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1224,6 +1588,10 @@ mod tests {
             published: Some(false),
             tags: None,
             publish_at: None,
+            locale: None,
+            series_id: None,
+            series_order: None,
+            translation_group_id: None,
         };
         let (st1, _) = post_json_auth(app.clone(), "/api/blog", Some(&bearer), &body).await;
         assert_eq!(st1, StatusCode::CREATED);
@@ -1251,6 +1619,10 @@ mod tests {
                 published: Some(false),
                 tags: None,
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1277,6 +1649,10 @@ mod tests {
                 published: Some(true),
                 tags: None,
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1312,6 +1688,10 @@ mod tests {
                     "  go ".to_string(),
                 ]),
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1344,6 +1724,10 @@ mod tests {
                 published: Some(false),
                 tags: None,
                 publish_at: Some(future),
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1382,6 +1766,10 @@ mod tests {
                 published: Some(false),
                 tags: None,
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1424,6 +1812,10 @@ mod tests {
                 published: Some(true),
                 tags: Some(vec!["News".to_string()]),
                 publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
             },
         )
         .await;
@@ -1434,5 +1826,117 @@ mod tests {
         let news = tags.iter().find(|t| t.name == "News");
         assert!(news.is_some());
         assert!(news.unwrap().post_count >= 1);
+    }
+
+    #[tokio::test]
+    async fn db_blog_locale_filter_and_same_slug_different_locales() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+
+        for (locale, title) in [("en", "English"), ("id", "Indonesian")] {
+            let (st, _) = post_json_auth(
+                app.clone(),
+                "/api/blog",
+                Some(&bearer),
+                &CreateBlogRequest {
+                    title: title.to_string(),
+                    slug: "i18n-post".to_string(),
+                    summary: None,
+                    content_md: None,
+                    content_html: None,
+                    published: Some(true),
+                    tags: None,
+                    publish_at: None,
+                    locale: Some(locale.to_string()),
+                    series_id: None,
+                    series_order: None,
+                    translation_group_id: None,
+                },
+            )
+            .await;
+            assert_eq!(st, StatusCode::CREATED, "locale={locale}");
+        }
+
+        let (_, en_bytes) =
+            get_status_body(app.clone(), "/api/blog/i18n-post?locale=en").await;
+        let en: BlogPostResponse = serde_json::from_slice(&en_bytes).unwrap();
+        assert_eq!(en.title, "English");
+
+        let (_, id_bytes) = get_status_body(app.clone(), "/api/blog/i18n-post?locale=id").await;
+        let id_post: BlogPostResponse = serde_json::from_slice(&id_bytes).unwrap();
+        assert_eq!(id_post.title, "Indonesian");
+
+        let (_, list_bytes) =
+            get_status_body(app.clone(), "/api/blog?locale=id&published=true").await;
+        let list: BlogListResponse = serde_json::from_slice(&list_bytes).unwrap();
+        assert!(list.items.iter().all(|i| i.locale == "id"));
+    }
+
+    #[tokio::test]
+    async fn db_blog_link_translations() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route(
+                "/api/admin/blog/translations/link",
+                post(link_translations),
+            )
+            .route("/api/blog", post(create_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        for (locale, slug, title) in [
+            ("en", "link-en", "Link EN"),
+            ("id", "link-id", "Link ID"),
+        ] {
+            let (st, _) = post_json_auth(
+                app.clone(),
+                "/api/blog",
+                Some(&bearer),
+                &CreateBlogRequest {
+                    title: title.to_string(),
+                    slug: slug.to_string(),
+                    summary: None,
+                    content_md: None,
+                    content_html: None,
+                    published: Some(true),
+                    tags: None,
+                    publish_at: None,
+                    locale: Some(locale.to_string()),
+                    series_id: None,
+                    series_order: None,
+                    translation_group_id: None,
+                },
+            )
+            .await;
+            assert_eq!(st, StatusCode::CREATED);
+        }
+
+        let body = Body::from(
+            serde_json::to_vec(&LinkTranslationRequest {
+                slug_a: "link-en".to_string(),
+                locale_a: "en".to_string(),
+                slug_b: "link-id".to_string(),
+                locale_b: "id".to_string(),
+            })
+            .unwrap(),
+        );
+        let req = Request::post("/api/admin/blog/translations/link")
+            .header("content-type", "application/json")
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(body)
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let group: TranslationGroupResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(group.posts.len(), 2);
+        assert!(group.translation_group_id != Uuid::nil());
     }
 }

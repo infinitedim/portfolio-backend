@@ -23,7 +23,7 @@ impl std::fmt::Display for LogLevel {
 }
 
 /// Client log entry received from frontend
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClientLogEntry {
     pub timestamp: String,
     pub level: String,
@@ -35,13 +35,13 @@ pub struct ClientLogEntry {
 }
 
 /// Batch of client logs
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ClientLogBatch {
     pub logs: Vec<ClientLogEntry>,
 }
 
 /// Log response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LogResponse {
     pub success: bool,
     pub received: usize,

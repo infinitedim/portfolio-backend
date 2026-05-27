@@ -450,6 +450,8 @@ pub async fn unlock(
     let max_age = state.config.cookie_max_age_days * 86400;
     let unlock_cookie = build_set_cookie(UNLOCK_COOKIE, &token, max_age, cookie_secure());
 
+    crate::metrics::record_gate_unlock();
+
     let mut response = Json(serde_json::json!({ "unlocked": true })).into_response();
     if let Ok(v) = header::HeaderValue::from_str(&unlock_cookie) {
         response.headers_mut().append(header::SET_COOKIE, v);
@@ -458,6 +460,16 @@ pub async fn unlock(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/gate/challenge/2/stub",
+    tag = "Gate",
+    request_body = StubRequest,
+    responses(
+        (status = 200, description = "MD5 stub", body = StubResponse),
+        (status = 403, description = "Level 1 not completed"),
+    )
+)]
 pub async fn challenge_2_stub(
     State(state): State<GateState>,
     headers: HeaderMap,
@@ -479,6 +491,13 @@ pub async fn challenge_2_stub(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/gate/challenge/2/manifest",
+    tag = "Gate",
+    request_body = ManifestRequest,
+    responses((status = 200, description = "Manifest stored"))
+)]
 pub async fn challenge_2_manifest(
     State(state): State<GateState>,
     headers: HeaderMap,
@@ -501,6 +520,15 @@ pub async fn challenge_2_manifest(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/gate/challenge/2/trigger",
+    tag = "Gate",
+    request_body = TriggerRequest,
+    responses(
+        (status = 200, description = "Trigger token", body = TriggerResponse),
+    )
+)]
 pub async fn challenge_2_trigger(
     State(state): State<GateState>,
     headers: HeaderMap,
@@ -538,6 +566,15 @@ pub async fn challenge_2_trigger(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/gate/challenge/3/crash",
+    tag = "Gate",
+    request_body = CrashRequest,
+    responses(
+        (status = 200, description = "Crash simulation", body = CrashResponse),
+    )
+)]
 pub async fn challenge_3_crash(
     State(state): State<GateState>,
     headers: HeaderMap,
@@ -567,6 +604,15 @@ pub async fn challenge_3_crash(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/gate/challenge/3/run",
+    tag = "Gate",
+    request_body = RunRequest,
+    responses(
+        (status = 200, description = "Shellcode run", body = RunResponse),
+    )
+)]
 pub async fn challenge_3_run(
     State(state): State<GateState>,
     headers: HeaderMap,

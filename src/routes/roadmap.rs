@@ -49,6 +49,12 @@ async fn fetch(path: &str) -> Result<Value, (StatusCode, Json<Value>)> {
 
 /// GET /api/roadmap/streak
 /// Proxies `roadmap.sh/api/v-streak`
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/streak",
+    tag = "Roadmap",
+    responses((status = 200, description = "Roadmap streak data"))
+)]
 pub async fn get_streak() -> impl IntoResponse {
     match fetch("v-streak").await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -58,6 +64,12 @@ pub async fn get_streak() -> impl IntoResponse {
 
 /// GET /api/roadmap/dashboard
 /// Proxies `roadmap.sh/api/v1/user-dashboard`
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/dashboard",
+    tag = "Roadmap",
+    responses((status = 200, description = "Roadmap dashboard data"))
+)]
 pub async fn get_dashboard() -> impl IntoResponse {
     match fetch("v1/user-dashboard").await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -67,6 +79,12 @@ pub async fn get_dashboard() -> impl IntoResponse {
 
 /// GET /api/roadmap/teams
 /// Proxies `roadmap.sh/api/v1/get-user-teams`
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/teams",
+    tag = "Roadmap",
+    responses((status = 200, description = "Roadmap teams data"))
+)]
 pub async fn get_teams() -> impl IntoResponse {
     match fetch("v1/get-user-teams").await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -76,6 +94,12 @@ pub async fn get_teams() -> impl IntoResponse {
 
 /// GET /api/roadmap/favourites
 /// Proxies `roadmap.sh/api/v1/list-favourite-roadmaps`
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/favourites",
+    tag = "Roadmap",
+    responses((status = 200, description = "Favourite roadmaps"))
+)]
 pub async fn get_favourites() -> impl IntoResponse {
     match fetch("v1/list-favourite-roadmaps").await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),

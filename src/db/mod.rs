@@ -443,6 +443,239 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Sprint 3 feature #23: blog series / collections.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS blog_series (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            title TEXT NOT NULL,
+            slug TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_series_slug ON blog_series(slug);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        ALTER TABLE blog_posts
+            ADD COLUMN IF NOT EXISTS series_id UUID REFERENCES blog_series(id) ON DELETE SET NULL,
+            ADD COLUMN IF NOT EXISTS series_order INTEGER
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_series_id
+            ON blog_posts(series_id, series_order);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Sprint 3 feature #24: portfolio section versioning.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS portfolio_versions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            section_key TEXT NOT NULL,
+            content JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_portfolio_versions_section_key
+            ON portfolio_versions(section_key, created_at DESC);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Sprint 3 feature #25: multi-language blog content.
+    sqlx::query(
+        r#"
+        ALTER TABLE blog_posts
+            ADD COLUMN IF NOT EXISTS locale TEXT NOT NULL DEFAULT 'en',
+            ADD COLUMN IF NOT EXISTS translation_group_id UUID
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        ALTER TABLE blog_posts DROP CONSTRAINT IF EXISTS blog_posts_slug_key;
+        DROP INDEX IF EXISTS idx_blog_posts_slug;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug_locale
+            ON blog_posts(slug, locale);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_locale
+            ON blog_posts(locale);
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_translation_group_id
+            ON blog_posts(translation_group_id)
+            WHERE translation_group_id IS NOT NULL;
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Phase 3A: live coding playground snippets.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS playground_snippets (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            title TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT 'javascript',
+            code TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_playground_snippets_created_at
+            ON playground_snippets(created_at DESC)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Phase 3B: newsletter double opt-in subscribers.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            email TEXT UNIQUE NOT NULL,
+            confirmed BOOLEAN NOT NULL DEFAULT false,
+            confirm_token TEXT UNIQUE,
+            unsubscribe_token TEXT UNIQUE NOT NULL,
+            subscribed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            confirmed_at TIMESTAMPTZ,
+            unsubscribed_at TIMESTAMPTZ
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_confirmed
+            ON newsletter_subscribers(confirmed, subscribed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_confirm_token
+            ON newsletter_subscribers(confirm_token)
+            WHERE confirm_token IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_unsubscribe_token
+            ON newsletter_subscribers(unsubscribe_token);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Phase 3C: headless CMS API keys.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name TEXT NOT NULL,
+            key_hash TEXT UNIQUE NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'read',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_used_at TIMESTAMPTZ
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash
+            ON api_keys(key_hash)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Phase 4A: AI assistant RAG chunks (pgvector optional; text search fallback).
+    let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+        .execute(pool)
+        .await;
+    let vector_available = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    if vector_available {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS content_embeddings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                chunk_text TEXT NOT NULL,
+                embedding vector(768),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    } else {
+        tracing::warn!(
+            "pgvector extension unavailable — content_embeddings will use text-only chunks"
+        );
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS content_embeddings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                chunk_text TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_content_embeddings_source
+            ON content_embeddings(source_type, source_id);
+        CREATE INDEX IF NOT EXISTS idx_content_embeddings_chunk_text
+            ON content_embeddings USING gin(to_tsvector('english', chunk_text));
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     tracing::info!("Database migrations completed successfully");
 
     Ok(())
