@@ -57,7 +57,7 @@ impl Modify for SecurityAddon {
         license(name = "MIT")
     ),
     servers(
-        (url = "http://localhost:3001", description = "Local development"),
+        (url = "http://localhost:8080", description = "Local development"),
         (url = "https://api.infinitedim.site", description = "Production")
     ),
     tags(
@@ -68,6 +68,7 @@ impl Modify for SecurityAddon {
         (name = "Contact", description = "Public contact-form submission and admin inbox"),
         (name = "Health", description = "Liveness / readiness probes"),
         (name = "RSS", description = "RSS feed for blog posts"),
+        (name = "Gate", description = "Terminal gate puzzle verification"),
     ),
     modifiers(&SecurityAddon),
     paths(
@@ -107,6 +108,10 @@ impl Modify for SecurityAddon {
         routes::health::health_ready,
         // RSS
         routes::rss::rss_feed,
+        // Gate
+        routes::gate::status,
+        routes::gate::verify,
+        routes::gate::unlock,
     )
 )]
 pub struct ApiDoc;

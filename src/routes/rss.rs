@@ -36,7 +36,7 @@ pub async fn rss_feed() -> Response {
     };
 
     let base_url =
-        std::env::var("SITE_URL").unwrap_or_else(|_| "https://infinitedim.vercel.app".to_string());
+        std::env::var("SITE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let site_title =
         std::env::var("SITE_TITLE").unwrap_or_else(|_| "Terminal Portfolio Blog".to_string());
     let site_description = std::env::var("SITE_DESCRIPTION")
@@ -46,7 +46,8 @@ pub async fn rss_feed() -> Response {
         r#"
             SELECT title, slug, summary, created_at
             FROM blog_posts
-            WHERE published = true
+            WHERE (publish_at IS NOT NULL AND publish_at <= now())
+               OR (publish_at IS NULL AND published = true)
             ORDER BY created_at DESC
             LIMIT 50
             "#,

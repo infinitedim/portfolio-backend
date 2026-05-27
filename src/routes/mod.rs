@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod blog;
 pub mod contact;
+pub mod gate;
 pub mod health;
 pub mod logs;
 pub mod portfolio;

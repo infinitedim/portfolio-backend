@@ -107,6 +107,45 @@ pub fn create_app() -> Router {
             .expect("contact governor config"),
     );
 
+    let gate_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(10)
+            .burst_size(20)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("gate governor config"),
+    );
+
+    let gate_config = routes::gate::GateConfig::from_env();
+    let gate_state = routes::gate::GateState::new(gate_config);
+    let gate_routes = Router::new()
+        .route("/api/gate/status", get(routes::gate::status))
+        .route("/api/gate/verify", post(routes::gate::verify))
+        .route("/api/gate/unlock", post(routes::gate::unlock))
+        .route(
+            "/api/gate/challenge/2/stub",
+            post(routes::gate::challenge_2_stub),
+        )
+        .route(
+            "/api/gate/challenge/2/manifest",
+            post(routes::gate::challenge_2_manifest),
+        )
+        .route(
+            "/api/gate/challenge/2/trigger",
+            post(routes::gate::challenge_2_trigger),
+        )
+        .route(
+            "/api/gate/challenge/3/crash",
+            post(routes::gate::challenge_3_crash),
+        )
+        .route(
+            "/api/gate/challenge/3/run",
+            post(routes::gate::challenge_3_run),
+        )
+        .layer(GovernorLayer::new(gate_governor))
+        .with_state(gate_state);
+
     // Upload routes with higher body limit (10MB)
     let upload_routes = Router::new()
         .route("/api/upload/image", post(routes::upload::upload_image))
@@ -199,6 +238,7 @@ pub fn create_app() -> Router {
         .merge(logs_routes)
         .merge(contact_public)
         .merge(admin_messages_routes)
+        .merge(gate_routes)
         .merge(main_routes);
 
     // Swagger UI is always-on in development. In production it can be

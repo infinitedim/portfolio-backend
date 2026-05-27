@@ -356,7 +356,10 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         (status = 503, description = "Database unavailable", body = ErrorResponse),
     ),
 )]
-pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
+pub async fn get_post(
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> impl IntoResponse {
     if !is_valid_slug(&slug) {
         return (
             StatusCode::BAD_REQUEST,
@@ -384,13 +387,25 @@ pub async fn get_post(Path(slug): Path<String>) -> impl IntoResponse {
         }
     };
 
-    match sqlx::query_as::<_, BlogPost>(
+    let is_admin = require_admin(&headers).is_ok();
+
+    let sql = if is_admin {
         r#"
         UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
         WHERE slug = $1
         RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
-        "#,
-    )
+        "#
+    } else {
+        r#"
+        UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
+        WHERE slug = $1
+          AND ((publish_at IS NOT NULL AND publish_at <= now())
+               OR (publish_at IS NULL AND published = true))
+        RETURNING id, title, slug, summary, content_md, content_html, published, tags, reading_time_minutes, view_count, publish_at, created_at, updated_at
+        "#
+    };
+
+    match sqlx::query_as::<_, BlogPost>(sql)
     .bind(&slug)
     .fetch_optional(pool.as_ref())
     .await
@@ -887,7 +902,9 @@ pub async fn list_tags() -> impl IntoResponse {
         FROM (
             SELECT unnest(tags) AS tag
             FROM blog_posts
-            WHERE published = true AND array_length(tags, 1) > 0
+            WHERE ((publish_at IS NOT NULL AND publish_at <= now())
+                   OR (publish_at IS NULL AND published = true))
+              AND array_length(tags, 1) > 0
         ) subq
         GROUP BY tag
         ORDER BY post_count DESC, tag ASC
@@ -1343,6 +1360,48 @@ mod tests {
         let (_, admin_list) = get_status_body(app, "/api/blog?published=false").await;
         let draftish: BlogListResponse = serde_json::from_slice(&admin_list).unwrap();
         assert!(draftish.items.iter().any(|i| i.slug == "future-post"));
+    }
+
+    #[tokio::test]
+    async fn db_get_post_draft_returns_404_public() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = blog_router();
+        let bearer = crate::test_support::admin_bearer();
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Secret Draft".to_string(),
+                slug: "secret-draft-leak-test".to_string(),
+                summary: Some("hidden".to_string()),
+                content_md: Some("draft body".to_string()),
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        let (st_public, _) =
+            get_status_body(app.clone(), "/api/blog/secret-draft-leak-test").await;
+        assert_eq!(st_public, StatusCode::NOT_FOUND);
+
+        let req = Request::get("/api/blog/secret-draft-leak-test")
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let post: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(post.slug, "secret-draft-leak-test");
     }
 
     #[tokio::test]
