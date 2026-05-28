@@ -1,14 +1,12 @@
 use axum::{
     extract::State,
-    http::{header, HeaderMap},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use md5;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as Sha2Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -20,38 +18,29 @@ use crate::routes::AppError;
 
 const PROGRESS_COOKIE: &str = "gate_progress";
 const UNLOCK_COOKIE: &str = "portfolio_gate";
+const L1_USERNAME: &str = "yourbloo0";
+const L2_USERNAME: &str = "yourbloo1";
 
 #[derive(Clone)]
 pub struct GateConfig {
     pub l1_answer: String,
     pub l2_answer: String,
-    pub l3_answer: String,
-    pub l2_stub_md5: Option<String>,
-    pub l3_offset: usize,
-    pub l3_ret_addr: String,
-    pub l3_shellcode_hash: Option<String>,
     pub token_secret: String,
     pub bypass_secret: Option<String>,
     pub cookie_max_age_days: i64,
     pub session_ttl_hours: i64,
+    pub site_url: String,
 }
 
 impl GateConfig {
     pub fn from_env() -> Self {
+        let site_url = std::env::var("SITE_URL")
+            .or_else(|_| std::env::var("FRONTEND_ORIGIN"))
+            .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
         Self {
             l1_answer: std::env::var("GATE_L1_ANSWER").unwrap_or_default(),
             l2_answer: std::env::var("GATE_L2_ANSWER").unwrap_or_default(),
-            l3_answer: std::env::var("GATE_L3_ANSWER").unwrap_or_default(),
-            l2_stub_md5: std::env::var("GATE_L2_STUB_MD5").ok().filter(|s| !s.is_empty()),
-            l3_offset: std::env::var("GATE_L3_OFFSET")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(528),
-            l3_ret_addr: std::env::var("GATE_L3_RET_ADDR")
-                .unwrap_or_else(|_| "e0d7ffff".to_string()),
-            l3_shellcode_hash: std::env::var("GATE_L3_SHELLCODE_HASH")
-                .ok()
-                .filter(|s| !s.is_empty()),
             token_secret: std::env::var("GATE_TOKEN_SECRET").unwrap_or_default(),
             bypass_secret: std::env::var("GATE_BYPASS_SECRET").ok().filter(|s| !s.is_empty()),
             cookie_max_age_days: std::env::var("GATE_COOKIE_MAX_AGE_DAYS")
@@ -62,21 +51,15 @@ impl GateConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(24),
+            site_url,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct L2Manifest {
-    filename: String,
-    signature: String,
 }
 
 #[derive(Debug, Clone)]
 struct GateSession {
     completed_levels: HashSet<u8>,
     failed_attempts: HashMap<u8, u32>,
-    l2_manifest: Option<L2Manifest>,
     created_at: Instant,
 }
 
@@ -112,14 +95,15 @@ pub struct GateStatusResponse {
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct VerifyRequest {
+pub struct LoginRequest {
     pub level: u8,
-    pub answer: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct VerifyResponse {
+pub struct LoginResponse {
     pub passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_level: Option<u8>,
@@ -129,56 +113,10 @@ pub struct VerifyResponse {
     pub hint: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct StubRequest {
-    pub content: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct StubResponse {
-    pub md5: String,
-    pub suggested_filename: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ManifestRequest {
-    pub filename: String,
-    pub signature: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct TriggerRequest {
-    pub filename: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct TriggerResponse {
-    pub token: String,
-    pub message: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct CrashRequest {
-    pub input: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CrashResponse {
-    pub eip_offset: usize,
-    pub message: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct RunRequest {
-    pub payload: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct RunResponse {
-    pub password: String,
+pub struct CompleteLevel3Response {
+    pub passed: bool,
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -189,10 +127,6 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         .zip(b.bytes())
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
-}
-
-fn md5_hex(content: &str) -> String {
-    format!("{:x}", md5::compute(content.as_bytes()))
 }
 
 fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -239,7 +173,6 @@ fn get_or_create_session(state: &GateState, session_id: &str) -> GateSession {
         .or_insert_with(|| GateSession {
             completed_levels: HashSet::new(),
             failed_attempts: HashMap::new(),
-            l2_manifest: None,
             created_at: Instant::now(),
         })
         .clone()
@@ -267,33 +200,60 @@ fn is_unlocked(headers: &HeaderMap, config: &GateConfig) -> bool {
 
 fn hint_for_level(level: u8, attempts: u32) -> Option<String> {
     match (level, attempts) {
-        (1, a) if a >= 10 => Some("https://overthewire.org/wargames/bandit/bandit32.html".into()),
-        (1, a) if a >= 6 => Some("What does $0 expand to in a shell?".into()),
-        (1, a) if a >= 3 => Some("Variables in this shell are UPPERCASE.".into()),
-        (2, a) if a >= 10 => Some("https://overthewire.org/wargames/natas/natas33.html".into()),
-        (2, a) if a >= 6 => Some("Metadata in Phar archives can be deserialized.".into()),
-        (2, a) if a >= 3 => Some("What does md5_file do with phar files?".into()),
-        (3, a) if a >= 10 => Some("https://overthewire.org/wargames/behemoth/behemoth7.html".into()),
-        (3, a) if a >= 6 => Some("528 bytes before the return address.".into()),
-        (3, a) if a >= 3 => Some("Find where EIP becomes 0x42424242.".into()),
+        (1, a) if a >= 6 => Some("Credentials are shown above the login form.".into()),
+        (1, a) if a >= 3 => Some("Username and password are the same.".into()),
+        (2, a) if a >= 10 => {
+            Some("https://overthewire.org/wargames/natas/natas3.html".into())
+        }
+        (2, a) if a >= 6 => Some("Try exploring hidden directories on this site.".into()),
+        (2, a) if a >= 3 => Some("What lives under /s3cr3t/ ?".into()),
+        (3, a) if a >= 6 => Some("Visit /terminal first, then follow the link.".into()),
+        (3, a) if a >= 3 => Some("This page checks the Referer HTTP header.".into()),
         _ => None,
     }
 }
 
-fn expected_answer(config: &GateConfig, level: u8) -> &str {
+fn expected_username(level: u8) -> Option<&'static str> {
+    match level {
+        1 => Some(L1_USERNAME),
+        2 => Some(L2_USERNAME),
+        _ => None,
+    }
+}
+
+fn expected_password(config: &GateConfig, level: u8) -> &str {
     match level {
         1 => &config.l1_answer,
         2 => &config.l2_answer,
-        3 => &config.l3_answer,
         _ => "",
     }
 }
+
+pub fn is_valid_terminal_referer(referer: &str, site_url: &str) -> bool {
+    let base = site_url.trim_end_matches('/');
+    let expected = format!("{base}/terminal");
+    let referer_trimmed = referer.trim();
+    referer_trimmed == expected
+        || referer_trimmed.starts_with(&format!("{expected}/"))
+        || referer_trimmed.starts_with(&format!("{expected}?"))
+}
+
 
 fn attach_progress_cookie(response: &mut Response, session_id: &str, config: &GateConfig) {
     let max_age = config.session_ttl_hours * 3600;
     let cookie = build_set_cookie(PROGRESS_COOKIE, session_id, max_age, cookie_secure());
     if let Ok(v) = header::HeaderValue::from_str(&cookie) {
         response.headers_mut().append(header::SET_COOKIE, v);
+    }
+}
+
+fn record_login_attempt(session: &mut GateSession, level: u8, passed: bool) -> u32 {
+    if passed {
+        session.failed_attempts.get(&level).copied().unwrap_or(0)
+    } else {
+        let count = session.failed_attempts.entry(level).or_insert(0);
+        *count += 1;
+        *count
     }
 }
 
@@ -341,19 +301,19 @@ pub async fn status(
 
 #[utoipa::path(
     post,
-    path = "/api/gate/verify",
+    path = "/api/gate/login",
     tag = "Gate",
-    request_body = VerifyRequest,
+    request_body = LoginRequest,
     responses(
-        (status = 200, description = "Verification result", body = VerifyResponse),
+        (status = 200, description = "Login result", body = LoginResponse),
     )
 )]
-pub async fn verify(
+pub async fn login(
     State(state): State<GateState>,
     headers: HeaderMap,
-    Json(body): Json<VerifyRequest>,
+    Json(body): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    if body.level < 1 || body.level > 3 {
+    if body.level != 1 && body.level != 2 {
         return Err(AppError::BadRequest("Invalid level".into()));
     }
 
@@ -364,17 +324,23 @@ pub async fn verify(
         return Err(AppError::Forbidden);
     }
 
-    let expected = expected_answer(&state.config, body.level);
-    let passed = !expected.is_empty() && constant_time_eq(expected, body.answer.trim());
-
-    let attempts = if passed {
-        session.failed_attempts.get(&body.level).copied().unwrap_or(0)
-    } else {
-        let count = session.failed_attempts.entry(body.level).or_insert(0);
-        *count += 1;
-        *count
+    let Some(expected_user) = expected_username(body.level) else {
+        return Err(AppError::BadRequest("Invalid level".into()));
     };
 
+    let expected_pass = expected_password(&state.config, body.level);
+    if expected_pass.is_empty() {
+        return Err(AppError::Internal(format!(
+            "Gate L{} not configured",
+            body.level
+        )));
+    }
+
+    let username_ok = constant_time_eq(expected_user, body.username.trim());
+    let password_ok = constant_time_eq(expected_pass, body.password.trim());
+    let passed = username_ok && password_ok;
+
+    let attempts = record_login_attempt(&mut session, body.level, passed);
     let hint = if passed {
         None
     } else {
@@ -385,7 +351,7 @@ pub async fn verify(
         session.completed_levels.insert(body.level);
     }
 
-    save_session(&state, &session_id, session.clone());
+    save_session(&state, &session_id, session);
 
     let next_level = if passed && body.level < 3 {
         Some(body.level + 1)
@@ -393,7 +359,7 @@ pub async fn verify(
         None
     };
 
-    let mut response = Json(VerifyResponse {
+    let mut response = Json(LoginResponse {
         passed,
         next_level,
         attempts: if passed { None } else { Some(attempts) },
@@ -401,6 +367,34 @@ pub async fn verify(
     })
     .into_response();
 
+    attach_progress_cookie(&mut response, &session_id, &state.config);
+    Ok(response)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/gate/complete/3",
+    tag = "Gate",
+    responses(
+        (status = 200, description = "Level 3 completed", body = CompleteLevel3Response),
+        (status = 403, description = "Level 2 not completed"),
+    )
+)]
+pub async fn complete_level_3(
+    State(state): State<GateState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let session_id = session_id_from_headers(&headers);
+    let mut session = get_or_create_session(&state, &session_id);
+
+    if !session.completed_levels.contains(&2) {
+        return Err(AppError::Forbidden);
+    }
+
+    session.completed_levels.insert(3);
+    save_session(&state, &session_id, session);
+
+    let mut response = Json(CompleteLevel3Response { passed: true }).into_response();
     attach_progress_cookie(&mut response, &session_id, &state.config);
     Ok(response)
 }
@@ -461,202 +455,32 @@ pub async fn unlock(
 }
 
 #[utoipa::path(
-    post,
-    path = "/api/gate/challenge/2/stub",
+    get,
+    path = "/api/gate/challenge/2/users.txt",
     tag = "Gate",
-    request_body = StubRequest,
     responses(
-        (status = 200, description = "MD5 stub", body = StubResponse),
+        (status = 200, description = "users.txt for level 2"),
         (status = 403, description = "Level 1 not completed"),
     )
 )]
-pub async fn challenge_2_stub(
+pub async fn challenge_2_users_txt(
     State(state): State<GateState>,
     headers: HeaderMap,
-    Json(body): Json<StubRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let session_id = session_id_from_headers(&headers);
-    let session = get_or_create_session(&state, &session_id);
-    if !session.completed_levels.contains(&1) {
-        return Err(AppError::Forbidden);
-    }
 
-    let hash = md5_hex(&body.content);
-    let mut response = Json(StubResponse {
-        md5: hash,
-        suggested_filename: "shell.php".into(),
-    })
-    .into_response();
-    attach_progress_cookie(&mut response, &session_id, &state.config);
-    Ok(response)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/gate/challenge/2/manifest",
-    tag = "Gate",
-    request_body = ManifestRequest,
-    responses((status = 200, description = "Manifest stored"))
-)]
-pub async fn challenge_2_manifest(
-    State(state): State<GateState>,
-    headers: HeaderMap,
-    Json(body): Json<ManifestRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let session_id = session_id_from_headers(&headers);
-    let mut session = get_or_create_session(&state, &session_id);
-    if !session.completed_levels.contains(&1) {
-        return Err(AppError::Forbidden);
-    }
-
-    session.l2_manifest = Some(L2Manifest {
-        filename: body.filename,
-        signature: body.signature,
-    });
-    save_session(&state, &session_id, session);
-
-    let mut response = Json(serde_json::json!({ "stored": true })).into_response();
-    attach_progress_cookie(&mut response, &session_id, &state.config);
-    Ok(response)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/gate/challenge/2/trigger",
-    tag = "Gate",
-    request_body = TriggerRequest,
-    responses(
-        (status = 200, description = "Trigger token", body = TriggerResponse),
-    )
-)]
-pub async fn challenge_2_trigger(
-    State(state): State<GateState>,
-    headers: HeaderMap,
-    Json(body): Json<TriggerRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let session_id = session_id_from_headers(&headers);
-    let session = get_or_create_session(&state, &session_id);
-    if !session.completed_levels.contains(&1) {
-        return Err(AppError::Forbidden);
-    }
-
-    let Some(manifest) = session.l2_manifest else {
-        return Err(AppError::BadRequest("Manifest not stored".into()));
-    };
-
-    if !body.filename.starts_with("phar://") {
-        return Err(AppError::BadRequest("Invalid trigger path".into()));
-    }
-
-    if manifest.filename.is_empty() || manifest.signature.is_empty() {
-        return Err(AppError::BadRequest("Invalid manifest".into()));
-    }
-
-    let token = state.config.l2_answer.clone();
-    if token.is_empty() {
+    let password = &state.config.l2_answer;
+    if password.is_empty() {
         return Err(AppError::Internal("Gate L2 not configured".into()));
     }
 
-    let mut response = Json(TriggerResponse {
-        token: token.clone(),
-        message: "Congratulations! Running firmware update...".into(),
-    })
-    .into_response();
-    attach_progress_cookie(&mut response, &session_id, &state.config);
-    Ok(response)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/gate/challenge/3/crash",
-    tag = "Gate",
-    request_body = CrashRequest,
-    responses(
-        (status = 200, description = "Crash simulation", body = CrashResponse),
+    let body = format!("{L2_USERNAME}:{password}\n");
+    let mut response = (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
     )
-)]
-pub async fn challenge_3_crash(
-    State(state): State<GateState>,
-    headers: HeaderMap,
-    Json(body): Json<CrashRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let session_id = session_id_from_headers(&headers);
-    let session = get_or_create_session(&state, &session_id);
-    if !session.completed_levels.contains(&2) {
-        return Err(AppError::Forbidden);
-    }
-
-    if body.input.len() < state.config.l3_offset + 4 {
-        return Err(AppError::BadRequest("Input too short".into()));
-    }
-
-    let slice = &body.input.as_bytes()[state.config.l3_offset..state.config.l3_offset + 4];
-    if slice != b"BBBB" {
-        return Err(AppError::BadRequest("Pattern not found".into()));
-    }
-
-    let mut response = Json(CrashResponse {
-        eip_offset: state.config.l3_offset,
-        message: "Segmentation fault at 0x42424242".into(),
-    })
-    .into_response();
-    attach_progress_cookie(&mut response, &session_id, &state.config);
-    Ok(response)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/gate/challenge/3/run",
-    tag = "Gate",
-    request_body = RunRequest,
-    responses(
-        (status = 200, description = "Shellcode run", body = RunResponse),
-    )
-)]
-pub async fn challenge_3_run(
-    State(state): State<GateState>,
-    headers: HeaderMap,
-    Json(body): Json<RunRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let session_id = session_id_from_headers(&headers);
-    let session = get_or_create_session(&state, &session_id);
-    if !session.completed_levels.contains(&2) {
-        return Err(AppError::Forbidden);
-    }
-
-    let payload = body.payload.as_bytes();
-    let min_len = state.config.l3_offset + 4 + 200;
-    if payload.len() < min_len {
-        return Err(AppError::BadRequest("Payload too short".into()));
-    }
-
-    let ret_slice = &payload[state.config.l3_offset..state.config.l3_offset + 4];
-    let ret_hex: String = ret_slice.iter().map(|b| format!("{b:02x}")).collect();
-    if ret_hex != state.config.l3_ret_addr.to_lowercase() {
-        return Err(AppError::BadRequest("Invalid return address".into()));
-    }
-
-    let nop_region = &payload[state.config.l3_offset + 4..state.config.l3_offset + 4 + 200];
-    if !nop_region.iter().all(|&b| b == 0x90) {
-        return Err(AppError::BadRequest("NOP sled invalid".into()));
-    }
-
-    if let Some(expected_hash) = &state.config.l3_shellcode_hash {
-        let shellcode = &payload[state.config.l3_offset + 4 + 200..];
-        let mut hasher = Sha256::new();
-        hasher.update(shellcode);
-        let hash = hex::encode(hasher.finalize());
-        if hash != expected_hash.to_lowercase() {
-            return Err(AppError::BadRequest("Shellcode mismatch".into()));
-        }
-    }
-
-    let password = state.config.l3_answer.clone();
-    if password.is_empty() {
-        return Err(AppError::Internal("Gate L3 not configured".into()));
-    }
-
-    let mut response = Json(RunResponse { password }).into_response();
+        .into_response();
     attach_progress_cookie(&mut response, &session_id, &state.config);
     Ok(response)
 }
@@ -673,16 +497,25 @@ mod tests {
     }
 
     #[test]
-    fn md5_hex_known_value() {
-        assert_eq!(
-            md5_hex("<?php /* gate-stub */ ?>"),
-            md5_hex("<?php /* gate-stub */ ?>")
-        );
-    }
-
-    #[test]
     fn hint_escalates_with_attempts() {
         assert!(hint_for_level(1, 2).is_none());
         assert!(hint_for_level(1, 3).is_some());
+        assert!(hint_for_level(2, 3).is_some());
+    }
+
+    #[test]
+    fn referer_validation_accepts_terminal_url() {
+        assert!(is_valid_terminal_referer(
+            "https://infinitedim.vercel.app/terminal",
+            "https://infinitedim.vercel.app"
+        ));
+        assert!(is_valid_terminal_referer(
+            "https://infinitedim.vercel.app/terminal/",
+            "https://infinitedim.vercel.app/"
+        ));
+        assert!(!is_valid_terminal_referer(
+            "https://infinitedim.vercel.app/gate/3",
+            "https://infinitedim.vercel.app"
+        ));
     }
 }

@@ -52,13 +52,13 @@ impl Modify for SecurityAddon {
                        token issued by `/api/auth/login`.",
         contact(
             name = "Dimas Saputra",
-            url = "https://infinitedim.site"
+            url = "https://infinitedim.vercel.app"
         ),
         license(name = "MIT")
     ),
     servers(
         (url = "http://localhost:8080", description = "Local development"),
-        (url = "https://api.infinitedim.site", description = "Production")
+        (url = "https://api.infinitedim.vercel.app", description = "Production")
     ),
     tags(
         (name = "Authentication", description = "Admin login, registration, and token lifecycle"),
@@ -136,13 +136,10 @@ impl Modify for SecurityAddon {
         routes::rss::rss_feed,
         // Gate
         routes::gate::status,
-        routes::gate::verify,
+        routes::gate::login,
+        routes::gate::complete_level_3,
         routes::gate::unlock,
-        routes::gate::challenge_2_stub,
-        routes::gate::challenge_2_manifest,
-        routes::gate::challenge_2_trigger,
-        routes::gate::challenge_3_crash,
-        routes::gate::challenge_3_run,
+        routes::gate::challenge_2_users_txt,
         // Logs
         routes::logs::receive_client_logs,
         // Roadmap
@@ -171,15 +168,10 @@ impl Modify for SecurityAddon {
         routes::upload::ImageListResponse,
         routes::contact::BulkMessageIdsRequest,
         routes::contact::BulkMessageActionResponse,
-        routes::gate::StubRequest,
-        routes::gate::StubResponse,
-        routes::gate::ManifestRequest,
-        routes::gate::TriggerRequest,
-        routes::gate::TriggerResponse,
-        routes::gate::CrashRequest,
-        routes::gate::CrashResponse,
-        routes::gate::RunRequest,
-        routes::gate::RunResponse,
+        routes::gate::LoginRequest,
+        routes::gate::LoginResponse,
+        routes::gate::CompleteLevel3Response,
+        routes::gate::GateStatusResponse,
         crate::logging::config::ClientLogBatch,
         crate::logging::config::LogResponse,
     ))

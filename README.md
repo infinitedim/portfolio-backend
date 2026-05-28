@@ -212,7 +212,7 @@ PORT=8080                                   # Default: 8080
 
 Copy `.env.example` to `.env` and fill secrets. Gate puzzle answers (`GATE_L1_ANSWER`, etc.) and `GATE_TOKEN_SECRET` are required for the terminal gate — see `.env.example` Gate section.
 
-Gate API: `GET /api/gate/status`, `POST /api/gate/verify`, `POST /api/gate/unlock`, plus `/api/gate/challenge/*` for levels 2–3.
+Gate API: `GET /api/gate/status`, `POST /api/gate/login`, `POST /api/gate/complete/3`, `POST /api/gate/unlock`, `GET /api/gate/challenge/2/users.txt`.
 
 ### Adding Logging to Your Code
 

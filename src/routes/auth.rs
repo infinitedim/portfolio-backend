@@ -1620,7 +1620,7 @@ mod tests {
                 .to_bytes()
                 .expect("secret bytes");
             let issuer =
-                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.site".to_string());
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
             let totp = TOTP::new(
                 TotpAlg::SHA1,
                 6,

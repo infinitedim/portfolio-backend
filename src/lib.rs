@@ -180,27 +180,12 @@ pub fn create_app() -> Router {
     let gate_state = routes::gate::GateState::new(gate_config);
     let gate_routes = Router::new()
         .route("/api/gate/status", get(routes::gate::status))
-        .route("/api/gate/verify", post(routes::gate::verify))
+        .route("/api/gate/login", post(routes::gate::login))
+        .route("/api/gate/complete/3", post(routes::gate::complete_level_3))
         .route("/api/gate/unlock", post(routes::gate::unlock))
         .route(
-            "/api/gate/challenge/2/stub",
-            post(routes::gate::challenge_2_stub),
-        )
-        .route(
-            "/api/gate/challenge/2/manifest",
-            post(routes::gate::challenge_2_manifest),
-        )
-        .route(
-            "/api/gate/challenge/2/trigger",
-            post(routes::gate::challenge_2_trigger),
-        )
-        .route(
-            "/api/gate/challenge/3/crash",
-            post(routes::gate::challenge_3_crash),
-        )
-        .route(
-            "/api/gate/challenge/3/run",
-            post(routes::gate::challenge_3_run),
+            "/api/gate/challenge/2/users.txt",
+            get(routes::gate::challenge_2_users_txt),
         )
         .layer(GovernorLayer::new(gate_governor))
         .with_state(gate_state);
