@@ -125,7 +125,10 @@ pub async fn metrics_handler() -> impl IntoResponse {
     let body = prometheus_handle().render();
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         body,
     )
 }

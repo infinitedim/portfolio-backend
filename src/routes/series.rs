@@ -69,7 +69,11 @@ fn series_to_response(series: BlogSeries, post_count: i64) -> SeriesResponse {
     }
 }
 
-async fn count_series_posts(pool: &sqlx::PgPool, series_id: Uuid, public_only: bool) -> Result<i64, sqlx::Error> {
+async fn count_series_posts(
+    pool: &sqlx::PgPool,
+    series_id: Uuid,
+    public_only: bool,
+) -> Result<i64, sqlx::Error> {
     let sql = if public_only {
         r#"
         SELECT COUNT(*) FROM blog_posts
@@ -273,10 +277,7 @@ pub async fn create_series(
         }
     })?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(series_to_response(series, 0)),
-    ))
+    Ok((StatusCode::CREATED, Json(series_to_response(series, 0))))
 }
 
 #[utoipa::path(
@@ -511,9 +512,12 @@ mod tests {
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let list: Vec<SeriesResponse> =
-            serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let list: Vec<SeriesResponse> = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert!(list.iter().any(|s| s.slug == "getting-started"));
 
         let req = Request::get("/api/blog/series/getting-started")

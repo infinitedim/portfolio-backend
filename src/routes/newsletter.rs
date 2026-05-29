@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };

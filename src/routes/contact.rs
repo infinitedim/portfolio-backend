@@ -533,12 +533,10 @@ pub async fn bulk_mark_messages_read(
     validate_bulk_ids(&payload.ids)?;
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
-    let result = sqlx::query(
-        "UPDATE contact_messages SET read = true WHERE id = ANY($1::uuid[])",
-    )
-    .bind(&payload.ids)
-    .execute(pool.as_ref())
-    .await?;
+    let result = sqlx::query("UPDATE contact_messages SET read = true WHERE id = ANY($1::uuid[])")
+        .bind(&payload.ids)
+        .execute(pool.as_ref())
+        .await?;
 
     Ok((
         StatusCode::OK,

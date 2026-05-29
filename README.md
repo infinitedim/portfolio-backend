@@ -1,6 +1,6 @@
 # Portfolio Backend - Rust + Axum with Comprehensive Logging
 
-High-performance Rust backend with Axum web framework, featuring comprehensive file-based logging with Loki + Grafana for log aggregation, visualization, and monitoring.
+High-performance Rust backend with Axum web framework and SQLx/PostgreSQL, featuring comprehensive file-based logging with Loki + Grafana for log aggregation, visualization, and monitoring.
 
 ## 🚀 Features
 
@@ -626,8 +626,12 @@ try {
 ### Running Tests
 
 ```bash
-# Run all tests
-cargo test
+# Run all tests (unit tests; DB-backed tests skip without Postgres)
+cargo test --all-features
+
+# Mirror CI integration tests (Postgres 16 required)
+TEST_DATABASE_URL=postgres://portfolio:portfolio@localhost:5432/portfolio_test \
+  cargo test --all-features
 
 # Run with standard output
 cargo test -- --nocapture
@@ -733,7 +737,7 @@ Contributions are welcome! Here's how you can help:
 
 ## 📄 License
 
-MIT License - see the [LICENSE](../LICENSE) file for details
+MIT License - see the [LICENSE](LICENSE) file for details
 
 ## 💬 Support
 

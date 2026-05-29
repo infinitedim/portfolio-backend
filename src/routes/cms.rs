@@ -80,23 +80,22 @@ pub async fn require_api_key(
     };
 
     let key_hash = hash_api_key(raw_key);
-    let row: Option<(Uuid, String)> = match sqlx::query_as(
-        "SELECT id, scope FROM api_keys WHERE key_hash = $1",
-    )
-    .bind(&key_hash)
-    .fetch_optional(pool.as_ref())
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "api key lookup failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Internal server error" })),
-            )
-                .into_response();
-        }
-    };
+    let row: Option<(Uuid, String)> =
+        match sqlx::query_as("SELECT id, scope FROM api_keys WHERE key_hash = $1")
+            .bind(&key_hash)
+            .fetch_optional(pool.as_ref())
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "api key lookup failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Internal server error" })),
+                )
+                    .into_response();
+            }
+        };
 
     let Some((key_id, scope)) = row else {
         return (
@@ -187,9 +186,7 @@ pub struct CmsPortfolioQuery {
     params(CmsBlogQuery),
     responses((status = 200, description = "Blog list", body = CmsBlogListResponse)),
 )]
-pub async fn list_blog(
-    Query(query): Query<CmsBlogQuery>,
-) -> Result<impl IntoResponse, AppError> {
+pub async fn list_blog(Query(query): Query<CmsBlogQuery>) -> Result<impl IntoResponse, AppError> {
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
     let page = query.page.max(1);
     let page_size = query.page_size.clamp(1, 100);
@@ -363,7 +360,9 @@ pub async fn update_blog_post(
     params(CmsPortfolioQuery),
     responses((status = 200, description = "Portfolio sections")),
 )]
-pub async fn get_portfolio(Query(query): Query<CmsPortfolioQuery>) -> Result<impl IntoResponse, AppError> {
+pub async fn get_portfolio(
+    Query(query): Query<CmsPortfolioQuery>,
+) -> Result<impl IntoResponse, AppError> {
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
     if query.section.trim().is_empty() {

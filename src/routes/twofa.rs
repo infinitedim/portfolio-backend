@@ -698,8 +698,8 @@ mod tests {
             let secret_bytes = Secret::Encoded(secret_b32.to_string())
                 .to_bytes()
                 .expect("bytes");
-            let issuer =
-                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            let issuer = std::env::var("TOTP_ISSUER")
+                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
             TOTP::new(
                 TotpAlg::SHA1,
                 6,
@@ -781,8 +781,8 @@ mod tests {
             let secret_bytes = Secret::Encoded(secret_b32.to_string())
                 .to_bytes()
                 .expect("bytes");
-            let issuer =
-                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            let issuer = std::env::var("TOTP_ISSUER")
+                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
             TOTP::new(
                 TotpAlg::SHA1,
                 6,

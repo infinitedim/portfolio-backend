@@ -47,9 +47,7 @@ jobs:
       - name: Check code
         run: cargo check --all-features
 
-  # TEMP: tests disabled while fixing failures — remove `if: false` to re-enable
   test:
-    if: false
     name: Test
     runs-on: ubuntu-latest
     # Postgres service is provisioned for the DB-backed integration tests
@@ -106,9 +104,7 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
-  # TEMP: coverage disabled while fixing failures — remove `if: false` to re-enable
   coverage:
-    if: false
     name: Coverage
     runs-on: ubuntu-latest
     # Mirror the `test` job's Postgres service so coverage runs over the same

@@ -31,7 +31,9 @@ impl AiState {
     pub fn from_env() -> Self {
         Self {
             client: Client::new(),
-            api_key: std::env::var("GEMINI_API_KEY").ok().filter(|k| !k.trim().is_empty()),
+            api_key: std::env::var("GEMINI_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty()),
         }
     }
 
@@ -71,10 +73,7 @@ pub fn tokenize_query(query: &str) -> Vec<String> {
         .collect()
 }
 
-pub async fn fetch_rag_context(
-    pool: &sqlx::PgPool,
-    query: &str,
-) -> Result<Vec<RagChunk>, sqlx::Error> {
+async fn fetch_rag_context(pool: &sqlx::PgPool, query: &str) -> Result<Vec<RagChunk>, sqlx::Error> {
     let tokens = tokenize_query(query);
     if tokens.is_empty() {
         return Ok(Vec::new());

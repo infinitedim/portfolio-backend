@@ -534,10 +534,10 @@ pub async fn get_post(
     };
 
     match sqlx::query_as::<_, BlogPost>(&sql)
-    .bind(&slug)
-    .bind(&locale)
-    .fetch_optional(pool.as_ref())
-    .await
+        .bind(&slug)
+        .bind(&locale)
+        .fetch_optional(pool.as_ref())
+        .await
     {
         Ok(Some(post)) => {
             let mut headers = axum::http::HeaderMap::new();
@@ -627,11 +627,7 @@ pub async fn create_post(
             .into_response();
     }
 
-    let locale = payload
-        .locale
-        .as_deref()
-        .unwrap_or("en")
-        .to_lowercase();
+    let locale = payload.locale.as_deref().unwrap_or("en").to_lowercase();
     if !is_valid_locale(&locale) {
         return (
             StatusCode::BAD_REQUEST,
@@ -698,33 +694,35 @@ pub async fn create_post(
     );
 
     match sqlx::query_as::<_, BlogPost>(&insert_sql)
-    .bind(&payload.title)
-    .bind(&payload.slug)
-    .bind(&payload.summary)
-    .bind(&payload.content_md)
-    .bind(&content_html)
-    .bind(payload.published.unwrap_or(false))
-    .bind(&tags)
-    .bind(reading_time)
-    .bind(payload.publish_at)
-    .bind(&locale)
-    .bind(payload.series_id)
-    .bind(payload.series_order)
-    .bind(payload.translation_group_id)
-    .fetch_one(pool.as_ref())
-    .await
+        .bind(&payload.title)
+        .bind(&payload.slug)
+        .bind(&payload.summary)
+        .bind(&payload.content_md)
+        .bind(&content_html)
+        .bind(payload.published.unwrap_or(false))
+        .bind(&tags)
+        .bind(reading_time)
+        .bind(payload.publish_at)
+        .bind(&locale)
+        .bind(payload.series_id)
+        .bind(payload.series_order)
+        .bind(payload.translation_group_id)
+        .fetch_one(pool.as_ref())
+        .await
     {
         Ok(post) => (StatusCode::CREATED, Json(post_to_response(post))).into_response(),
         Err(e) => {
-
-            if e.to_string().contains("duplicate key") || e.to_string().contains("unique constraint") {
+            if e.to_string().contains("duplicate key")
+                || e.to_string().contains("unique constraint")
+            {
                 return (
                     StatusCode::CONFLICT,
                     Json(ErrorResponse {
                         error: "Slug already exists".to_string(),
                         message: None,
                     }),
-                ).into_response();
+                )
+                    .into_response();
             }
 
             tracing::error!("Database error creating blog post: {}", e);
@@ -734,7 +732,8 @@ pub async fn create_post(
                     error: "Failed to create post".to_string(),
                     message: None,
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -869,22 +868,22 @@ pub async fn update_post(
     );
 
     match sqlx::query_as::<_, BlogPost>(&update_sql)
-    .bind(&payload.title)
-    .bind(&payload.summary)
-    .bind(&payload.content_md)
-    .bind(&content_html_opt)
-    .bind(payload.published)
-    .bind(&normalized_tags)
-    .bind(reading_time_opt)
-    .bind(publish_at_value)
-    .bind(publish_at_present)
-    .bind(payload.series_id)
-    .bind(payload.series_order)
-    .bind(payload.translation_group_id)
-    .bind(&slug)
-    .bind(&locale)
-    .fetch_optional(pool.as_ref())
-    .await
+        .bind(&payload.title)
+        .bind(&payload.summary)
+        .bind(&payload.content_md)
+        .bind(&content_html_opt)
+        .bind(payload.published)
+        .bind(&normalized_tags)
+        .bind(reading_time_opt)
+        .bind(publish_at_value)
+        .bind(publish_at_present)
+        .bind(payload.series_id)
+        .bind(payload.series_order)
+        .bind(payload.translation_group_id)
+        .bind(&slug)
+        .bind(&locale)
+        .fetch_optional(pool.as_ref())
+        .await
     {
         Ok(Some(post)) => (StatusCode::OK, Json(post_to_response(post))).into_response(),
         Ok(None) => (
@@ -903,7 +902,8 @@ pub async fn update_post(
                     error: "Failed to update post".to_string(),
                     message: None,
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -1049,9 +1049,7 @@ pub async fn link_translations(
     require_admin(&headers)?;
 
     if !is_valid_slug(&payload.slug_a) || !is_valid_slug(&payload.slug_b) {
-        return Err(AppError::BadRequest(
-            "Invalid slug format".to_string(),
-        ));
+        return Err(AppError::BadRequest("Invalid slug format".to_string()));
     }
 
     let locale_a = payload.locale_a.to_lowercase();
@@ -1062,18 +1060,18 @@ pub async fn link_translations(
 
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
-    let post_a = sqlx::query_as::<_, BlogPost>(
-        &format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"),
-    )
+    let post_a = sqlx::query_as::<_, BlogPost>(&format!(
+        "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
+    ))
     .bind(&payload.slug_a)
     .bind(&locale_a)
     .fetch_optional(pool.as_ref())
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let post_b = sqlx::query_as::<_, BlogPost>(
-        &format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"),
-    )
+    let post_b = sqlx::query_as::<_, BlogPost>(&format!(
+        "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
+    ))
     .bind(&payload.slug_b)
     .bind(&locale_b)
     .fetch_optional(pool.as_ref())
@@ -1094,16 +1092,14 @@ pub async fn link_translations(
     .await?;
 
     let posts = sqlx::query_as::<_, BlogPost>(
-        &format!(
-            r#"
+        r#"
             SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
                    published, tags, reading_time_minutes, view_count, publish_at,
                    series_id, series_order, locale, translation_group_id, created_at, updated_at
             FROM blog_posts
             WHERE translation_group_id = $1
             ORDER BY locale ASC
-            "#
-        ),
+            "#,
     )
     .bind(group_id)
     .fetch_all(pool.as_ref())
@@ -1775,8 +1771,7 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::CREATED);
 
-        let (st_public, _) =
-            get_status_body(app.clone(), "/api/blog/secret-draft-leak-test").await;
+        let (st_public, _) = get_status_body(app.clone(), "/api/blog/secret-draft-leak-test").await;
         assert_eq!(st_public, StatusCode::NOT_FOUND);
 
         let req = Request::get("/api/blog/secret-draft-leak-test")
@@ -1860,8 +1855,7 @@ mod tests {
             assert_eq!(st, StatusCode::CREATED, "locale={locale}");
         }
 
-        let (_, en_bytes) =
-            get_status_body(app.clone(), "/api/blog/i18n-post?locale=en").await;
+        let (_, en_bytes) = get_status_body(app.clone(), "/api/blog/i18n-post?locale=en").await;
         let en: BlogPostResponse = serde_json::from_slice(&en_bytes).unwrap();
         assert_eq!(en.title, "English");
 
@@ -1881,18 +1875,12 @@ mod tests {
             return;
         };
         let app = Router::new()
-            .route(
-                "/api/admin/blog/translations/link",
-                post(link_translations),
-            )
+            .route("/api/admin/blog/translations/link", post(link_translations))
             .route("/api/blog", post(create_post))
             .layer(crate::test_support::mock_connect_info());
         let bearer = crate::test_support::admin_bearer();
 
-        for (locale, slug, title) in [
-            ("en", "link-en", "Link EN"),
-            ("id", "link-id", "Link ID"),
-        ] {
+        for (locale, slug, title) in [("en", "link-en", "Link EN"), ("id", "link-id", "Link ID")] {
             let (st, _) = post_json_auth(
                 app.clone(),
                 "/api/blog",

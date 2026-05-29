@@ -75,7 +75,6 @@ impl Modify for SecurityAddon {
         (name = "Roadmap", description = "Roadmap.sh proxy"),
         (name = "Analytics", description = "Lightweight page view beacons"),
         (name = "GitHub", description = "GitHub API proxy"),
-        (name = "Spotify", description = "Spotify now playing widget"),
         (name = "Metrics", description = "Prometheus scrape endpoint"),
     ),
     modifiers(&SecurityAddon),
@@ -152,8 +151,6 @@ impl Modify for SecurityAddon {
         // GitHub
         routes::github::get_user,
         routes::github::get_stats,
-        // Spotify
-        routes::spotify::now_playing,
     ),
     components(schemas(
         crate::metrics::PageviewRequest,
@@ -162,7 +159,6 @@ impl Modify for SecurityAddon {
         routes::github::GitHubStatsResponse,
         routes::github::GitHubRepoSummary,
         routes::github::GitHubProfileStats,
-        routes::spotify::NowPlayingResponse,
         routes::upload::UploadResponse,
         routes::upload::ImageInfo,
         routes::upload::ImageListResponse,
@@ -216,6 +212,9 @@ mod tests {
         assert!(spec.paths.paths.contains_key("/api/analytics/pageview"));
         assert!(spec.paths.paths.contains_key("/api/github/user/{username}"));
         assert!(spec.paths.paths.contains_key("/api/blog/series"));
-        assert!(spec.paths.paths.contains_key("/api/admin/portfolio/versions"));
+        assert!(spec
+            .paths
+            .paths
+            .contains_key("/api/admin/portfolio/versions"));
     }
 }

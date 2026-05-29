@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in values. Never commit terraform.tfvars.
+project_id      = "your-gcp-project-id"
+region          = "asia-southeast2"
+zone            = "asia-southeast2-a"
+environment     = "prod"
+frontend_origin = "https://your-app.vercel.app"
+github_repo     = "yourblooo/portfolio-backend"
+
+# Set after first CI push, or manually:
+# cloud_run_image = "asia-southeast2-docker.pkg.dev/PROJECT/portfolio/portfolio-backend:latest"

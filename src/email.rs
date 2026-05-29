@@ -160,12 +160,7 @@ impl ResendMailer {
         })
     }
 
-    async fn send_raw_email(
-        &self,
-        to: &str,
-        subject: &str,
-        text: &str,
-    ) -> Result<(), MailerError> {
+    async fn send_raw_email(&self, to: &str, subject: &str, text: &str) -> Result<(), MailerError> {
         let payload = json!({
             "from": self.from,
             "to": [to],

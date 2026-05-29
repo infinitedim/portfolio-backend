@@ -1,0 +1,28 @@
+---
+description: Wajib verifikasi Rust (fmt, check, clippy, test) sebelum menyelesaikan chat
+alwaysApply: true
+---
+
+# Rust — verifikasi sebelum selesai
+
+Jika kamu mengubah kode di `portfolio-backend` (`.rs`, `Cargo.toml`, migrations, dll.), **jangan menandai pekerjaan selesai** sampai semua perintah berikut dijalankan dari root backend dan **lulus tanpa error**:
+
+```bash
+cd portfolio-backend
+cargo fmt --all -- --check
+cargo check --all-features
+cargo clippy --all-features -- -D warnings
+cargo test --all-features
+```
+
+## Aturan
+
+- Jalankan perintah di terminal; jangan hanya mengasumsikan hasilnya.
+- Jika ada kegagalan, perbaiki dulu lalu jalankan ulang suite yang relevan.
+- Untuk test yang butuh Postgres, set `TEST_DATABASE_URL` (lihat `.github/workflows/ci.yml`).
+- Jika hanya mengubah frontend, suite Rust tidak wajib — lihat rule di `portfolio-frontend`.
+
+## Sebelum mengakhiri respons
+
+- Laporkan perintah yang dijalankan dan statusnya (pass/fail).
+- Jangan klaim "selesai" / "fixed" / "passing" tanpa bukti output terminal.

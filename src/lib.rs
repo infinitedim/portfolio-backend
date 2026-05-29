@@ -143,17 +143,6 @@ pub fn create_app() -> Router {
             .expect("github governor config"),
     );
 
-    // Spotify now playing: 30s cache; tight burst to match widget polling.
-    let spotify_governor = std::sync::Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(1)
-            .burst_size(5)
-            .key_extractor(SmartIpKeyExtractor)
-            .use_headers()
-            .finish()
-            .expect("spotify governor config"),
-    );
-
     // Newsletter broadcast: admin-only, tight cap.
     let newsletter_broadcast_governor = std::sync::Arc::new(
         GovernorConfigBuilder::default()
@@ -221,29 +210,16 @@ pub fn create_app() -> Router {
         .layer(GovernorLayer::new(logs_governor));
 
     let analytics_routes = Router::new()
-        .route(
-            "/api/analytics/pageview",
-            post(metrics::record_pageview),
-        )
+        .route("/api/analytics/pageview", post(metrics::record_pageview))
         .layer(GovernorLayer::new(analytics_governor));
 
     let github_routes = Router::new()
-        .route(
-            "/api/github/user/{username}",
-            get(routes::github::get_user),
-        )
+        .route("/api/github/user/{username}", get(routes::github::get_user))
         .route(
             "/api/github/stats/{username}",
             get(routes::github::get_stats),
         )
         .layer(GovernorLayer::new(github_governor));
-
-    let spotify_routes = Router::new()
-        .route(
-            "/api/spotify/now-playing",
-            get(routes::spotify::now_playing),
-        )
-        .layer(GovernorLayer::new(spotify_governor));
 
     // Contact + admin inbox routes. Contact submission is public but
     // rate-limited; admin endpoints are guarded inside the handler via
@@ -346,10 +322,7 @@ pub fn create_app() -> Router {
             "/api/v1/content/blog/{slug}",
             get(routes::cms::get_blog_post).patch(routes::cms::update_blog_post),
         )
-        .route(
-            "/api/v1/content/portfolio",
-            get(routes::cms::get_portfolio),
-        )
+        .route("/api/v1/content/portfolio", get(routes::cms::get_portfolio))
         .layer(middleware::from_fn_with_state(
             cms_state.clone(),
             routes::cms::require_api_key,
@@ -413,7 +386,6 @@ pub fn create_app() -> Router {
         .merge(logs_routes)
         .merge(analytics_routes)
         .merge(github_routes)
-        .merge(spotify_routes)
         .merge(contact_public)
         .merge(newsletter_public)
         .merge(newsletter_admin)

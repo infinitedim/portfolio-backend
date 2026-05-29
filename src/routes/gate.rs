@@ -42,7 +42,9 @@ impl GateConfig {
             l1_answer: std::env::var("GATE_L1_ANSWER").unwrap_or_default(),
             l2_answer: std::env::var("GATE_L2_ANSWER").unwrap_or_default(),
             token_secret: std::env::var("GATE_TOKEN_SECRET").unwrap_or_default(),
-            bypass_secret: std::env::var("GATE_BYPASS_SECRET").ok().filter(|s| !s.is_empty()),
+            bypass_secret: std::env::var("GATE_BYPASS_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
             cookie_max_age_days: std::env::var("GATE_COOKIE_MAX_AGE_DAYS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -60,6 +62,7 @@ impl GateConfig {
 struct GateSession {
     completed_levels: HashSet<u8>,
     failed_attempts: HashMap<u8, u32>,
+    #[allow(dead_code)]
     created_at: Instant,
 }
 
@@ -202,9 +205,7 @@ fn hint_for_level(level: u8, attempts: u32) -> Option<String> {
     match (level, attempts) {
         (1, a) if a >= 6 => Some("Credentials are shown above the login form.".into()),
         (1, a) if a >= 3 => Some("Username and password are the same.".into()),
-        (2, a) if a >= 10 => {
-            Some("https://overthewire.org/wargames/natas/natas3.html".into())
-        }
+        (2, a) if a >= 10 => Some("https://overthewire.org/wargames/natas/natas3.html".into()),
         (2, a) if a >= 6 => Some("Try exploring hidden directories on this site.".into()),
         (2, a) if a >= 3 => Some("What lives under /s3cr3t/ ?".into()),
         (3, a) if a >= 6 => Some("Visit /terminal first, then follow the link.".into()),
@@ -237,7 +238,6 @@ pub fn is_valid_terminal_referer(referer: &str, site_url: &str) -> bool {
         || referer_trimmed.starts_with(&format!("{expected}/"))
         || referer_trimmed.starts_with(&format!("{expected}?"))
 }
-
 
 fn attach_progress_cookie(response: &mut Response, session_id: &str, config: &GateConfig) {
     let max_age = config.session_ttl_hours * 3600;
@@ -276,9 +276,7 @@ pub async fn status(
     let mut completed: Vec<u8> = session.completed_levels.iter().copied().collect();
     completed.sort_unstable();
 
-    let current_level = if unlocked {
-        4
-    } else if completed.contains(&3) {
+    let current_level = if unlocked || completed.contains(&3) {
         4
     } else if completed.contains(&2) {
         3

@@ -8,6 +8,7 @@
 - Gate stays enabled in development; bypass only via `GATE_BYPASS_SECRET`, not an automatic dev-off flag.
 - User fills API keys and other random secrets in `.env`; agents may generate non-secret env defaults and structure.
 - Gate puzzles should be NATAS-style web challenges (login, hidden paths, Referer), not SSH/Bandit/Behemoth simulations.
+- First time deploying to GCP; prefers clear, beginner-friendly infrastructure documentation and bootstrap guides.
 
 ## Learned Workspace Facts
 
@@ -19,4 +20,11 @@
 - Backend API default is port 8080; frontend should align `NEXT_PUBLIC_API_URL` / `BACKEND_URL` fallbacks with 8080, not 3001.
 - Both repos have `.env.example` with gate vars documented (`GATE_L1_ANSWER`, `GATE_L2_ANSWER`, `GATE_TOKEN_SECRET`, etc.).
 - PWA is site-wide (`public/manifest.json`, `public/sw.js`, scope `/`, offline page); install prompt only after terminal onboarding tour completes.
-- Observability stack includes Loki, Grafana, and Prometheus via Docker Compose; Redis is in compose but not used by app code yet.
+- Observability stack (Loki, Grafana, Prometheus) runs on a GCE ops VM in production via `docker-compose.gcp-ops.yml`; same stack in local `docker-compose.yml` for dev. Redis is in compose but not used by app code yet (health probe only).
+- Feature #22 (Spotify now playing) was retired and removed from both repos (May 2026).
+- `GATE_BYPASS_SECRET` is consumed by the Next.js `proxy.ts` (`X-Gate-Bypass` header), not by Rust gate route handlers.
+- Production deployment: backend on GCP Cloud Run (asia-southeast2/Jakarta), frontend on Vercel. Terraform infra with 6 modules: network, iam, artifact_registry, secrets, compute_ops, cloud_run; state in GCS bucket.
+- GCP ops VM (e2-small, no public IP, IAP-only SSH) hosts self-managed Postgres 16 + observability; persistent disk at `/mnt/data` with daily snapshots.
+- CI/CD: GitHub Actions `deploy-gcp.yml` uses Workload Identity Federation (no SA keys) to build, push to Artifact Registry, and deploy Cloud Run on push to main.
+- Frontend unit test known issue: `background-manager.test.tsx` hangs Vitest worker ~16 min (mock-related); full suite without it runs in ~93s.
+- Pre-completion verification (Cursor rules): backend Rust changes require `cargo fmt --check`, `cargo check --all-features`, `cargo clippy --all-features -- -D warnings`, and `cargo test --all-features`; frontend Next.js changes require `bun run lint` and `bun run type-check` only.

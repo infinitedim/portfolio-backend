@@ -14,7 +14,6 @@ pub mod presence;
 pub mod roadmap;
 pub mod rss;
 pub mod series;
-pub mod spotify;
 pub mod twofa;
 pub mod upload;
 

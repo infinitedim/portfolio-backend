@@ -137,11 +137,9 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                         let room = normalize_room(&room);
                         let count = state.join_room(&room).await;
                         current_room = Some(room.clone());
-                        let payload = serde_json::to_string(&ServerMessage::RoomCount {
-                            room,
-                            count,
-                        })
-                        .unwrap_or_default();
+                        let payload =
+                            serde_json::to_string(&ServerMessage::RoomCount { room, count })
+                                .unwrap_or_default();
                         let _ = sender.send(Message::Text(payload.into())).await;
                     }
                     Ok(ClientMessage::Ping) => {

@@ -640,8 +640,7 @@ mod tests {
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let (_, body) =
-            get_json::<PortfolioResponse>(app, "/api/portfolio?section=skills").await;
+        let (_, body) = get_json::<PortfolioResponse>(app, "/api/portfolio?section=skills").await;
         assert_eq!(body.data, Some(v1));
     }
 }

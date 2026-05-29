@@ -1,11 +1,6 @@
 //! GitHub API proxy with in-memory caching and optional `GH_TOKEN` auth.
 
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -25,8 +20,7 @@ struct CacheEntry {
     expires_at: Instant,
 }
 
-static CACHE: Lazy<Mutex<HashMap<String, CacheEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static CACHE: Lazy<Mutex<HashMap<String, CacheEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn cache_get(key: &str) -> Option<serde_json::Value> {
     let mut cache = CACHE.lock().expect("github cache poisoned");
@@ -58,7 +52,9 @@ fn is_valid_username(username: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-async fn github_get(path: &str) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
+async fn github_get(
+    path: &str,
+) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
     if let Some(cached) = cache_get(path) {
         return Ok(cached);
     }
@@ -181,10 +177,7 @@ pub async fn get_user(Path(username): Path<String>) -> impl IntoResponse {
             let user = GitHubUserResponse {
                 login: raw["login"].as_str().unwrap_or(username).to_string(),
                 name: raw["name"].as_str().map(str::to_string),
-                avatar_url: raw["avatar_url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
+                avatar_url: raw["avatar_url"].as_str().unwrap_or_default().to_string(),
                 bio: raw["bio"].as_str().map(str::to_string),
                 public_repos: raw["public_repos"].as_u64().unwrap_or(0),
                 followers: raw["followers"].as_u64().unwrap_or(0),
