@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -20,12 +20,17 @@ const PROGRESS_COOKIE: &str = "gate_progress";
 const UNLOCK_COOKIE: &str = "portfolio_gate";
 const L1_USERNAME: &str = "yourbloo0";
 const L2_USERNAME: &str = "yourbloo1";
+const GATE_TOKEN_ISSUER: &str = "portfolio-gate";
+const GATE_TOKEN_AUDIENCE: &str = "terminal";
 
 #[derive(Clone)]
 pub struct GateConfig {
     pub l1_answer: String,
     pub l2_answer: String,
     pub token_secret: String,
+    #[allow(dead_code)]
+    // Frontend-only bypass consumed by Next.js proxy.ts (X-Gate-Bypass).
+    // Rust gate handlers intentionally ignore this value.
     pub bypass_secret: Option<String>,
     pub cookie_max_age_days: i64,
     pub session_ttl_hours: i64,
@@ -84,6 +89,8 @@ impl GateState {
 #[derive(Debug, Serialize, Deserialize)]
 struct GateTokenClaims {
     sub: String,
+    iss: String,
+    aud: String,
     exp: i64,
     iat: i64,
 }
@@ -186,6 +193,13 @@ fn save_session(state: &GateState, session_id: &str, session: GateSession) {
     sessions.insert(session_id.to_string(), session);
 }
 
+fn gate_token_validation() -> Validation {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&[GATE_TOKEN_ISSUER]);
+    validation.set_audience(&[GATE_TOKEN_AUDIENCE]);
+    validation
+}
+
 fn is_unlocked(headers: &HeaderMap, config: &GateConfig) -> bool {
     let Some(token) = extract_cookie(headers, UNLOCK_COOKIE) else {
         return false;
@@ -193,10 +207,11 @@ fn is_unlocked(headers: &HeaderMap, config: &GateConfig) -> bool {
     if config.token_secret.is_empty() {
         return false;
     }
+
     decode::<GateTokenClaims>(
         &token,
         &DecodingKey::from_secret(config.token_secret.as_bytes()),
-        &Validation::default(),
+        &gate_token_validation(),
     )
     .is_ok()
 }
@@ -389,6 +404,14 @@ pub async fn complete_level_3(
         return Err(AppError::Forbidden);
     }
 
+    let referer = headers
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::Forbidden)?;
+    if !is_valid_terminal_referer(referer, &state.config.site_url) {
+        return Err(AppError::Forbidden);
+    }
+
     session.completed_levels.insert(3);
     save_session(&state, &session_id, session);
 
@@ -428,12 +451,14 @@ pub async fn unlock(
     let exp = now + Duration::days(state.config.cookie_max_age_days);
     let claims = GateTokenClaims {
         sub: "gate".into(),
+        iss: GATE_TOKEN_ISSUER.into(),
+        aud: GATE_TOKEN_AUDIENCE.into(),
         iat: now.timestamp(),
         exp: exp.timestamp(),
     };
 
     let token = encode(
-        &Header::default(),
+        &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(state.config.token_secret.as_bytes()),
     )
@@ -466,6 +491,10 @@ pub async fn challenge_2_users_txt(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let session_id = session_id_from_headers(&headers);
+    let session = get_or_create_session(&state, &session_id);
+    if !session.completed_levels.contains(&1) {
+        return Err(AppError::Forbidden);
+    }
 
     let password = &state.config.l2_answer;
     if password.is_empty() {
@@ -481,6 +510,106 @@ pub async fn challenge_2_users_txt(
         .into_response();
     attach_progress_cookie(&mut response, &session_id, &state.config);
     Ok(response)
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    fn config() -> GateConfig {
+        GateConfig {
+            l1_answer: "yourbloo0".into(),
+            l2_answer: "secret-l2".into(),
+            token_secret: "this_is_a_very_long_gate_token_secret_123456".into(),
+            bypass_secret: None,
+            cookie_max_age_days: 7,
+            session_ttl_hours: 24,
+            site_url: "https://example.com".into(),
+        }
+    }
+
+    fn headers(cookie: &str, referer: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("gate_progress={cookie}").parse().unwrap(),
+        );
+        if let Some(referer) = referer {
+            headers.insert(header::REFERER, referer.parse().unwrap());
+        }
+        headers
+    }
+
+    async fn login_level(
+        state: GateState,
+        cookie: &str,
+        level: u8,
+        username: &str,
+        password: &str,
+    ) {
+        let _ = login(
+            State(state),
+            headers(cookie, None),
+            Json(LoginRequest {
+                level,
+                username: username.into(),
+                password: password.into(),
+            }),
+        )
+        .await
+        .expect("login should succeed");
+    }
+
+    #[tokio::test]
+    async fn complete_level_3_requires_valid_referer() {
+        let state = GateState::new(config());
+        let cookie = "session-1";
+
+        login_level(state.clone(), cookie, 1, "yourbloo0", "yourbloo0").await;
+        login_level(state.clone(), cookie, 2, "yourbloo1", "secret-l2").await;
+
+        let valid = complete_level_3(
+            State(state.clone()),
+            headers(cookie, Some("https://example.com/terminal")),
+        )
+        .await
+        .expect("valid referer should pass")
+        .into_response();
+        assert_eq!(valid.status(), StatusCode::OK);
+
+        let invalid = complete_level_3(
+            State(state.clone()),
+            headers(cookie, Some("https://example.com/gate/3")),
+        )
+        .await;
+        assert!(matches!(invalid, Err(AppError::Forbidden)));
+
+        let missing = complete_level_3(State(state), headers(cookie, None)).await;
+        assert!(matches!(missing, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn challenge_users_txt_requires_level_1() {
+        let state = GateState::new(config());
+        let cookie = "session-2";
+
+        let before_login = challenge_2_users_txt(State(state.clone()), headers(cookie, None)).await;
+        assert!(matches!(before_login, Err(AppError::Forbidden)));
+
+        login_level(state.clone(), cookie, 1, "yourbloo0", "yourbloo0").await;
+
+        let response = challenge_2_users_txt(State(state), headers(cookie, None))
+            .await
+            .expect("level 1 should unlock users.txt")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8");
+        assert_eq!(body_text, "yourbloo1:secret-l2\n");
+    }
 }
 
 #[cfg(test)]

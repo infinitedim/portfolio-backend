@@ -8,3 +8,5 @@ github_repo     = "yourblooo/portfolio-backend"
 
 # Set after first CI push, or manually:
 # cloud_run_image = "asia-southeast2-docker.pkg.dev/PROJECT/portfolio/portfolio-backend:latest"
+
+admin_email     = "your-admin-email@example.com"

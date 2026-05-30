@@ -73,7 +73,10 @@ module "cloud_run" {
   gate_token_id       = module.secrets.gate_token_id
   resend_key_id       = module.secrets.resend_key_id
   gh_token_id         = module.secrets.gh_token_id
-  gemini_key_id       = module.secrets.gemini_key_id
-  roadmap_token_id    = module.secrets.roadmap_token_id
+  gemini_key_id        = module.secrets.gemini_key_id
+  roadmap_email_id     = module.secrets.roadmap_email_id
+  roadmap_password_id  = module.secrets.roadmap_password_id
+  metrics_token_id     = module.secrets.metrics_token_id
+  admin_email         = var.admin_email
   ops_vm_internal_ip  = module.compute_ops.internal_ip
 }

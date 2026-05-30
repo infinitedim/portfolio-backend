@@ -9,22 +9,21 @@
 - User fills API keys and other random secrets in `.env`; agents may generate non-secret env defaults and structure.
 - Gate puzzles should be NATAS-style web challenges (login, hidden paths, Referer), not SSH/Bandit/Behemoth simulations.
 - First time deploying to GCP; prefers clear, beginner-friendly infrastructure documentation and bootstrap guides.
+- Portfolio-frontend chats must proactively use Cursor SDK + Team Kit skills/MCP (`.cursor/rules/cursor-sdk-team-kit.mdc`, alwaysApply).
+- Roadmap.sh proxy auth: email/password only via `POST https://roadmap.sh/api/v1-login`; reject GitHub OAuth and manual bearer-token flows.
+- Backend SLA target: all API routes P95 < 50ms (not health-only `responseTime`).
 
 ## Learned Workspace Facts
 
 - Multi-repo portfolio: `portfolio-backend` (Rust/Axum, SQLx/PostgreSQL) and `portfolio-frontend` (Next.js 16, React 19, terminal-interactive portfolio).
 - Planned public routing: standard landing at `/`, terminal at `/terminal`, three-level gate at `/gate` (and `/gate/[level]`).
 - Blog, social share, RSS, and other content routes stay shared/public; do not duplicate them across standard and terminal UIs.
-- Gate puzzles (backend-validated, no answers in frontend bundle): L1 static login `yourbloo0`/`yourbloo0`; L2 discover `/s3cr3t/users.txt` then login `yourbloo1` + env password; L3 requires `Referer: {SITE_URL}/terminal`.
-- Terminal route should be `noindex`; gate and terminal access require server-side validation (not answers in the frontend bundle).
-- Backend API default is port 8080; frontend should align `NEXT_PUBLIC_API_URL` / `BACKEND_URL` fallbacks with 8080, not 3001.
-- Both repos have `.env.example` with gate vars documented (`GATE_L1_ANSWER`, `GATE_L2_ANSWER`, `GATE_TOKEN_SECRET`, etc.).
+- Gate puzzles (backend-validated, no answers in frontend bundle): L1 static login `yourbloo0`/`yourbloo0`; L2 requires L1 completion before `/s3cr3t/users.txt` reveals login `yourbloo1` + env password; L3 backend validates `Referer: {SITE_URL}/terminal` in `complete_level_3`; gate JWT pinned to HS256 with `iss`/`aud`. Terminal route `noindex`; terminal SSR verifies JWT via `/api/gate/status`. Gate/terminal is UX puzzle layer, not API auth perimeter (admin JWT separate). `GATE_BYPASS_SECRET` via Next.js `proxy.ts` (`X-Gate-Bypass`), not Rust handlers.
+- Backend API default port 8080; frontend align `NEXT_PUBLIC_API_URL` / `BACKEND_URL` with 8080; CORS auto-merges localhost origins (ports 3000–3002) when `ENVIRONMENT != production`; gate vars in `.env.example`.
+- Feature status SSOT: `portfolio-frontend/FEATURE_PLANNING.md` (+ `docs/dual-ui-gate.md` for gate ops); `ROADMAP.md` removed May 2026 after performance backlog moved to Feature #33.
 - PWA is site-wide (`public/manifest.json`, `public/sw.js`, scope `/`, offline page); install prompt only after terminal onboarding tour completes.
-- Observability stack (Loki, Grafana, Prometheus) runs on a GCE ops VM in production via `docker-compose.gcp-ops.yml`; same stack in local `docker-compose.yml` for dev. Redis is in compose but not used by app code yet (health probe only).
-- Feature #22 (Spotify now playing) was retired and removed from both repos (May 2026).
-- `GATE_BYPASS_SECRET` is consumed by the Next.js `proxy.ts` (`X-Gate-Bypass` header), not by Rust gate route handlers.
-- Production deployment: backend on GCP Cloud Run (asia-southeast2/Jakarta), frontend on Vercel. Terraform infra with 6 modules: network, iam, artifact_registry, secrets, compute_ops, cloud_run; state in GCS bucket.
-- GCP ops VM (e2-small, no public IP, IAP-only SSH) hosts self-managed Postgres 16 + observability; persistent disk at `/mnt/data` with daily snapshots.
-- CI/CD: GitHub Actions `deploy-gcp.yml` uses Workload Identity Federation (no SA keys) to build, push to Artifact Registry, and deploy Cloud Run on push to main.
-- Frontend unit test known issue: `background-manager.test.tsx` hangs Vitest worker ~16 min (mock-related); full suite without it runs in ~93s.
-- Pre-completion verification (Cursor rules): backend Rust changes require `cargo fmt --check`, `cargo check --all-features`, `cargo clippy --all-features -- -D warnings`, and `cargo test --all-features`; frontend Next.js changes require `bun run lint` and `bun run type-check` only.
+- Observability stack (Loki, Grafana, Prometheus) runs on a GCE ops VM in production via `docker-compose.gcp-ops.yml`; same stack in local `docker-compose.yml` for dev. Redis health uses real PING via `REDIS_URL`; not yet used for app cache or gate sessions. Optional `METRICS_BEARER_TOKEN` protects `/metrics`; Prometheus prod scrape uses bearer auth.
+- GCP production: backend on Cloud Run (asia-southeast2/Jakarta) with `max_instances=1` for gate session consistency, frontend on Vercel; Terraform (network, iam, artifact_registry, secrets, compute_ops, cloud_run); ops VM (e2-medium, no public IP, IAP SSH) hosts Postgres 16 + observability at `/mnt/data`; CI via `deploy-gcp.yml` Workload Identity Federation.
+- Next.js 16 edge handler is `src/proxy.ts` (`export function proxy()`), not legacy `middleware.ts`.
+- Frontend performance: `cacheComponents: true` (PPR) with Feature #33 docs at `docs/features/FEATURE_33_PERFORMANCE.md`; dual RUM (pino/Loki + Vercel Speed Insights). Pre-completion verification: backend `cargo fmt/check/clippy/test`; frontend `bun run lint` + `type-check`. Known Vitest hang: `background-manager.test.tsx` (~16 min).
+- Backend performance & integrations: all API routes P95 <50ms SLO (`docs/performance/API_SLA.md`, `config/slo-rules.yml`, Grafana 50ms alerts, `scripts/latency-smoke.sh` in CI); roadmap/github in-memory cache with stale-while-revalidate; roadmap auth via `ROADMAP_EMAIL`/`ROADMAP_PASSWORD` → `POST …/v1-login` (Terraform secrets `roadmap-email`/`roadmap-password`; `ROADMAP_AUTH_TOKEN` removed); Swagger UI disabled in production.

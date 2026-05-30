@@ -81,7 +81,7 @@ After starting the logging stack, you can access:
   - Ready check: `http://localhost:9080/ready`
 - **Backend API**: <http://localhost:8080>
   - Health check: `curl http://localhost:8080/health`
-  - API docs: Coming soon
+  - API docs: `/api/docs` when `ENABLE_SWAGGER_UI=true`
 
 ## 📚 API Endpoints
 
@@ -92,8 +92,7 @@ GET http://localhost:8080/health
 
 Response:
 {
-  "status": "healthy",
-  "timestamp": "2024-01-01T12:00:00Z"
+  "status": "ok"
 }
 ```
 
@@ -211,6 +210,8 @@ PORT=8080                                   # Default: 8080
 ```
 
 Copy `.env.example` to `.env` and fill secrets. Gate puzzle answers (`GATE_L1_ANSWER`, etc.) and `GATE_TOKEN_SECRET` are required for the terminal gate — see `.env.example` Gate section.
+
+**Roadmap.sh proxy** — backend logs in via `POST https://roadmap.sh/api/v1-login` using `ROADMAP_EMAIL` and `ROADMAP_PASSWORD`, caches the JWT in memory, and forwards `Authorization: Bearer …` to upstream `/api/roadmap/*` routes.
 
 Gate API: `GET /api/gate/status`, `POST /api/gate/login`, `POST /api/gate/complete/3`, `POST /api/gate/unlock`, `GET /api/gate/challenge/2/users.txt`.
 
@@ -684,6 +685,10 @@ cargo tarpaulin --out Xml
 ## 🚀 Production Deployment
 
 ### Security Checklist
+
+- [ ] Set `ENABLE_SWAGGER_UI=false` in production
+- [ ] Set `GATE_TOKEN_SECRET` (>=32 chars) and `GATE_L2_ANSWER`
+- [ ] Set `METRICS_BEARER_TOKEN` and configure Prometheus bearer auth
 
 - [ ] Change Grafana admin password
 - [ ] Configure authentication for Grafana

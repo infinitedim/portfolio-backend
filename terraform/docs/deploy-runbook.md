@@ -43,7 +43,9 @@ echo -n 'grafana-admin-password' | \
 echo -n 'key' | gcloud secrets versions add portfolio-resend-api-key --data-file=-
 echo -n 'ghp_...' | gcloud secrets versions add portfolio-gh-token --data-file=-
 echo -n 'key' | gcloud secrets versions add portfolio-gemini-api-key --data-file=-
-echo -n 'token' | gcloud secrets versions add portfolio-roadmap-auth-token --data-file=-
+echo -n 'you@example.com' | gcloud secrets versions add portfolio-roadmap-email --data-file=-
+echo -n 'your-roadmap-password' | gcloud secrets versions add portfolio-roadmap-password --data-file=-
+echo -n 'metrics-bearer-token' | gcloud secrets versions add portfolio-metrics-token --data-file=-
 ```
 
 Generate `ADMIN_HASH_PASSWORD` locally:
@@ -79,6 +81,8 @@ gcloud run services update portfolio-backend \
 ## 3. Configure GitHub Actions
 
 Set these as GitHub repository variables (Settings > Variables > Actions):
+
+Also set Terraform var `admin_email` to a real address (backend fails startup when default admin@example.com is used in production).
 
 | Variable | Value |
 |----------|-------|
@@ -120,7 +124,7 @@ Update backend secrets to allow the Vercel origin:
 
 After Cloud Run deploys, update `config/prometheus.prod.yml`:
 
-Replace `CLOUD_RUN_URL` with the actual Cloud Run hostname (without `https://`):
+Replace `CLOUD_RUN_URL` with the actual Cloud Run hostname (without `https://`) and set `METRICS_BEARER_TOKEN` in the ops VM environment used by Prometheus:
 
 ```yaml
 - job_name: portfolio-backend

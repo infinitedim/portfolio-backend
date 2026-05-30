@@ -28,7 +28,7 @@ use tower_http::{
 };
 
 pub fn configure_cors() -> CorsLayer {
-    let allowed_origins = std::env::var("ALLOWED_ORIGINS")
+    let mut allowed_origins = std::env::var("ALLOWED_ORIGINS")
         .ok()
         .and_then(|s| {
             let origins: Vec<HeaderValue> = s
@@ -47,12 +47,37 @@ pub fn configure_cors() -> CorsLayer {
                 .and_then(|s| s.parse().ok())
                 .map(|origin| vec![origin])
         })
-        .unwrap_or_else(|| {
-            vec![
-                "http://localhost:3000".parse().unwrap(),
-                "http://127.0.0.1:3000".parse().unwrap(),
-            ]
-        });
+        .unwrap_or_default();
+
+    let is_production = std::env::var("ENVIRONMENT")
+        .map(|v| v == "production")
+        .unwrap_or(false);
+
+    if !is_production {
+        for origin in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+            "http://localhost:3002",
+            "http://127.0.0.1:3002",
+        ] {
+            push_origin_if_missing(&mut allowed_origins, origin);
+        }
+    }
+
+    if allowed_origins.is_empty() {
+        allowed_origins = vec![
+            "http://localhost:3000".parse().unwrap(),
+            "http://127.0.0.1:3000".parse().unwrap(),
+        ];
+    }
+
+    let origin_list: Vec<&str> = allowed_origins
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    tracing::info!(origins = ?origin_list, environment = %if is_production { "production" } else { "development" }, "CORS allowlist");
 
     CorsLayer::new()
         .allow_origin(allowed_origins)
@@ -65,11 +90,23 @@ pub fn configure_cors() -> CorsLayer {
         .allow_credentials(true)
 }
 
+fn push_origin_if_missing(origins: &mut Vec<HeaderValue>, origin: &str) {
+    if origins
+        .iter()
+        .any(|existing| existing.to_str().ok() == Some(origin))
+    {
+        return;
+    }
+
+    if let Ok(value) = origin.parse::<HeaderValue>() {
+        origins.push(value);
+    }
+}
+
 pub fn create_app() -> Router {
     let _metrics = metrics::init();
 
     let cors = configure_cors();
-    tracing::info!("CORS configured");
 
     // Per-IP rate limiter for auth endpoints. Burst of 5, refill ~1 every 12s
     // — gives roughly five attempts per minute, which is the contract the old
@@ -163,6 +200,17 @@ pub fn create_app() -> Router {
             .use_headers()
             .finish()
             .expect("newsletter governor config"),
+    );
+
+    // AI chat endpoint: tighter abuse guard for potentially expensive requests.
+    let ai_governor = std::sync::Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(8)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("ai governor config"),
     );
 
     let gate_config = routes::gate::GateConfig::from_env();
@@ -332,6 +380,7 @@ pub fn create_app() -> Router {
     let ai_state = routes::ai::AiState::from_env();
     let ai_routes = Router::new()
         .route("/api/ai/chat", post(routes::ai::chat))
+        .layer(GovernorLayer::new(ai_governor))
         .with_state(ai_state);
 
     let presence_state = routes::presence::PresenceState::new();
@@ -400,13 +449,14 @@ pub fn create_app() -> Router {
         .merge(gate_routes)
         .merge(main_routes);
 
-    // Swagger UI is always-on in development. In production it can be
-    // disabled by setting `ENABLE_SWAGGER_UI=false`. We still serve the
-    // raw spec at `/api/docs/openapi.json` because the Swagger UI itself
-    // fetches it from there at runtime.
+    // Swagger UI is enabled by default in development. In production,
+    // it is disabled unless ENABLE_SWAGGER_UI=true is explicitly set.
+    let is_production_env = std::env::var("ENVIRONMENT")
+        .map(|v| v == "production")
+        .unwrap_or(false);
     let swagger_enabled = std::env::var("ENABLE_SWAGGER_UI")
         .map(|v| !v.eq_ignore_ascii_case("false") && v != "0")
-        .unwrap_or(true);
+        .unwrap_or(!is_production_env);
     if swagger_enabled {
         use utoipa::OpenApi;
         use utoipa_swagger_ui::SwaggerUi;
@@ -455,10 +505,24 @@ pub(crate) fn assert_production_environment_or_panic() {
              Refusing to start with a localhost CORS allowlist."
         );
     }
+
+    let gate_token_secret = std::env::var("GATE_TOKEN_SECRET").unwrap_or_default();
+    if gate_token_secret.len() < 32 {
+        panic!("FATAL: GATE_TOKEN_SECRET must be at least 32 characters in production.");
+    }
+
+    if std::env::var("GATE_L2_ANSWER")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        panic!("FATAL: GATE_L2_ANSWER must be set in production.");
+    }
 }
 
 pub async fn run() {
-    dotenvy::dotenv().ok();
+    if let Err(err) = dotenvy::dotenv() {
+        tracing::warn!(error = %err, "failed to load .env — quote values that contain spaces");
+    }
 
     let _log_guards = logging::init();
 
@@ -513,6 +577,16 @@ pub async fn run() {
         panic!("FATAL: DATABASE_URL must be set in production.");
     } else {
         tracing::info!("DATABASE_URL not set. Running without database connection.");
+    }
+
+    if is_production
+        && std::env::var("METRICS_BEARER_TOKEN")
+            .unwrap_or_default()
+            .is_empty()
+    {
+        tracing::warn!(
+            "METRICS_BEARER_TOKEN is not set in production; /metrics remains publicly accessible"
+        );
     }
 
     let app = create_app();
@@ -644,9 +718,10 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn swagger_ui_enabled_by_default() {
+    async fn swagger_ui_enabled_by_default_in_development() {
         let _guard = env_lock().lock().expect("env lock poisoned");
         std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::set_var("ENVIRONMENT", "development");
         let app = create_app();
 
         let response = app
@@ -659,6 +734,28 @@ mod tests {
             .await
             .expect("docs response");
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        std::env::remove_var("ENVIRONMENT");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn swagger_ui_disabled_by_default_in_production() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::set_var("ENVIRONMENT", "production");
+        let app = create_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/docs")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("docs response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        std::env::remove_var("ENVIRONMENT");
     }
 
     #[tokio::test]
@@ -695,5 +792,41 @@ mod tests {
 
         std::env::remove_var("ALLOWED_ORIGINS");
         std::env::remove_var("FRONTEND_ORIGIN");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cors_includes_localhost_in_development() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("ALLOWED_ORIGINS", "https://infinitedim.vercel.app");
+        std::env::set_var("ENVIRONMENT", "development");
+
+        let app = Router::new()
+            .route("/check", get(|| async { StatusCode::OK }))
+            .layer(configure_cors());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/check")
+                    .header("origin", "http://localhost:3000")
+                    .header("access-control-request-method", "GET")
+                    .body(Body::empty())
+                    .expect("preflight request"),
+            )
+            .await
+            .expect("preflight response");
+
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://localhost:3000")
+        );
+
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("ENVIRONMENT");
     }
 }

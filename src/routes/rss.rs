@@ -1,7 +1,18 @@
 use axum::{body::Body, http::header, response::Response};
 use chrono::DateTime;
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use crate::db;
+
+struct RssCache {
+    xml: String,
+    generated_at: Instant,
+}
+
+static RSS_CACHE: Lazy<Mutex<Option<RssCache>>> = Lazy::new(|| Mutex::new(None));
+const RSS_CACHE_TTL_SECS: u64 = 60;
 
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -24,6 +35,22 @@ fn rfc822(dt: &DateTime<chrono::Utc>) -> String {
     ),
 )]
 pub async fn rss_feed() -> Response {
+    if let Ok(guard) = RSS_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.generated_at.elapsed().as_secs() < RSS_CACHE_TTL_SECS {
+                return Response::builder()
+                    .status(200)
+                    .header(header::CONTENT_TYPE, "application/rss+xml; charset=utf-8")
+                    .header(
+                        header::CACHE_CONTROL,
+                        "public, max-age=3600, stale-while-revalidate=600",
+                    )
+                    .body(Body::from(cached.xml.clone()))
+                    .unwrap();
+            }
+        }
+    }
+
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
@@ -110,6 +137,13 @@ pub async fn rss_feed() -> Response {
             .unwrap_or_default(),
         items,
     );
+
+    if let Ok(mut guard) = RSS_CACHE.lock() {
+        *guard = Some(RssCache {
+            xml: xml.clone(),
+            generated_at: Instant::now(),
+        });
+    }
 
     Response::builder()
         .status(200)

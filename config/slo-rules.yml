@@ -1,0 +1,40 @@
+groups:
+  - name: slo_api_latency
+    interval: 15s
+    rules:
+      - record: http:request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          )
+
+      - record: http:request_duration_seconds:p99_5m
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          )
+
+      - alert: SLO_P95_Above_50ms
+        expr: |
+          http:request_duration_seconds:p95_5m > 0.05
+            and on(path) (
+              http:request_duration_seconds:p95_5m{path!~"/api/auth/login|/api/auth/register|/api/ai/chat|/api/upload/image|/ws/presence"}
+            )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "P95 latency exceeds 50ms SLA on {{ $labels.path }}"
+          description: "P95 latency is {{ $value | humanizeDuration }} on {{ $labels.path }}"
+
+      - alert: SLO_P95_Above_500ms_Auth
+        expr: |
+          http:request_duration_seconds:p95_5m{path=~"/api/auth/login|/api/auth/register"} > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth P95 latency exceeds 500ms on {{ $labels.path }}"
+          description: "P95 latency is {{ $value | humanizeDuration }} on {{ $labels.path }}"

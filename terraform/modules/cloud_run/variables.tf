@@ -46,4 +46,15 @@ variable "gate_token_id" { type = string }
 variable "resend_key_id" { type = string }
 variable "gh_token_id" { type = string }
 variable "gemini_key_id" { type = string }
-variable "roadmap_token_id" { type = string }
+variable "roadmap_email_id" { type = string }
+variable "roadmap_password_id" { type = string }
+
+variable "admin_email" {
+  description = "Production admin email required by backend startup checks"
+  type        = string
+}
+
+variable "metrics_token_id" {
+  description = "Secret Manager ID for optional /metrics bearer token"
+  type        = string
+}

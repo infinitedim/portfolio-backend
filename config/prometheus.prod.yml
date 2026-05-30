@@ -14,6 +14,9 @@ scrape_configs:
   # Example: portfolio-backend-abc123-as.a.run.app
   - job_name: portfolio-backend
     scheme: https
+    authorization:
+      type: Bearer
+      credentials: ${METRICS_BEARER_TOKEN}
     static_configs:
       - targets: ["CLOUD_RUN_URL"]
     metrics_path: /metrics

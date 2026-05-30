@@ -5,6 +5,9 @@ global:
     cluster: portfolio
     environment: development
 
+rule_files:
+  - /etc/prometheus/slo-rules.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

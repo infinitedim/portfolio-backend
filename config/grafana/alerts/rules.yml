@@ -25,23 +25,43 @@ groups:
           team: platform
 
       - uid: slow_response_time
-        title: Slow Response Time
+        title: Slow Response Time (SLA 50ms)
         condition: A
         data:
           - refId: A
             datasourceUid: loki-main
             model:
-              expr: 'quantile_over_time(0.95, {job="portfolio-backend"} | json | duration_ms != "" | unwrap duration_ms [10m]) > 2000'
+              expr: 'quantile_over_time(0.95, {job="portfolio-backend"} | json | duration_ms != "" | unwrap duration_ms [5m]) > 50'
               intervalMs: 60000
               maxDataPoints: 43200
         noDataState: OK
         execErrState: Alerting
-        for: 10m
+        for: 5m
         annotations:
-          summary: "P95 response time exceeds 2 seconds"
-          description: "95th percentile response time has been above 2 seconds for 10 minutes"
+          summary: "P95 response time exceeds 50ms SLA"
+          description: "95th percentile response time has been above 50ms for 5 minutes"
         labels:
           severity: warning
+          team: platform
+
+      - uid: critical_slow_response
+        title: Critical Slow Response Time
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: loki-main
+            model:
+              expr: 'quantile_over_time(0.95, {job="portfolio-backend"} | json | duration_ms != "" | unwrap duration_ms [5m]) > 2000'
+              intervalMs: 60000
+              maxDataPoints: 43200
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "P95 response time exceeds 2 seconds"
+          description: "95th percentile response time has been above 2 seconds for 5 minutes — critical SLA violation"
+        labels:
+          severity: critical
           team: platform
 
       - uid: security_events

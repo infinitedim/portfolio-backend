@@ -50,3 +50,9 @@ variable "data_disk_size_gb" {
   type        = number
   default     = 50
 }
+
+variable "admin_email" {
+  description = "Production admin email for backend startup checks"
+  type        = string
+  default     = "admin@example.com"
+}

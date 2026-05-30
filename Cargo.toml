@@ -95,6 +95,9 @@ totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 
+# Redis (health probe; presence scaling reserved)
+redis = { version = "0.27", features = ["tokio-comp"] }
+
 # OpenAPI / Swagger documentation. `axum_extras` lets utoipa parse path /
 # query params automatically; `uuid` and `chrono` map our DB types to
 # OpenAPI string formats. Swagger UI is mounted under `/api/docs/`.

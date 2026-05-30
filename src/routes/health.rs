@@ -100,34 +100,39 @@ pub async fn health_ping() -> impl IntoResponse {
 pub async fn health_detailed() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    // Database is the only required dependency today; redis is optional.
     let db_configured = std::env::var("DATABASE_URL").is_ok();
-    let database_check = if db_configured {
-        match crate::db::health_check().await {
-            Ok(duration) => ServiceCheck {
-                status: "healthy".to_string(),
-                response_time: Some(duration.as_millis() as u64),
-                error: None,
-            },
-            Err(e) => ServiceCheck {
-                status: "unhealthy".to_string(),
-                response_time: None,
-                error: Some(e.to_string()),
-            },
-        }
-    } else {
-        ServiceCheck {
-            status: "not_configured".to_string(),
-            response_time: None,
-            error: None,
-        }
-    };
+    let is_production = std::env::var("ENVIRONMENT")
+        .map(|v| v == "production")
+        .unwrap_or(false);
 
-    let redis_check = ServiceCheck {
-        status: "not_configured".to_string(),
-        response_time: None,
-        error: None,
-    };
+    let (database_check, redis_check) = tokio::join!(
+        async {
+            if !db_configured {
+                return ServiceCheck {
+                    status: "not_configured".to_string(),
+                    response_time: None,
+                    error: None,
+                };
+            }
+            match crate::db::health_check().await {
+                Ok(duration) => ServiceCheck {
+                    status: "healthy".to_string(),
+                    response_time: Some(duration.as_millis() as u64),
+                    error: None,
+                },
+                Err(e) => ServiceCheck {
+                    status: "unhealthy".to_string(),
+                    response_time: None,
+                    error: if is_production {
+                        Some("database unreachable".to_string())
+                    } else {
+                        Some(e.to_string())
+                    },
+                },
+            }
+        },
+        check_redis()
+    );
 
     let db_required_and_failing = db_configured && database_check.status != "healthy";
     let overall_status = if db_required_and_failing {
@@ -196,15 +201,13 @@ pub async fn health_database() -> impl IntoResponse {
     ),
 )]
 pub async fn health_redis() -> impl IntoResponse {
-    // Redis is not yet configured; return 200 with a `not_configured` status
-    // so callers know it's intentional rather than a failure.
-    let check = ServiceCheck {
-        status: "not_configured".to_string(),
-        response_time: None,
-        error: None,
+    let check = check_redis().await;
+    let status_code = match check.status.as_str() {
+        "healthy" | "not_configured" => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
     };
 
-    (StatusCode::OK, Json(check))
+    (status_code, Json(check))
 }
 
 #[utoipa::path(
@@ -219,12 +222,16 @@ pub async fn health_redis() -> impl IntoResponse {
 pub async fn health_ready() -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
-    let database_status = match crate::db::health_check().await {
-        Ok(_) => "healthy".to_string(),
-        Err(_) => "unhealthy".to_string(),
-    };
-
-    let redis_status = "unhealthy".to_string();
+    let (database_status, redis_check) = tokio::join!(
+        async {
+            match crate::db::health_check().await {
+                Ok(_) => "healthy".to_string(),
+                Err(_) => "unhealthy".to_string(),
+            }
+        },
+        check_redis()
+    );
+    let redis_status = redis_check.status.clone();
 
     let db_configured = std::env::var("DATABASE_URL").is_ok();
     let is_ready = !db_configured || database_status == "healthy";
@@ -255,6 +262,59 @@ pub async fn health_ready() -> impl IntoResponse {
     };
 
     (status_code, Json(response))
+}
+
+async fn check_redis() -> ServiceCheck {
+    let url = match std::env::var("REDIS_URL") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            return ServiceCheck {
+                status: "not_configured".to_string(),
+                response_time: None,
+                error: None,
+            };
+        }
+    };
+
+    let is_production = std::env::var("ENVIRONMENT")
+        .map(|v| v == "production")
+        .unwrap_or(false);
+
+    let start = Instant::now();
+    match redis_ping(&url).await {
+        Ok(()) => ServiceCheck {
+            status: "healthy".to_string(),
+            response_time: Some(start.elapsed().as_millis() as u64),
+            error: None,
+        },
+        Err(error) => ServiceCheck {
+            status: "unhealthy".to_string(),
+            response_time: None,
+            error: if is_production {
+                Some("redis unreachable".to_string())
+            } else {
+                Some(error)
+            },
+        },
+    }
+}
+
+async fn redis_ping(url: &str) -> Result<(), String> {
+    let client = redis::Client::open(url).map_err(|e| e.to_string())?;
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|e| e.to_string())?;
+    let pong: String = redis::cmd("PING")
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if pong.eq_ignore_ascii_case("PONG") {
+        Ok(())
+    } else {
+        Err(format!("unexpected PING response: {pong}"))
+    }
 }
 
 #[cfg(test)]
@@ -313,10 +373,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_health_redis_returns_not_configured() {
+    async fn test_health_redis_reports_configuration_state() {
         let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/redis").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.status, "not_configured");
+        assert!(
+            status == StatusCode::OK || status == StatusCode::SERVICE_UNAVAILABLE,
+            "unexpected status: {status}"
+        );
+        assert!(
+            ["not_configured", "healthy", "unhealthy"].contains(&body.status.as_str()),
+            "unexpected redis status: {}",
+            body.status
+        );
     }
 
     #[tokio::test]

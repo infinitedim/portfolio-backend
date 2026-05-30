@@ -260,7 +260,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: "fs"
           scan-ref: "."
@@ -269,7 +269,7 @@ jobs:
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
           skip-dirs: "target,.git"
-          exit-code: "0"
+          exit-code: "1"
           timeout: "10m"
 
       - name: Upload Trivy scan results
@@ -373,6 +373,19 @@ jobs:
             sleep 10
           done
           echo "WARNING: Grafana datasources not provisioned after 2 minutes, continuing..."
+
+      - name: Setup Go for hey
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install hey
+        run: go install github.com/rakyll/hey@latest
+
+      - name: Latency smoke test (P95 < 50ms)
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          ./scripts/latency-smoke.sh http://localhost:8080 50
 
       - name: Show container logs on failure
         if: failure()

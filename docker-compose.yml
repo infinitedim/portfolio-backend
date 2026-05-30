@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
       POSTGRES_DB: ${POSTGRES_DB:-portfolio}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -78,7 +78,8 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_HASH_PASSWORD: ${ADMIN_HASH_PASSWORD:-}
-      ROADMAP_AUTH_TOKEN: ${ROADMAP_AUTH_TOKEN:-}
+      ROADMAP_EMAIL: ${ROADMAP_EMAIL:-}
+      ROADMAP_PASSWORD: ${ROADMAP_PASSWORD:-}
       SITE_URL: ${SITE_URL:-http://localhost:3000}
       SITE_TITLE: ${SITE_TITLE:-Dimas Saputra}
       SITE_DESCRIPTION: ${SITE_DESCRIPTION:-Full-Stack Developer Portfolio}
@@ -156,6 +157,7 @@ services:
       - "9090:9090"
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/slo-rules.yml:/etc/prometheus/slo-rules.yml
       - prometheus-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml

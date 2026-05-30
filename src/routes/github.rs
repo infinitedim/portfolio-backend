@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use utoipa::ToSchema;
 
 const GITHUB_API: &str = "https://api.github.com";
-const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const CACHE_FRESH_TTL: Duration = Duration::from_secs(15 * 60);
+const CACHE_STALE_TTL: Duration = Duration::from_secs(60 * 60);
 
 static GH_TOKEN: Lazy<String> = Lazy::new(|| std::env::var("GH_TOKEN").unwrap_or_default());
 
@@ -17,20 +18,27 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 struct CacheEntry {
     body: serde_json::Value,
-    expires_at: Instant,
+    fetched_at: Instant,
 }
 
 static CACHE: Lazy<Mutex<HashMap<String, CacheEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn cache_get(key: &str) -> Option<serde_json::Value> {
-    let mut cache = CACHE.lock().expect("github cache poisoned");
-    if let Some(entry) = cache.get(key) {
-        if Instant::now() < entry.expires_at {
-            return Some(entry.body.clone());
-        }
-        cache.remove(key);
+enum CacheHit {
+    Fresh(serde_json::Value),
+    Stale(serde_json::Value),
+}
+
+fn cache_get(key: &str) -> Option<CacheHit> {
+    let cache = CACHE.lock().expect("github cache poisoned");
+    let entry = cache.get(key)?;
+    let age = entry.fetched_at.elapsed();
+    if age < CACHE_FRESH_TTL {
+        Some(CacheHit::Fresh(entry.body.clone()))
+    } else if age < CACHE_STALE_TTL {
+        Some(CacheHit::Stale(entry.body.clone()))
+    } else {
+        None
     }
-    None
 }
 
 fn cache_set(key: impl Into<String>, body: serde_json::Value) {
@@ -39,7 +47,7 @@ fn cache_set(key: impl Into<String>, body: serde_json::Value) {
         key.into(),
         CacheEntry {
             body,
-            expires_at: Instant::now() + CACHE_TTL,
+            fetched_at: Instant::now(),
         },
     );
 }
@@ -52,13 +60,7 @@ fn is_valid_username(username: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-async fn github_get(
-    path: &str,
-) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
-    if let Some(cached) = cache_get(path) {
-        return Ok(cached);
-    }
-
+async fn github_fetch_raw(path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{GITHUB_API}{path}");
     let mut request = HTTP_CLIENT
         .get(&url)
@@ -69,38 +71,52 @@ async fn github_get(
         request = request.header("Authorization", format!("Bearer {}", GH_TOKEN.as_str()));
     }
 
-    let response = request.send().await.map_err(|e| {
-        tracing::error!(path = %path, error = %e, "github upstream request failed");
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": "upstream request failed" })),
-        )
-    })?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("upstream request failed: {e}"))?;
 
     let status = response.status();
-    if status.as_u16() == 404 {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "GitHub resource not found" })),
-        ));
-    }
     if !status.is_success() {
-        tracing::warn!(path = %path, status = %status, "github upstream returned error");
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(serde_json::json!({
-                "error": "github upstream error",
-                "status": status.as_u16()
-            })),
-        ));
+        return Err(format!("upstream error: {status}"));
     }
 
-    let body = response.json::<serde_json::Value>().await.map_err(|e| {
-        tracing::error!(path = %path, error = %e, "failed to parse github response");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "failed to parse upstream response" })),
-        )
+    response
+        .json()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))
+}
+
+async fn github_get(
+    path: &str,
+) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
+    match cache_get(path) {
+        Some(CacheHit::Fresh(data)) => return Ok(data),
+        Some(CacheHit::Stale(data)) => {
+            let path_owned = path.to_string();
+            tokio::spawn(async move {
+                if let Ok(fresh) = github_fetch_raw(&path_owned).await {
+                    cache_set(path_owned, fresh);
+                }
+            });
+            return Ok(data);
+        }
+        None => {}
+    }
+
+    let body = github_fetch_raw(path).await.map_err(|e| {
+        tracing::error!(path = %path, error = %e, "github fetch failed");
+        if e.contains("404") {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "GitHub resource not found" })),
+            )
+        } else {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e })),
+            )
+        }
     })?;
 
     cache_set(path, body.clone());

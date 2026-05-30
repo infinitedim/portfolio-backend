@@ -11,7 +11,9 @@ locals {
     RESEND_API_KEY       = var.resend_key_id
     GH_TOKEN             = var.gh_token_id
     GEMINI_API_KEY       = var.gemini_key_id
-    ROADMAP_AUTH_TOKEN    = var.roadmap_token_id
+    ROADMAP_EMAIL        = var.roadmap_email_id
+    ROADMAP_PASSWORD     = var.roadmap_password_id
+    METRICS_BEARER_TOKEN = var.metrics_token_id
   }
 }
 
@@ -27,7 +29,7 @@ resource "google_cloud_run_v2_service" "backend" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = 3
+      max_instance_count = 1
     }
 
     vpc_access {
@@ -87,6 +89,14 @@ resource "google_cloud_run_v2_service" "backend" {
       env {
         name  = "LOG_LEVEL"
         value = "info"
+      }
+      env {
+        name  = "ENABLE_SWAGGER_UI"
+        value = "false"
+      }
+      env {
+        name  = "ADMIN_EMAIL"
+        value = var.admin_email
       }
       env {
         name  = "ALLOWED_ORIGINS"

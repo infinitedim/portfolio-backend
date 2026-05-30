@@ -9,7 +9,9 @@ locals {
     "resend-api-key",
     "gh-token",
     "gemini-api-key",
-    "roadmap-auth-token",
+    "roadmap-email",
+    "roadmap-password",
+    "metrics-token",
     "postgres-password",
     "grafana-password",
   ]
@@ -37,7 +39,9 @@ locals {
     "resend-api-key",
     "gh-token",
     "gemini-api-key",
-    "roadmap-auth-token",
+    "roadmap-email",
+    "roadmap-password",
+    "metrics-token",
   ]
 }
 

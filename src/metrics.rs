@@ -2,7 +2,7 @@
 
 use axum::{
     extract::MatchedPath,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -95,15 +95,27 @@ pub async fn track_http_metrics(request: axum::extract::Request, next: Next) -> 
         HTTP_REQUESTS_TOTAL,
         "method" => method.clone(),
         "path" => path.clone(),
-        "status" => status
+        "status" => status.clone()
     )
     .increment(1);
     histogram!(
         HTTP_REQUEST_DURATION_SECONDS,
-        "method" => method,
-        "path" => path
+        "method" => method.clone(),
+        "path" => path.clone()
     )
     .record(elapsed);
+
+    let elapsed_ms = start.elapsed().as_millis();
+    if elapsed_ms > 50 {
+        tracing::warn!(
+            method = %method,
+            path = %path,
+            status = %status,
+            duration_ms = %elapsed_ms,
+            sla_budget_ms = 50,
+            "SLO violation: request exceeded 50ms budget"
+        );
+    }
 
     response
 }
@@ -120,8 +132,33 @@ pub fn record_gate_unlock() {
     counter!(GATE_UNLOCKS_TOTAL).increment(1);
 }
 
+fn unauthorized_metrics_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(crate::routes::ErrorResponse {
+            error: "Unauthorized".into(),
+            message: Some("Missing or invalid Authorization bearer token".into()),
+        }),
+    )
+        .into_response()
+}
+
 /// GET /metrics — Prometheus scrape endpoint.
-pub async fn metrics_handler() -> impl IntoResponse {
+pub async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
+    if let Ok(token) = std::env::var("METRICS_BEARER_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            let expected = format!("Bearer {token}");
+            let provided = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            if provided != expected {
+                return unauthorized_metrics_response();
+            }
+        }
+    }
+
     let body = prometheus_handle().render();
     (
         StatusCode::OK,
@@ -131,6 +168,7 @@ pub async fn metrics_handler() -> impl IntoResponse {
         )],
         body,
     )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -233,7 +271,8 @@ mod tests {
         counter!(HTTP_REQUESTS_TOTAL, "method" => "GET", "path" => "/health", "status" => "200")
             .increment(1);
 
-        let response = metrics_handler().await.into_response();
+        std::env::remove_var("METRICS_BEARER_TOKEN");
+        let response = metrics_handler(HeaderMap::new()).await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let content_type = response
             .headers()
@@ -247,6 +286,29 @@ mod tests {
             .expect("body readable");
         let text = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(text.contains("http_requests_total"));
+    }
+
+    #[tokio::test]
+    async fn metrics_handler_requires_bearer_when_configured() {
+        std::env::set_var("METRICS_BEARER_TOKEN", "secret-token");
+
+        let no_auth = metrics_handler(HeaderMap::new()).await.into_response();
+        assert_eq!(no_auth.status(), StatusCode::UNAUTHORIZED);
+
+        let mut wrong_headers = HeaderMap::new();
+        wrong_headers.insert(header::AUTHORIZATION, "Bearer wrong".parse().unwrap());
+        let wrong = metrics_handler(wrong_headers).await.into_response();
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+
+        let mut ok_headers = HeaderMap::new();
+        ok_headers.insert(
+            header::AUTHORIZATION,
+            "Bearer secret-token".parse().unwrap(),
+        );
+        let ok = metrics_handler(ok_headers).await.into_response();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        std::env::remove_var("METRICS_BEARER_TOKEN");
     }
 
     #[tokio::test]

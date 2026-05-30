@@ -34,8 +34,12 @@ output "gemini_key_id" {
   value = google_secret_manager_secret.secrets["gemini-api-key"].secret_id
 }
 
-output "roadmap_token_id" {
-  value = google_secret_manager_secret.secrets["roadmap-auth-token"].secret_id
+output "roadmap_email_id" {
+  value = google_secret_manager_secret.secrets["roadmap-email"].secret_id
+}
+
+output "roadmap_password_id" {
+  value = google_secret_manager_secret.secrets["roadmap-password"].secret_id
 }
 
 output "postgres_password_id" {
@@ -44,4 +48,8 @@ output "postgres_password_id" {
 
 output "grafana_password_id" {
   value = google_secret_manager_secret.secrets["grafana-password"].secret_id
+}
+
+output "metrics_token_id" {
+  value = google_secret_manager_secret.secrets["metrics-token"].secret_id
 }
