@@ -209,7 +209,9 @@ HOST=0.0.0.0                                # Default: 0.0.0.0
 PORT=8080                                   # Default: 8080
 ```
 
-Copy `.env.example` to `.env` and fill secrets. Gate puzzle answers (`GATE_L1_ANSWER`, etc.) and `GATE_TOKEN_SECRET` are required for the terminal gate — see `.env.example` Gate section.
+Copy `.env.example` to `.env.development` for local development (`cargo run`, `cargo test` when `ENVIRONMENT` is not `production`). For GCP production, use `.env` with `ENVIRONMENT=production` or inject vars via Terraform/Secret Manager. Gate puzzle answers (`GATE_L1_ANSWER`, etc.) and `GATE_TOKEN_SECRET` are required for the terminal gate — see `.env.example` Gate section.
+
+**Docker Compose (local):** `./scripts/compose-dev.sh up -d` (uses `.env.development` for `${VAR}` substitution).
 
 **Roadmap.sh proxy** — backend logs in via `POST https://roadmap.sh/api/v1-login` using `ROADMAP_EMAIL` and `ROADMAP_PASSWORD`, caches the JWT in memory, and forwards `Authorization: Bearer …` to upstream `/api/roadmap/*` routes.
 

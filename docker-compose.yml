@@ -1,3 +1,6 @@
+# Local stack: pass compose variable substitution from .env.development
+#   docker compose --env-file .env.development up -d
+# Or use: ./scripts/compose-dev.sh up -d
 name: portfolio
 
 services:

@@ -519,10 +519,34 @@ pub(crate) fn assert_production_environment_or_panic() {
     }
 }
 
-pub async fn run() {
-    if let Err(err) = dotenvy::dotenv() {
-        tracing::warn!(error = %err, "failed to load .env — quote values that contain spaces");
+/// Load `.env.development` for local runs; load `.env` when `ENVIRONMENT=production`.
+/// GCP Cloud Run and Vercel inject env vars directly — missing files are OK in production.
+fn load_env_file() {
+    let is_production = std::env::var("ENVIRONMENT").as_deref() == Ok("production");
+    let primary = if is_production {
+        ".env"
+    } else {
+        ".env.development"
+    };
+
+    if std::path::Path::new(primary).exists() {
+        if let Err(err) = dotenvy::from_filename(primary) {
+            eprintln!("warning: failed to load {primary}: {err}");
+        }
+        return;
     }
+
+    if is_production {
+        if let Err(err) = dotenvy::dotenv() {
+            eprintln!("warning: failed to load .env: {err}");
+        }
+    } else {
+        eprintln!("warning: {primary} not found — copy .env.example to {primary} for local dev");
+    }
+}
+
+pub async fn run() {
+    load_env_file();
 
     let _log_guards = logging::init();
 
