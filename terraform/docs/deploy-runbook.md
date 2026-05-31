@@ -222,7 +222,38 @@ gcloud compute instances start portfolio-prod-ops --zone=asia-southeast2-a
 
 ---
 
-## 8. Secret Rotation
+## 8. Cloud Run outbound internet (roadmap.sh / GitHub)
+
+Cloud Run uses the VPC connector **only for private ranges** (Postgres on the ops VM at `10.10.0.x`). Public HTTPS (`roadmap.sh`, `api.github.com`, etc.) must use Cloud Run’s default internet egress.
+
+If `/api/roadmap/dashboard` returns **502** with `login request failed: error sending request for url (https://roadmap.sh/...)` while `/health` and `/api/portfolio` work, the service was likely deployed with `vpc-egress=all-traffic` and no Cloud NAT — outbound internet is black-holed.
+
+**Quick fix (no Terraform):**
+
+```bash
+gcloud run services update portfolio-backend \
+  --region=asia-southeast2 \
+  --vpc-egress=private-ranges-only
+```
+
+**Verify after update:**
+
+```bash
+curl -m 15 https://portfolio-backend-843865911939.asia-southeast2.run.app/api/roadmap/dashboard
+# expect 200 JSON or 502 with "ROADMAP_EMAIL/PASSWORD not configured" (secrets missing)
+```
+
+Populate roadmap credentials in **Secret Manager** (not Vercel — Vercel only serves the frontend):
+
+```bash
+echo -n 'you@example.com' | gcloud secrets versions add portfolio-roadmap-email --data-file=-
+echo -n 'your-roadmap-password' | gcloud secrets versions add portfolio-roadmap-password --data-file=-
+gcloud run services update portfolio-backend --region=asia-southeast2 --update-env-vars="FORCE_REDEPLOY=$(date +%s)"
+```
+
+---
+
+## 9. Secret Rotation
 
 ```bash
 # Generate new value, then:
@@ -237,7 +268,7 @@ gcloud run services update portfolio-backend \
 
 ---
 
-## 9. Teardown
+## 10. Teardown
 
 To destroy all resources:
 

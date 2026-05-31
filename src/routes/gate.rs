@@ -18,8 +18,8 @@ use crate::routes::AppError;
 
 const PROGRESS_COOKIE: &str = "gate_progress";
 const UNLOCK_COOKIE: &str = "portfolio_gate";
-const L1_USERNAME: &str = "yourbloo0";
-const L2_USERNAME: &str = "yourbloo1";
+const L1_USERNAME: &str = "yourblooo0";
+const L2_USERNAME: &str = "yourblooo1";
 const GATE_TOKEN_ISSUER: &str = "portfolio-gate";
 const GATE_TOKEN_AUDIENCE: &str = "terminal";
 
@@ -518,7 +518,7 @@ mod integration_tests {
 
     fn config() -> GateConfig {
         GateConfig {
-            l1_answer: "yourbloo0".into(),
+            l1_answer: "yourblooo0".into(),
             l2_answer: "secret-l2".into(),
             token_secret: "this_is_a_very_long_gate_token_secret_123456".into(),
             bypass_secret: None,
@@ -565,8 +565,8 @@ mod integration_tests {
         let state = GateState::new(config());
         let cookie = "session-1";
 
-        login_level(state.clone(), cookie, 1, "yourbloo0", "yourbloo0").await;
-        login_level(state.clone(), cookie, 2, "yourbloo1", "secret-l2").await;
+        login_level(state.clone(), cookie, 1, "yourblooo0", "yourblooo0").await;
+        login_level(state.clone(), cookie, 2, "yourblooo1", "secret-l2").await;
 
         let valid = complete_level_3(
             State(state.clone()),
@@ -596,7 +596,7 @@ mod integration_tests {
         let before_login = challenge_2_users_txt(State(state.clone()), headers(cookie, None)).await;
         assert!(matches!(before_login, Err(AppError::Forbidden)));
 
-        login_level(state.clone(), cookie, 1, "yourbloo0", "yourbloo0").await;
+        login_level(state.clone(), cookie, 1, "yourblooo0", "yourblooo0").await;
 
         let response = challenge_2_users_txt(State(state), headers(cookie, None))
             .await
@@ -608,7 +608,7 @@ mod integration_tests {
             .await
             .expect("read body");
         let body_text = String::from_utf8(body.to_vec()).expect("utf8");
-        assert_eq!(body_text, "yourbloo1:secret-l2\n");
+        assert_eq!(body_text, "yourblooo1:secret-l2\n");
     }
 }
 

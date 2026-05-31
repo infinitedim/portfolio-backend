@@ -34,7 +34,8 @@ resource "google_cloud_run_v2_service" "backend" {
 
     vpc_access {
       connector = var.vpc_connector
-      egress    = "ALL_TRAFFIC"
+      # DB/Redis on VM private IP only — public APIs (roadmap.sh, GitHub) use default internet egress.
+      egress = "PRIVATE_RANGES_ONLY"
     }
 
     containers {
@@ -128,7 +129,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
       env {
         name  = "GATE_L1_ANSWER"
-        value = "yourbloo0"
+        value = "yourblooo0"
       }
       env {
         name  = "GATE_COOKIE_MAX_AGE_DAYS"
