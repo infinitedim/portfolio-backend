@@ -10,7 +10,12 @@ const ROADMAP_BASE: &str = "https://roadmap.sh/api";
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const STALE_TTL: Duration = Duration::from_secs(15 * 60);
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("failed to build roadmap HTTP client")
+});
 
 struct CacheEntry {
     data: Value,
