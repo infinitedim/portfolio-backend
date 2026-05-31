@@ -56,6 +56,20 @@ resource "google_compute_firewall" "allow_postgres" {
   target_tags   = ["ops-vm"]
 }
 
+resource "google_compute_firewall" "allow_redis" {
+  name    = "portfolio-${var.environment}-allow-redis"
+  network = google_compute_network.main.name
+  project = var.project_id
+
+  allow {
+    protocol = "tcp"
+    ports    = ["6379"]
+  }
+
+  source_ranges = ["10.10.1.0/28", "10.10.0.0/24"]
+  target_tags   = ["ops-vm"]
+}
+
 resource "google_compute_firewall" "allow_grafana_iap" {
   name    = "portfolio-${var.environment}-allow-grafana-iap"
   network = google_compute_network.main.name

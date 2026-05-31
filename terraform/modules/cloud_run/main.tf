@@ -139,6 +139,10 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "GATE_SESSION_TTL_HOURS"
         value = "24"
       }
+      env {
+        name  = "REDIS_URL"
+        value = "redis://${var.ops_vm_internal_ip}:6379"
+      }
 
       # Secret-backed env vars
       dynamic "env" {

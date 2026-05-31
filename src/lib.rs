@@ -3,6 +3,7 @@ pub mod email;
 pub mod logging;
 pub mod metrics;
 pub mod openapi;
+pub mod redis;
 pub mod routes;
 
 // Test-only helpers (Postgres pool, admin tokens, isolated upload dir, etc.)
@@ -17,6 +18,8 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
+use redis::rate_limit::{redis_rate_limit_middleware, RateLimitConfig, RedisRateLimitState};
+use redis::RedisMode;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_governor::{
@@ -26,6 +29,24 @@ use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer,
     services::ServeDir, trace::TraceLayer,
 };
+
+macro_rules! with_rate_limit {
+    ($router:expr, $redis:expr, $config:expr, $governor:expr) => {{
+        match $redis {
+            RedisMode::Connected(pool) => {
+                let state = Arc::new(RedisRateLimitState {
+                    pool: (**pool).clone(),
+                    config: $config,
+                });
+                $router.layer(middleware::from_fn_with_state(
+                    state,
+                    redis_rate_limit_middleware,
+                ))
+            }
+            RedisMode::Disabled => $router.layer(GovernorLayer::new($governor)),
+        }
+    }};
+}
 
 pub fn configure_cors() -> CorsLayer {
     let mut allowed_origins = std::env::var("ALLOWED_ORIGINS")
@@ -103,7 +124,7 @@ fn push_origin_if_missing(origins: &mut Vec<HeaderValue>, origin: &str) {
     }
 }
 
-pub fn create_app() -> Router {
+pub fn create_app(redis: RedisMode) -> Router {
     let _metrics = metrics::init();
 
     let cors = configure_cors();
@@ -215,17 +236,21 @@ pub fn create_app() -> Router {
 
     let gate_config = routes::gate::GateConfig::from_env();
     let gate_state = routes::gate::GateState::new(gate_config);
-    let gate_routes = Router::new()
-        .route("/api/gate/status", get(routes::gate::status))
-        .route("/api/gate/login", post(routes::gate::login))
-        .route("/api/gate/complete/3", post(routes::gate::complete_level_3))
-        .route("/api/gate/unlock", post(routes::gate::unlock))
-        .route(
-            "/api/gate/challenge/2/users.txt",
-            get(routes::gate::challenge_2_users_txt),
-        )
-        .layer(GovernorLayer::new(gate_governor))
-        .with_state(gate_state);
+    let gate_routes = with_rate_limit!(
+        Router::new()
+            .route("/api/gate/status", get(routes::gate::status))
+            .route("/api/gate/login", post(routes::gate::login))
+            .route("/api/gate/complete/3", post(routes::gate::complete_level_3))
+            .route("/api/gate/unlock", post(routes::gate::unlock))
+            .route(
+                "/api/gate/challenge/2/users.txt",
+                get(routes::gate::challenge_2_users_txt),
+            ),
+        &redis,
+        RateLimitConfig::GATE,
+        gate_governor
+    )
+    .with_state(gate_state);
 
     // Upload routes with higher body limit (10MB)
     let upload_routes = Router::new()
@@ -237,50 +262,67 @@ pub fn create_app() -> Router {
         .route("/api/upload/images", get(routes::upload::list_images))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
-    let auth_routes = Router::new()
-        .route("/api/auth/register", post(routes::auth::register))
-        .route("/api/auth/login", post(routes::auth::login))
-        .route("/api/auth/verify", post(routes::auth::verify_token))
-        .route("/api/auth/refresh", post(routes::auth::refresh))
-        .route("/api/auth/logout", post(routes::auth::logout))
-        // 2FA flow. `setup`, `verify` and `disable` are admin-only (auth
-        // checked inside the handler via `require_admin`); `login` is the
-        // post-password challenge step and uses its own short-lived token.
-        .route("/api/auth/2fa/status", get(routes::twofa::status))
-        .route("/api/auth/2fa/setup", post(routes::twofa::setup))
-        .route("/api/auth/2fa/verify", post(routes::twofa::verify_setup))
-        .route("/api/auth/2fa/disable", post(routes::twofa::disable))
-        .route("/api/auth/2fa/login", post(routes::twofa::login_challenge))
-        .layer(GovernorLayer::new(auth_governor));
+    let auth_routes = with_rate_limit!(
+        Router::new()
+            .route("/api/auth/register", post(routes::auth::register))
+            .route("/api/auth/login", post(routes::auth::login))
+            .route("/api/auth/verify", post(routes::auth::verify_token))
+            .route("/api/auth/refresh", post(routes::auth::refresh))
+            .route("/api/auth/logout", post(routes::auth::logout))
+            // 2FA flow. `setup`, `verify` and `disable` are admin-only (auth
+            // checked inside the handler via `require_admin`); `login` is the
+            // post-password challenge step and uses its own short-lived token.
+            .route("/api/auth/2fa/status", get(routes::twofa::status))
+            .route("/api/auth/2fa/setup", post(routes::twofa::setup))
+            .route("/api/auth/2fa/verify", post(routes::twofa::verify_setup))
+            .route("/api/auth/2fa/disable", post(routes::twofa::disable))
+            .route("/api/auth/2fa/login", post(routes::twofa::login_challenge)),
+        &redis,
+        RateLimitConfig::AUTH,
+        auth_governor
+    );
 
-    let logs_routes = Router::new()
-        .route("/api/logs", post(routes::logs::receive_client_logs))
-        .layer(GovernorLayer::new(logs_governor));
+    let logs_routes = with_rate_limit!(
+        Router::new().route("/api/logs", post(routes::logs::receive_client_logs)),
+        &redis,
+        RateLimitConfig::LOGS,
+        logs_governor
+    );
 
-    let analytics_routes = Router::new()
-        .route("/api/analytics/pageview", post(metrics::record_pageview))
-        .layer(GovernorLayer::new(analytics_governor));
+    let analytics_routes = with_rate_limit!(
+        Router::new().route("/api/analytics/pageview", post(metrics::record_pageview)),
+        &redis,
+        RateLimitConfig::ANALYTICS,
+        analytics_governor
+    );
 
-    let github_routes = Router::new()
-        .route("/api/github/user/{username}", get(routes::github::get_user))
-        .route(
-            "/api/github/stats/{username}",
-            get(routes::github::get_stats),
-        )
-        .layer(GovernorLayer::new(github_governor));
+    let github_routes = with_rate_limit!(
+        Router::new()
+            .route("/api/github/user/{username}", get(routes::github::get_user))
+            .route(
+                "/api/github/stats/{username}",
+                get(routes::github::get_stats),
+            ),
+        &redis,
+        RateLimitConfig::GITHUB,
+        github_governor
+    );
 
     // Contact + admin inbox routes. Contact submission is public but
     // rate-limited; admin endpoints are guarded inside the handler via
     // `require_admin` so they don't need a separate auth middleware here.
     let mailer: Arc<dyn email::Mailer> = email::from_env();
     let mailer_for_newsletter = mailer.clone();
-    let contact_public = Router::new()
-        .route(
+    let contact_public = with_rate_limit!(
+        Router::new().route(
             "/api/contact",
             post(routes::contact::submit_contact_message),
-        )
-        .layer(GovernorLayer::new(contact_governor))
-        .with_state(mailer);
+        ),
+        &redis,
+        RateLimitConfig::CONTACT,
+        contact_governor
+    )
+    .with_state(mailer);
 
     let admin_messages_routes = Router::new()
         .route("/api/admin/messages", get(routes::contact::list_messages))
@@ -338,30 +380,38 @@ pub fn create_app() -> Router {
             get(routes::playground::get_snippet),
         );
 
-    let newsletter_public = Router::new()
-        .route(
-            "/api/newsletter/subscribe",
-            post(routes::newsletter::subscribe),
-        )
-        .route("/api/newsletter/confirm", get(routes::newsletter::confirm))
-        .route(
-            "/api/newsletter/unsubscribe",
-            post(routes::newsletter::unsubscribe),
-        )
-        .layer(GovernorLayer::new(newsletter_governor))
-        .with_state(mailer_for_newsletter.clone());
+    let newsletter_public = with_rate_limit!(
+        Router::new()
+            .route(
+                "/api/newsletter/subscribe",
+                post(routes::newsletter::subscribe),
+            )
+            .route("/api/newsletter/confirm", get(routes::newsletter::confirm))
+            .route(
+                "/api/newsletter/unsubscribe",
+                post(routes::newsletter::unsubscribe),
+            ),
+        &redis,
+        RateLimitConfig::NEWSLETTER,
+        newsletter_governor
+    )
+    .with_state(mailer_for_newsletter.clone());
 
-    let newsletter_admin = Router::new()
-        .route(
-            "/api/admin/newsletter/subscribers",
-            get(routes::newsletter::list_subscribers),
-        )
-        .route(
-            "/api/admin/newsletter/broadcast",
-            post(routes::newsletter::broadcast),
-        )
-        .layer(GovernorLayer::new(newsletter_broadcast_governor))
-        .with_state(mailer_for_newsletter);
+    let newsletter_admin = with_rate_limit!(
+        Router::new()
+            .route(
+                "/api/admin/newsletter/subscribers",
+                get(routes::newsletter::list_subscribers),
+            )
+            .route(
+                "/api/admin/newsletter/broadcast",
+                post(routes::newsletter::broadcast),
+            ),
+        &redis,
+        RateLimitConfig::NEWSLETTER_BROADCAST,
+        newsletter_broadcast_governor
+    )
+    .with_state(mailer_for_newsletter);
 
     let cms_state = routes::cms::CmsState::from_env();
     let cms_routes = Router::new()
@@ -378,18 +428,21 @@ pub fn create_app() -> Router {
         .with_state(cms_state);
 
     let ai_state = routes::ai::AiState::from_env();
-    let ai_routes = Router::new()
-        .route("/api/ai/chat", post(routes::ai::chat))
-        .layer(GovernorLayer::new(ai_governor))
-        .with_state(ai_state);
+    let ai_routes = with_rate_limit!(
+        Router::new().route("/api/ai/chat", post(routes::ai::chat)),
+        &redis,
+        RateLimitConfig::AI,
+        ai_governor
+    )
+    .with_state(ai_state);
 
-    let presence_state = routes::presence::PresenceState::new();
+    let presence_state = routes::presence::PresenceState::new(&redis);
     let presence_routes = Router::new()
         .route("/ws/presence", get(routes::presence::ws_handler))
         .with_state(presence_state);
 
     // Main routes with default body limit (2MB)
-    let main_routes = Router::new()
+    let api_routes = Router::new()
         .route("/api/roadmap/streak", get(routes::roadmap::get_streak))
         .route(
             "/api/roadmap/dashboard",
@@ -421,13 +474,19 @@ pub fn create_app() -> Router {
             "/api/blog/series/{slug}",
             get(routes::series::get_series_public),
         )
+        .route("/metrics", get(metrics::metrics_handler))
+        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024));
+
+    let health_state = routes::health::HealthState {
+        redis: Arc::new(redis.clone()),
+    };
+    let health_routes = Router::new()
         .route("/health", get(routes::health::health_ping))
         .route("/health/detailed", get(routes::health::health_detailed))
         .route("/health/database", get(routes::health::health_database))
         .route("/health/redis", get(routes::health::health_redis))
         .route("/health/ready", get(routes::health::health_ready))
-        .route("/metrics", get(metrics::metrics_handler))
-        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024));
+        .with_state(health_state);
 
     let mut app = Router::new()
         .merge(upload_routes)
@@ -447,7 +506,8 @@ pub fn create_app() -> Router {
         .merge(admin_blog_routes)
         .merge(admin_portfolio_routes)
         .merge(gate_routes)
-        .merge(main_routes);
+        .merge(api_routes)
+        .merge(health_routes);
 
     // Swagger UI is enabled by default in development. In production,
     // it is disabled unless ENABLE_SWAGGER_UI=true is explicitly set.
@@ -613,7 +673,8 @@ pub async fn run() {
         );
     }
 
-    let app = create_app();
+    let redis = redis::RedisMode::connect_from_env().await;
+    let app = create_app(redis);
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     // Default 8080 to match Docker/Compose conventions.
@@ -684,12 +745,12 @@ mod tests {
 
     #[test]
     fn test_create_app_returns_router() {
-        let _app = create_app();
+        let _app = create_app(RedisMode::Disabled);
     }
 
     #[tokio::test]
     async fn create_app_exposes_metrics_route() {
-        let app = create_app();
+        let app = create_app(RedisMode::Disabled);
         let response = app
             .oneshot(
                 Request::builder()
@@ -705,7 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_app_exposes_health_route() {
-        let app = create_app();
+        let app = create_app(RedisMode::Disabled);
         let response = app
             .oneshot(
                 Request::builder()
@@ -724,7 +785,7 @@ mod tests {
     async fn swagger_ui_can_be_disabled_via_env() {
         let _guard = env_lock().lock().expect("env lock poisoned");
         std::env::set_var("ENABLE_SWAGGER_UI", "false");
-        let app = create_app();
+        let app = create_app(RedisMode::Disabled);
 
         let response = app
             .oneshot(
@@ -746,7 +807,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock poisoned");
         std::env::remove_var("ENABLE_SWAGGER_UI");
         std::env::set_var("ENVIRONMENT", "development");
-        let app = create_app();
+        let app = create_app(RedisMode::Disabled);
 
         let response = app
             .oneshot(
@@ -767,7 +828,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock poisoned");
         std::env::remove_var("ENABLE_SWAGGER_UI");
         std::env::set_var("ENVIRONMENT", "production");
-        let app = create_app();
+        let app = create_app(RedisMode::Disabled);
 
         let response = app
             .oneshot(

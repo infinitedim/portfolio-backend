@@ -1,10 +1,18 @@
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::redis::RedisMode;
 
 lazy_static::lazy_static! {
     static ref SERVER_START: Instant = Instant::now();
+}
+
+#[derive(Clone)]
+pub struct HealthState {
+    pub redis: Arc<RedisMode>,
 }
 
 pub fn init_start_time() {
@@ -97,7 +105,7 @@ pub async fn health_ping() -> impl IntoResponse {
         (status = 503, description = "One or more checks failed", body = DetailedHealthResponse),
     ),
 )]
-pub async fn health_detailed() -> impl IntoResponse {
+pub async fn health_detailed(State(state): State<HealthState>) -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
     let db_configured = std::env::var("DATABASE_URL").is_ok();
@@ -131,7 +139,7 @@ pub async fn health_detailed() -> impl IntoResponse {
                 },
             }
         },
-        check_redis()
+        check_redis(&state.redis)
     );
 
     let db_required_and_failing = db_configured && database_check.status != "healthy";
@@ -200,8 +208,8 @@ pub async fn health_database() -> impl IntoResponse {
         (status = 503, description = "Redis is unhealthy", body = ServiceCheck),
     ),
 )]
-pub async fn health_redis() -> impl IntoResponse {
-    let check = check_redis().await;
+pub async fn health_redis(State(state): State<HealthState>) -> impl IntoResponse {
+    let check = check_redis(&state.redis).await;
     let status_code = match check.status.as_str() {
         "healthy" | "not_configured" => StatusCode::OK,
         _ => StatusCode::SERVICE_UNAVAILABLE,
@@ -219,7 +227,7 @@ pub async fn health_redis() -> impl IntoResponse {
         (status = 503, description = "Service is not ready", body = ReadyResponse),
     ),
 )]
-pub async fn health_ready() -> impl IntoResponse {
+pub async fn health_ready(State(state): State<HealthState>) -> impl IntoResponse {
     let uptime = SERVER_START.elapsed().as_secs();
 
     let (database_status, redis_check) = tokio::join!(
@@ -229,7 +237,7 @@ pub async fn health_ready() -> impl IntoResponse {
                 Err(_) => "unhealthy".to_string(),
             }
         },
-        check_redis()
+        check_redis(&state.redis)
     );
     let redis_status = redis_check.status.clone();
 
@@ -264,56 +272,33 @@ pub async fn health_ready() -> impl IntoResponse {
     (status_code, Json(response))
 }
 
-async fn check_redis() -> ServiceCheck {
-    let url = match std::env::var("REDIS_URL") {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
-            return ServiceCheck {
-                status: "not_configured".to_string(),
-                response_time: None,
-                error: None,
-            };
-        }
-    };
-
+async fn check_redis(redis: &RedisMode) -> ServiceCheck {
     let is_production = std::env::var("ENVIRONMENT")
         .map(|v| v == "production")
         .unwrap_or(false);
 
-    let start = Instant::now();
-    match redis_ping(&url).await {
-        Ok(()) => ServiceCheck {
-            status: "healthy".to_string(),
-            response_time: Some(start.elapsed().as_millis() as u64),
+    match redis {
+        RedisMode::Disabled => ServiceCheck {
+            status: "not_configured".to_string(),
+            response_time: None,
             error: None,
         },
-        Err(error) => ServiceCheck {
-            status: "unhealthy".to_string(),
-            response_time: None,
-            error: if is_production {
-                Some("redis unreachable".to_string())
-            } else {
-                Some(error)
+        RedisMode::Connected(pool) => match pool.ping().await {
+            Ok(response_time) => ServiceCheck {
+                status: "healthy".to_string(),
+                response_time: Some(response_time),
+                error: None,
+            },
+            Err(error) => ServiceCheck {
+                status: "unhealthy".to_string(),
+                response_time: None,
+                error: if is_production {
+                    Some("redis unreachable".to_string())
+                } else {
+                    Some(error)
+                },
             },
         },
-    }
-}
-
-async fn redis_ping(url: &str) -> Result<(), String> {
-    let client = redis::Client::open(url).map_err(|e| e.to_string())?;
-    let mut conn = client
-        .get_multiplexed_async_connection()
-        .await
-        .map_err(|e| e.to_string())?;
-    let pong: String = redis::cmd("PING")
-        .query_async(&mut conn)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if pong.eq_ignore_ascii_case("PONG") {
-        Ok(())
-    } else {
-        Err(format!("unexpected PING response: {pong}"))
     }
 }
 
@@ -327,12 +312,16 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_router() -> Router {
+        let health_state = HealthState {
+            redis: Arc::new(RedisMode::Disabled),
+        };
         Router::new()
             .route("/health", get(health_ping))
             .route("/health/detailed", get(health_detailed))
             .route("/health/database", get(health_database))
             .route("/health/redis", get(health_redis))
             .route("/health/ready", get(health_ready))
+            .with_state(health_state)
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(app: Router, uri: &str) -> (StatusCode, T) {

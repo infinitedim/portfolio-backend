@@ -63,6 +63,8 @@ Target: **P95 < 50ms** for all HTTP routes.
 Routes in this tier cannot meet 50ms synchronously on cache miss. Strategy: Redis
 cache with background refresh; HTTP returns cached data or 202 Accepted.
 
+**Rate limiting:** When `REDIS_URL` is configured, auth/gate/contact/logs/analytics/github/newsletter/ai routes use Redis fixed-window counters (`ratelimit:{bucket}:{ip}`) with fail-open on Redis errors. When unset, `tower_governor` in-memory limits apply unchanged.
+
 | Method | Path | Handler | Module | Bottleneck | Strategy |
 |--------|------|---------|--------|------------|----------|
 | GET | `/api/roadmap/streak` | `get_streak` | `roadmap.rs` | Upstream HTTP ~100-600ms | Redis cache + background refresh |
@@ -84,7 +86,7 @@ cache with background refresh; HTTP returns cached data or 202 Accepted.
 | POST | `/api/newsletter/unsubscribe` | `unsubscribe` | `newsletter.rs` | DB UPDATE | OK |
 | POST | `/api/admin/newsletter/broadcast` | `broadcast` | `newsletter.rs` | N x email | Return 202 + async |
 | POST | `/api/auth/2fa/*` | various | `twofa.rs` | DB + crypto | OK |
-| GET | `/ws/presence` | `ws_handler` | `presence.rs` | WebSocket (long-lived) | N/A |
+| GET | `/ws/presence` | `ws_handler` | `presence.rs` | WebSocket (long-lived) | Redis room/total counters when `REDIS_URL` set |
 
 ### Exceptions (cannot meet 50ms by nature)
 

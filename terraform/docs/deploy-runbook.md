@@ -178,6 +178,28 @@ Then connect with `psql`:
 psql -h localhost -U portfolio -d portfolio
 ```
 
+### Redis (port forward)
+
+```bash
+gcloud compute ssh portfolio-prod-ops \
+  --zone=asia-southeast2-a \
+  --tunnel-through-iap \
+  -- -L 6379:localhost:6379
+```
+
+Verify from your machine:
+
+```bash
+redis-cli -h localhost ping
+# PONG
+```
+
+Cloud Run receives `REDIS_URL=redis://<ops_vm_internal_ip>:6379` from Terraform. After
+`terraform apply`, confirm `/health/redis` returns `"status":"healthy"`.
+
+If Redis was started manually on the ops VM, align with
+`docker-compose.gcp-ops.yml` (port 6379, volume `/mnt/data/redis`).
+
 ---
 
 ## 7. Backup & Restore

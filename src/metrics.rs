@@ -21,6 +21,7 @@ const HTTP_REQUEST_DURATION_SECONDS: &str = "http_request_duration_seconds";
 const BLOG_POST_VIEWS_TOTAL: &str = "blog_post_views_total";
 const CONTACT_SUBMISSIONS_TOTAL: &str = "contact_submissions_total";
 const GATE_UNLOCKS_TOTAL: &str = "gate_unlocks_total";
+const RATE_LIMIT_REJECTED_TOTAL: &str = "rate_limit_rejected_total";
 
 const LATENCY_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
@@ -47,6 +48,10 @@ pub fn init() -> PrometheusHandle {
                 "Successful contact form submissions persisted"
             );
             describe_counter!(GATE_UNLOCKS_TOTAL, "Successful terminal gate unlocks");
+            describe_counter!(
+                RATE_LIMIT_REJECTED_TOTAL,
+                "Requests rejected by Redis-backed rate limiting"
+            );
 
             let handle = PrometheusBuilder::new()
                 .set_buckets_for_metric(
@@ -130,6 +135,10 @@ pub fn record_contact_submission() {
 
 pub fn record_gate_unlock() {
     counter!(GATE_UNLOCKS_TOTAL).increment(1);
+}
+
+pub fn record_rate_limit_rejected(bucket: &str) {
+    counter!(RATE_LIMIT_REJECTED_TOTAL, "bucket" => bucket.to_string()).increment(1);
 }
 
 fn unauthorized_metrics_response() -> Response {

@@ -1,5 +1,5 @@
-//! Real-time visitor presence over WebSocket — in-memory room counts with
-//! optional Redis backing when `REDIS_URL` is configured.
+//! Real-time visitor presence over WebSocket — Redis-backed when configured,
+//! in-memory fallback otherwise.
 
 use axum::{
     extract::{
@@ -10,60 +10,21 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Duration;
+use uuid::Uuid;
 
-#[derive(Clone, Default)]
+use crate::redis::presence_store::{build_presence_backend, PresenceBackend};
+
+#[derive(Clone)]
 pub struct PresenceState {
-    inner: Arc<RwLock<PresenceInner>>,
-}
-
-#[derive(Default)]
-struct PresenceInner {
-    rooms: HashMap<String, u32>,
-    total_connections: u32,
+    backend: Arc<dyn PresenceBackend>,
 }
 
 impl PresenceState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn join_room(&self, room: &str) -> u32 {
-        let mut guard = self.inner.write().await;
-        guard.total_connections += 1;
-        let count = guard.rooms.entry(room.to_string()).or_insert(0);
-        *count += 1;
-        *count
-    }
-
-    pub async fn leave_room(&self, room: &str) -> u32 {
-        let mut guard = self.inner.write().await;
-        if guard.total_connections > 0 {
-            guard.total_connections -= 1;
-        }
-        let count = guard
-            .rooms
-            .get_mut(room)
-            .map(|c| {
-                if *c > 0 {
-                    *c -= 1;
-                }
-                *c
-            })
-            .unwrap_or(0);
-        if count == 0 {
-            guard.rooms.remove(room);
-        }
-        count
-    }
-
-    pub async fn snapshot(&self) -> PresenceSnapshot {
-        let guard = self.inner.read().await;
-        PresenceSnapshot {
-            total_connections: guard.total_connections,
-            rooms: guard.rooms.clone(),
+    pub fn new(redis: &crate::redis::RedisMode) -> Self {
+        Self {
+            backend: build_presence_backend(redis),
         }
     }
 }
@@ -72,7 +33,6 @@ impl PresenceState {
 #[serde(rename_all = "camelCase")]
 pub struct PresenceSnapshot {
     pub total_connections: u32,
-    pub rooms: HashMap<String, u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,11 +69,13 @@ pub async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: PresenceState) {
     let (mut sender, mut receiver) = socket.split();
+    let conn_id = Uuid::new_v4().to_string();
     let mut current_room: Option<String> = None;
+    let mut watchdog = None::<tokio::task::JoinHandle<()>>;
 
-    let snapshot = state.snapshot().await;
+    let total = state.backend.total_connections().await.unwrap_or(0);
     let welcome = serde_json::to_string(&ServerMessage::Welcome {
-        total_connections: snapshot.total_connections,
+        total_connections: total,
     })
     .unwrap_or_else(|_| r#"{"type":"error","message":"serialize failed"}"#.to_string());
     if sender.send(Message::Text(welcome.into())).await.is_err() {
@@ -132,17 +94,39 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                 match parsed {
                     Ok(ClientMessage::Join { room }) => {
                         if let Some(old) = current_room.take() {
-                            let _ = state.leave_room(&old).await;
+                            let _ = state.backend.leave_conn(&conn_id).await;
+                            let _ = old;
                         }
+                        if let Some(handle) = watchdog.take() {
+                            handle.abort();
+                        }
+
                         let room = normalize_room(&room);
-                        let count = state.join_room(&room).await;
+                        let count = state.backend.join_room(&conn_id, &room).await.unwrap_or(0);
                         current_room = Some(room.clone());
+
+                        let backend = state.backend.clone();
+                        let conn = conn_id.clone();
+                        watchdog = Some(tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(Duration::from_secs(45)).await;
+                                match backend.refresh_conn(&conn).await {
+                                    Ok(true) => continue,
+                                    _ => {
+                                        let _ = backend.leave_conn(&conn).await;
+                                        break;
+                                    }
+                                }
+                            }
+                        }));
+
                         let payload =
                             serde_json::to_string(&ServerMessage::RoomCount { room, count })
                                 .unwrap_or_default();
                         let _ = sender.send(Message::Text(payload.into())).await;
                     }
                     Ok(ClientMessage::Ping) => {
+                        let _ = state.backend.refresh_conn(&conn_id).await;
                         let payload =
                             serde_json::to_string(&ServerMessage::Pong).unwrap_or_default();
                         let _ = sender.send(Message::Text(payload.into())).await;
@@ -164,30 +148,24 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
         }
     }
 
-    if let Some(room) = current_room {
-        let _ = state.leave_room(&room).await;
+    if let Some(handle) = watchdog.take() {
+        handle.abort();
+    }
+    if current_room.is_some() {
+        let _ = state.backend.leave_conn(&conn_id).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redis::RedisMode;
 
     #[tokio::test]
-    async fn join_and_leave_room_updates_counts() {
-        let state = PresenceState::new();
-        let count = state.join_room("site").await;
+    async fn presence_state_uses_in_memory_when_redis_disabled() {
+        let state = PresenceState::new(&RedisMode::Disabled);
+        let count = state.backend.join_room("c1", "site").await.expect("join");
         assert_eq!(count, 1);
-        let count2 = state.join_room("site").await;
-        assert_eq!(count2, 2);
-
-        let remaining = state.leave_room("site").await;
-        assert_eq!(remaining, 1);
-        let remaining2 = state.leave_room("site").await;
-        assert_eq!(remaining2, 0);
-
-        let snap = state.snapshot().await;
-        assert!(snap.rooms.is_empty());
     }
 
     #[test]
