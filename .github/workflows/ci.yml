@@ -385,7 +385,7 @@ jobs:
           echo "WARNING: Grafana datasources not provisioned after 2 minutes, continuing..."
 
       - name: Setup Go for hey
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.22"
 
