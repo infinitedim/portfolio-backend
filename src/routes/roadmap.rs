@@ -254,3 +254,30 @@ pub async fn get_favourites() -> impl IntoResponse {
         Err((status, json)) => (status, json).into_response(),
     }
 }
+
+/// GET /api/roadmap/progress/{techstack}
+/// Proxies `roadmap.sh/api/v1-get-user-resource-progress`
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/progress/{techstack}",
+    tag = "Roadmap",
+    params(
+        ("techstack" = String, Path, description = "The technology stack/roadmap name")
+    ),
+    responses(
+        (status = 200, description = "Roadmap progress data"),
+        (status = 502, description = "Upstream error or unreachable")
+    )
+)]
+pub async fn get_resource_progress(
+    axum::extract::Path(techstack): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let path = format!(
+        "v1-get-user-resource-progress?resourceId={}&resourceType=roadmap",
+        techstack
+    );
+    match cached_fetch(&path).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, json)) => (status, json).into_response(),
+    }
+}

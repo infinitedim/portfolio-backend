@@ -146,6 +146,7 @@ impl Modify for SecurityAddon {
         routes::roadmap::get_dashboard,
         routes::roadmap::get_teams,
         routes::roadmap::get_favourites,
+        routes::roadmap::get_resource_progress,
         // Analytics
         crate::metrics::record_pageview,
         // GitHub
