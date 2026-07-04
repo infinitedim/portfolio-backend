@@ -10,4 +10,4 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-exec docker compose --env-file "${ENV_FILE}" --project-directory "${ROOT}" "$@"
+exec docker compose --env-file "${ENV_FILE}" --project-directory up -d "${ROOT}" "$@"

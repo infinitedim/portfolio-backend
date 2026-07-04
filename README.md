@@ -25,7 +25,7 @@ High-performance Rust backend with Axum web framework and SQLx/PostgreSQL, featu
 
 ```bash
 # Clone the repository (if not already)
-git clone https://github.com/infinitedim/portfolio.git
+git clone https://github.com/infinitedim/portfolio-frontend.git
 cd portfolio/portfolio-backend
 
 # Build the backend
@@ -749,8 +749,8 @@ MIT License - see the [LICENSE](LICENSE) file for details
 ## 💬 Support
 
 - 📖 Check the [Frontend README](../portfolio-frontend/README.md) for full-stack setup
-- 🐛 Found a bug? [Open an issue](https://github.com/infinitedim/portfolio/issues)
-- 💡 Have a suggestion? [Start a discussion](https://github.com/infinitedim/portfolio/discussions)
+- 🐛 Found a bug? [Open an issue](https://github.com/infinitedim/portfolio-frontend/issues)
+- 💡 Have a suggestion? [Start a discussion](https://github.com/infinitedim/portfolio-frontend/discussions)
 
 ---
 
