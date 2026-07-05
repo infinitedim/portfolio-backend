@@ -249,9 +249,30 @@ pub fn is_valid_terminal_referer(referer: &str, site_url: &str) -> bool {
     let base = site_url.trim_end_matches('/');
     let expected = format!("{base}/terminal");
     let referer_trimmed = referer.trim();
-    referer_trimmed == expected
+
+    if referer_trimmed == expected
         || referer_trimmed.starts_with(&format!("{expected}/"))
         || referer_trimmed.starts_with(&format!("{expected}?"))
+    {
+        return true;
+    }
+
+    // Fallback for local development
+    if !matches!(std::env::var("ENVIRONMENT").as_deref(), Ok("production")) {
+        let local_expected_1 = "http://localhost:3000/terminal";
+        let local_expected_2 = "http://127.0.0.1:3000/terminal";
+        if referer_trimmed == local_expected_1
+            || referer_trimmed.starts_with(&format!("{local_expected_1}/"))
+            || referer_trimmed.starts_with(&format!("{local_expected_1}?"))
+            || referer_trimmed == local_expected_2
+            || referer_trimmed.starts_with(&format!("{local_expected_2}/"))
+            || referer_trimmed.starts_with(&format!("{local_expected_2}?"))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn attach_progress_cookie(response: &mut Response, session_id: &str, config: &GateConfig) {
