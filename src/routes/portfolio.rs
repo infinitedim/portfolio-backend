@@ -76,35 +76,41 @@ pub fn is_valid_section(section: &str) -> bool {
 
 static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
     serde_json::json!([
-        {
-            "id": "portfolio-website",
-            "name": "Portfolio Website",
-            "description": "A modern portfolio website built with Next.js and Rust",
-            "technologies": ["Next.js", "React", "TypeScript", "Rust", "Axum"],
-            "status": "active",
-            "featured": true
-        }
-    ])
-});
-
-static STATIC_SKILLS: Lazy<Value> = Lazy::new(|| {
-    serde_json::json!([
-        {
-            "name": "Frontend",
-            "skills": [
-                { "name": "React", "level": 90 },
-                { "name": "TypeScript", "level": 85 },
-                { "name": "Next.js", "level": 85 }
-            ]
-        },
-        {
-            "name": "Backend",
-            "skills": [
-                { "name": "Rust", "level": 75 },
-                { "name": "Node.js", "level": 80 },
-                { "name": "PostgreSQL", "level": 75 }
-            ]
-        }
+      {
+        "id": "terminal-portfolio",
+        "name": "Terminal Portfolio",
+        "description": "Portfolio interaktif bergaya terminal dengan Next.js 15, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
+        "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Tailwind CSS"],
+        "demoUrl": "https://infinitedim.vercel.app",
+        "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
+        "status": "active",
+        "featured": true
+      },
+      {
+        "id": "cellink",
+        "name": "Cellink B2B Travel Platform",
+        "description": "Platform B2B untuk agen travel dengan fitur pemesanan penerbangan, kereta, hotel, event, dan transaksi PPOB. Dibangun dengan Flutter dan dideploy di Kubernetes.",
+        "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus"],
+        "status": "active",
+        "featured": true
+      },
+      {
+        "id": "medmind",
+        "name": "MedMind",
+        "description": "Aplikasi jurnal kesehatan Flutter berbasis privacy-first dengan on-device ML (TFLite). Arsitektur Clean Architecture + Riverpod, pipeline ML Python/TensorFlow untuk symptom correlation dan NLP extraction.",
+        "technologies": ["Flutter", "TensorFlow", "TFLite", "Python", "Riverpod", "Clean Architecture"],
+        "githubUrl": "https://github.com/infinitedim/medmind",
+        "status": "in-progress",
+        "featured": true
+      },
+      {
+        "id": "devix-store",
+        "name": "Devix Digital Store",
+        "description": "Platform penjualan produk digital untuk SMB dengan Next.js 16 App Router, Prisma, Supabase, dual payment provider (Stripe + Lemon Squeezy) behind feature flag, dan Upstash Redis untuk rate limiting.",
+        "technologies": ["Next.js", "TypeScript", "Prisma", "Supabase", "Stripe", "Upstash Redis"],
+        "status": "in-progress",
+        "featured": false
+      }
     ])
 });
 
@@ -124,7 +130,6 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
 pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
         "projects" => Some(STATIC_PROJECTS.clone()),
-        "skills" => Some(STATIC_SKILLS.clone()),
         "experience" => Some(serde_json::json!([])),
         "about" => Some(STATIC_ABOUT.clone()),
         _ => None,
