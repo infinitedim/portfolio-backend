@@ -105,3 +105,35 @@ impl IntoResponse for AppError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_error_conversion_and_responses() {
+        let err1 = AppError::DbUnavailable;
+        assert_eq!(err1.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err1.public_message(), "Database not available");
+
+        let err_db_io = AppError::Db(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "io error",
+        )));
+        assert_eq!(err_db_io.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err_db_io.public_message(), "Database error");
+
+        let err_db_other = AppError::Db(sqlx::Error::RowNotFound);
+        assert_eq!(
+            err_db_other.status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let sqlx_err = sqlx::Error::RowNotFound;
+        let converted: AppError = sqlx_err.into();
+        assert!(matches!(converted, AppError::Db(_)));
+
+        let response = converted.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

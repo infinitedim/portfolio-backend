@@ -267,7 +267,6 @@ mod tests {
         assert_eq!(value["user"], json!("alice"));
         assert_eq!(value["metadata"]["ok"], json!(true));
     }
-
     #[test]
     fn test_truncate_long_string_field() {
         let huge = "x".repeat(MAX_FIELD_LEN + 100);
@@ -275,5 +274,78 @@ mod tests {
         redact_value(&mut value);
         let v = &value["note"];
         assert_eq!(v.as_str().unwrap().len(), MAX_FIELD_LEN);
+    }
+
+    #[tokio::test]
+    async fn test_receive_client_logs_integration() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::post;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/api/logs", post(receive_client_logs))
+            .layer(crate::test_support::mock_connect_info());
+
+        // 1. Send normal logs batch
+        let batch = json!({
+            "logs": [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "level": "info",
+                    "message": "hello world",
+                    "context": { "user": "test" },
+                    "metadata": { "api_key": "secret123" }
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "level": "unknown", // will fail processing but process other
+                    "message": "bad level",
+                    "context": null,
+                    "metadata": null
+                }
+            ]
+        });
+        let body = serde_json::to_vec(&batch).unwrap();
+        let req = Request::post("/api/logs")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1, 10.0.0.1")
+            .body(Body::from(body))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response_val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(response_val["success"].as_bool().unwrap());
+        assert_eq!(response_val["received"].as_u64().unwrap(), 2);
+        assert_eq!(response_val["processed"].as_u64().unwrap(), 1); // 1 processed, 1 failed (unknown level)
+
+        // 2. Batch too large
+        let mut huge_logs = Vec::new();
+        for _ in 0..55 {
+            huge_logs.push(json!({
+                "timestamp": "2024-01-01T00:00:00Z",
+                "level": "info",
+                "message": "log",
+                "context": null,
+                "metadata": null
+            }));
+        }
+        let batch_huge = json!({ "logs": huge_logs });
+        let body_huge = serde_json::to_vec(&batch_huge).unwrap();
+        let req_huge = Request::post("/api/logs")
+            .header("content-type", "application/json")
+            .body(Body::from(body_huge))
+            .unwrap();
+        let res_huge = app.oneshot(req_huge).await.unwrap();
+        assert_eq!(res_huge.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let bytes_huge = axum::body::to_bytes(res_huge.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response_huge: serde_json::Value = serde_json::from_slice(&bytes_huge).unwrap();
+        assert!(!response_huge["success"].as_bool().unwrap());
     }
 }

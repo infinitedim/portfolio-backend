@@ -375,4 +375,88 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
+
+    #[tokio::test]
+    async fn test_roadmap_stale_cache_hit() {
+        let _guard = TEST_MUTEX.lock().await;
+        {
+            let mut state = STATE.lock().await;
+            state.cache.clear();
+            state.cache.insert(
+                "v1-streak".to_string(),
+                CacheEntry {
+                    data: serde_json::json!({"streak": 10}),
+                    fetched_at: std::time::Instant::now() - std::time::Duration::from_secs(6 * 60),
+                },
+            );
+        }
+
+        let response = get_streak().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val["streak"], 10);
+    }
+
+    #[tokio::test]
+    async fn test_roadmap_upstream_failure() {
+        let _guard = TEST_MUTEX.lock().await;
+        let email = std::env::var("ROADMAP_EMAIL").ok();
+        let password = std::env::var("ROADMAP_PASSWORD").ok();
+
+        std::env::set_var("ROADMAP_EMAIL", "invalid@example.com");
+        std::env::set_var("ROADMAP_PASSWORD", "wrongpassword");
+
+        {
+            let mut state = STATE.lock().await;
+            state.cache.clear();
+            state.auth_token = None;
+        }
+
+        let response = get_streak().await.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        if let Some(val) = email {
+            std::env::set_var("ROADMAP_EMAIL", val);
+        } else {
+            std::env::remove_var("ROADMAP_EMAIL");
+        }
+        if let Some(val) = password {
+            std::env::set_var("ROADMAP_PASSWORD", val);
+        } else {
+            std::env::remove_var("ROADMAP_PASSWORD");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_roadmap_unauthorized_token_retry() {
+        let _guard = TEST_MUTEX.lock().await;
+        let email = std::env::var("ROADMAP_EMAIL").ok();
+        let password = std::env::var("ROADMAP_PASSWORD").ok();
+
+        std::env::set_var("ROADMAP_EMAIL", "invalid@example.com");
+        std::env::set_var("ROADMAP_PASSWORD", "wrongpassword");
+
+        {
+            let mut state = STATE.lock().await;
+            state.cache.clear();
+            state.auth_token = Some("invalid-expired-token-12345".to_string());
+        }
+
+        let response = get_streak().await.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        if let Some(val) = email {
+            std::env::set_var("ROADMAP_EMAIL", val);
+        } else {
+            std::env::remove_var("ROADMAP_EMAIL");
+        }
+        if let Some(val) = password {
+            std::env::set_var("ROADMAP_PASSWORD", val);
+        } else {
+            std::env::remove_var("ROADMAP_PASSWORD");
+        }
+    }
 }

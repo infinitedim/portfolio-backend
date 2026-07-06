@@ -110,4 +110,30 @@ mod tests {
         let ms = pool.ping().await.expect("ping");
         assert!(ms < 5_000);
     }
+
+    #[tokio::test]
+    async fn test_redis_connect_invalid_url() {
+        let res = RedisPool::connect("redis://127.0.0.1:1234").await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_redis_mode_connect_from_env() {
+        let original_redis = std::env::var("REDIS_URL").ok();
+        std::env::remove_var("REDIS_URL");
+        let mode = RedisMode::connect_from_env().await;
+        assert!(matches!(mode, RedisMode::Disabled));
+        assert!(mode.pool().is_none());
+        assert_eq!(mode.ping().await.unwrap(), None);
+
+        std::env::set_var("REDIS_URL", "redis://127.0.0.1:1234");
+        let mode2 = RedisMode::connect_from_env().await;
+        assert!(matches!(mode2, RedisMode::Disabled));
+
+        if let Some(val) = original_redis {
+            std::env::set_var("REDIS_URL", val);
+        } else {
+            std::env::remove_var("REDIS_URL");
+        }
+    }
 }

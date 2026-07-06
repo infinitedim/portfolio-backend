@@ -323,4 +323,90 @@ mod tests {
         std::env::remove_var("RESEND_API_KEY");
         std::env::remove_var("RESEND_FROM");
     }
+
+    #[tokio::test]
+    async fn test_noop_mailer_all_methods() {
+        let mailer = NoopMailer;
+        assert!(mailer
+            .send_newsletter_confirmation("test@local", "http://confirm")
+            .await
+            .is_ok());
+        assert!(mailer
+            .send_newsletter_broadcast("test@local", "Subject", "Body")
+            .await
+            .is_ok());
+    }
+
+    #[test]
+    fn test_from_env_noop_by_default() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::remove_var("RESEND_API_KEY");
+        let mailer = from_env();
+        // Since it's dynamic, we just check that we can call it safely
+        let msg = sample_message(None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            assert!(mailer.send_contact_notification(&msg).await.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_from_env_resend_when_configured() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("RESEND_API_KEY", "re-12345");
+        std::env::set_var("RESEND_FROM", "sender@example.com");
+        let mailer = from_env();
+        let msg = sample_message(None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Should attempt to call Resend API and fail on key validation or connection
+            assert!(mailer.send_contact_notification(&msg).await.is_err());
+        });
+        std::env::remove_var("RESEND_API_KEY");
+        std::env::remove_var("RESEND_FROM");
+    }
+
+    #[tokio::test]
+    async fn test_resend_mailer_errors_out() {
+        let mailer = ResendMailer::new(
+            "dummy_key".to_string(),
+            "from@example.com".to_string(),
+            "to@example.com".to_string(),
+        );
+
+        let msg = sample_message(None);
+        let res1 = mailer.send_contact_notification(&msg).await;
+        assert!(res1.is_err());
+
+        let res2 = mailer
+            .send_newsletter_confirmation("test@local", "http://confirm")
+            .await;
+        assert!(res2.is_err());
+
+        let res3 = mailer
+            .send_newsletter_broadcast("test@local", "Sub", "Body")
+            .await;
+        assert!(res3.is_err());
+    }
+
+    #[test]
+    fn test_mailer_error_display() {
+        let err1 = MailerError::Transport("timeout".to_string());
+        assert!(err1.to_string().contains("timeout"));
+
+        let err2 = MailerError::Provider {
+            status: 400,
+            body: "bad request".to_string(),
+        };
+        assert!(err2.to_string().contains("400"));
+
+        let err3 = MailerError::Misconfigured("API_KEY");
+        assert!(err3.to_string().contains("missing API_KEY"));
+    }
 }

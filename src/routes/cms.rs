@@ -390,6 +390,26 @@ pub async fn get_portfolio(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    fn test_cms_router(enabled: bool) -> Router {
+        let cms_state = CmsState { enabled };
+        Router::new()
+            .route("/api/v1/content/blog", get(list_blog))
+            .route(
+                "/api/v1/content/blog/{slug}",
+                get(get_blog_post).patch(update_blog_post),
+            )
+            .route("/api/v1/content/portfolio", get(get_portfolio))
+            .layer(axum::middleware::from_fn_with_state(
+                cms_state.clone(),
+                require_api_key,
+            ))
+            .with_state(cms_state)
+    }
 
     #[test]
     fn cms_disabled_by_default() {
@@ -404,5 +424,212 @@ mod tests {
         let state = CmsState::from_env();
         assert!(state.enabled);
         std::env::remove_var("HEADLESS_CMS_ENABLED");
+    }
+
+    #[tokio::test]
+    async fn test_cms_disabled() {
+        let app = test_cms_router(false);
+        let req = Request::get("/api/v1/content/blog")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_cms_flow() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let app = test_cms_router(true);
+
+        // 1. Missing api key -> 401
+        let req = Request::get("/api/v1/content/blog")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 2. Invalid api key -> 401
+        let req = Request::get("/api/v1/content/blog")
+            .header("x-api-key", "invalidkey")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // Generate valid API keys in db: one with scope 'admin', one with scope 'read'
+        let admin_key = "adminkey123";
+        let read_key = "readkey123";
+        let admin_hash = hash_api_key(admin_key);
+        let read_hash = hash_api_key(read_key);
+
+        sqlx::query("DELETE FROM api_keys")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO api_keys (name, key_hash, scope) VALUES ($1, $2, 'admin'), ($3, $4, 'read')"
+        )
+        .bind("Admin Key")
+        .bind(&admin_hash)
+        .bind("Read Key")
+        .bind(&read_hash)
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        // 3. Valid read key -> list blog (initially empty)
+        let req = Request::get("/api/v1/content/blog")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(list["total"], 0);
+
+        // Insert a blog post
+        let slug = "cms-blog-post";
+        sqlx::query("DELETE FROM blog_posts WHERE slug = $1")
+            .bind(slug)
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO blog_posts (id, title, slug, summary, content_md, published, locale, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, true, 'en', now(), now())
+            "#
+        )
+        .bind(Uuid::new_v4())
+        .bind("CMS Post")
+        .bind(slug)
+        .bind("Summary")
+        .bind("Content")
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        // List blog post again
+        let req = Request::get("/api/v1/content/blog")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(list["total"], 1);
+        assert_eq!(list["items"][0]["slug"], slug);
+
+        // Get single blog post
+        let req = Request::get(format!("/api/v1/content/blog/{}", slug))
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let post: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(post["slug"], slug);
+
+        // Try updating with read scope -> 403 Forbidden
+        let req = Request::patch(format!("/api/v1/content/blog/{}", slug))
+            .header("x-api-key", read_key)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "title": "New CMS Title"
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // Update with admin scope -> 200 OK
+        let req = Request::patch(format!("/api/v1/content/blog/{}", slug))
+            .header("x-api-key", admin_key)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "title": "New CMS Title"
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Verify title updated
+        let req = Request::get(format!("/api/v1/content/blog/{}", slug))
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let post: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(post["title"], "New CMS Title");
+
+        // Portfolio tests: initially empty
+        sqlx::query("DELETE FROM portfolio_sections")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        // Get portfolio (empty object)
+        let req = Request::get("/api/v1/content/portfolio")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let port: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(port.as_object().unwrap().is_empty());
+
+        // Insert a portfolio section
+        sqlx::query(
+            "INSERT INTO portfolio_sections (key, content) VALUES ('projects', '[]'::jsonb)",
+        )
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        // Get portfolio again
+        let req = Request::get("/api/v1/content/portfolio?section=projects")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let sect: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(sect["section"], "projects");
+
+        // Get non-existent section -> 404
+        let req = Request::get("/api/v1/content/portfolio?section=skills")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 }

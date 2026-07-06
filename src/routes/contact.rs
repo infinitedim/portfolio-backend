@@ -588,7 +588,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::routing::{get, post};
+    use axum::routing::{get, patch, post};
     use axum::Router;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
@@ -641,6 +641,10 @@ mod tests {
         Router::new()
             .route("/api/contact", post(submit_contact_message))
             .route("/api/admin/messages", get(list_messages))
+            .route(
+                "/api/admin/messages/bulk",
+                patch(bulk_mark_messages_read).delete(bulk_delete_messages),
+            )
             .route(
                 "/api/admin/messages/{id}",
                 get(get_message)
@@ -835,6 +839,77 @@ mod tests {
             .fetch_one(db.pool.as_ref())
             .await
             .expect("count query should succeed");
+        assert_eq!(db_count, 0);
+    }
+    #[tokio::test]
+    async fn submit_and_admin_bulk_ops() {
+        let Some(db) = test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let mailer = TestMailer::ok();
+        let payload = valid_payload_json();
+
+        let mut msg_ids = Vec::new();
+        for i in 0..2 {
+            let mut p = payload.clone();
+            p["subject"] = serde_json::json!(format!("Subject {}", i));
+            let submit_req = Request::post("/api/contact")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&p).unwrap()))
+                .unwrap();
+            let (status, body) = call(contact_router(mailer.clone()), submit_req).await;
+            assert_eq!(status, StatusCode::CREATED);
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            msg_ids.push(Uuid::parse_str(val["id"].as_str().unwrap()).unwrap());
+        }
+
+        let bearer = test_support::admin_bearer();
+
+        let req_empty = Request::patch("/api/admin/messages/bulk")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "ids": [] })).unwrap(),
+            ))
+            .unwrap();
+        let (status_empty, _) = call(contact_router(mailer.clone()), req_empty).await;
+        assert_eq!(status_empty, StatusCode::BAD_REQUEST);
+
+        let req_read = Request::patch("/api/admin/messages/bulk")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "ids": msg_ids })).unwrap(),
+            ))
+            .unwrap();
+        let (status_read, _) = call(contact_router(mailer.clone()), req_read).await;
+        assert_eq!(status_read, StatusCode::OK);
+
+        let list_req = Request::get("/api/admin/messages?page=1&pageSize=10")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let (_, list_body) = call(contact_router(mailer.clone()), list_req).await;
+        let list: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list["unread"].as_i64(), Some(0));
+
+        let req_del = Request::delete("/api/admin/messages/bulk")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "ids": msg_ids })).unwrap(),
+            ))
+            .unwrap();
+        let (status_del, body_del) = call(contact_router(mailer.clone()), req_del).await;
+        assert_eq!(status_del, StatusCode::OK);
+        let res_del: serde_json::Value = serde_json::from_slice(&body_del).unwrap();
+        assert_eq!(res_del["affected"].as_i64(), Some(2));
+
+        let db_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contact_messages")
+            .fetch_one(db.pool.as_ref())
+            .await
+            .unwrap();
         assert_eq!(db_count, 0);
     }
 }

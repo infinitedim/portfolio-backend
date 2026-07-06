@@ -1876,6 +1876,7 @@ mod tests {
         };
         let app = Router::new()
             .route("/api/admin/blog/translations/link", post(link_translations))
+            .route("/api/admin/blog/translations", get(get_translation_group))
             .route("/api/blog", post(create_post))
             .layer(crate::test_support::mock_connect_info());
         let bearer = crate::test_support::admin_bearer();
@@ -1915,10 +1916,10 @@ mod tests {
         );
         let req = Request::post("/api/admin/blog/translations/link")
             .header("content-type", "application/json")
-            .header(axum::http::header::AUTHORIZATION, bearer)
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
             .body(body)
             .unwrap();
-        let res = app.oneshot(req).await.unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
@@ -1926,5 +1927,105 @@ mod tests {
         let group: TranslationGroupResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(group.posts.len(), 2);
         assert!(group.translation_group_id != Uuid::nil());
+
+        // Test fetching the translation group
+        let req_get = Request::get(format!(
+            "/api/admin/blog/translations?groupId={}",
+            group.translation_group_id
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .body(Body::empty())
+        .unwrap();
+        let res_get = app.clone().oneshot(req_get).await.unwrap();
+        assert_eq!(res_get.status(), StatusCode::OK);
+        let bytes_get = axum::body::to_bytes(res_get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched_group: TranslationGroupResponse = serde_json::from_slice(&bytes_get).unwrap();
+        assert_eq!(
+            fetched_group.translation_group_id,
+            group.translation_group_id
+        );
+        assert_eq!(fetched_group.posts.len(), 2);
+
+        // Test fetching non-existent translation group -> 404
+        let req_404 = Request::get(format!(
+            "/api/admin/blog/translations?groupId={}",
+            Uuid::new_v4()
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer)
+        .body(Body::empty())
+        .unwrap();
+        let res_404 = app.oneshot(req_404).await.unwrap();
+        assert_eq!(res_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn db_blog_list_filters() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route("/api/blog", get(list_posts))
+            .route("/api/blog", post(create_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        for (title, slug, tag, sort_views, locale) in [
+            ("Alpha Post", "alpha", "rust", 10, "en"),
+            ("Beta Post", "beta", "rust", 5, "en"),
+            ("Gamma Post", "gamma", "typescript", 2, "id"),
+        ] {
+            let (st, bytes) = post_json_auth(
+                app.clone(),
+                "/api/blog",
+                Some(&bearer),
+                &CreateBlogRequest {
+                    title: title.to_string(),
+                    slug: slug.to_string(),
+                    summary: None,
+                    content_md: None,
+                    content_html: None,
+                    published: Some(true),
+                    tags: Some(vec![tag.to_string()]),
+                    publish_at: None,
+                    locale: Some(locale.to_string()),
+                    series_id: None,
+                    series_order: None,
+                    translation_group_id: None,
+                },
+            )
+            .await;
+            assert_eq!(st, StatusCode::CREATED);
+
+            let created: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+            let pool = db::get_pool().unwrap();
+            sqlx::query("UPDATE blog_posts SET view_count = $1 WHERE id = $2")
+                .bind(sort_views)
+                .bind(created.id)
+                .execute(pool.as_ref())
+                .await
+                .unwrap();
+        }
+
+        let (_, bytes) = get_status_body(app.clone(), "/api/blog?tag=Rust&published=true").await;
+        let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(res.total, 2);
+
+        let (_, bytes) =
+            get_status_body(app.clone(), "/api/blog?search=Alpha&published=true").await;
+        let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(res.total, 1);
+        assert_eq!(res.items[0].slug, "alpha");
+
+        let (_, bytes) = get_status_body(app.clone(), "/api/blog?sort=views&published=true").await;
+        let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(res.items[0].slug, "alpha");
+        assert_eq!(res.items[1].slug, "beta");
+
+        let (_, bytes) =
+            get_status_body(app.clone(), "/api/blog?sort=updated&published=true").await;
+        let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(!res.items.is_empty());
     }
 }

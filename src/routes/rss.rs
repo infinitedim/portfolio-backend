@@ -245,4 +245,24 @@ mod tests {
         assert!(body_str.contains("test-blog-post"));
         assert!(body_str.contains("This is a test summary."));
     }
+
+    #[tokio::test]
+    async fn test_rss_feed_db_query_failure() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = None;
+        }
+
+        sqlx::query("DROP TABLE blog_posts CASCADE")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        let response = rss_feed().await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
 }

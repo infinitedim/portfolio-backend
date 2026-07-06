@@ -1683,4 +1683,108 @@ mod tests {
         assert!(finish.access_token.is_some());
         assert!(had_rt);
     }
+
+    #[tokio::test]
+    async fn db_auth_refresh_and_logout_flow() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let email = "refresh-test@test.local";
+        let password = "supersecretpassword";
+        sqlx::query("DELETE FROM admin_users WHERE email = $1")
+            .bind(email)
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("insert admin");
+
+        let app = auth_router();
+
+        let login_req = Request::post("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&LoginRequest {
+                    email: email.to_string(),
+                    password: password.to_string(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_login = app.clone().oneshot(login_req).await.unwrap();
+        assert_eq!(res_login.status(), StatusCode::OK);
+
+        let set_cookie = res_login
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        let rt_token = set_cookie
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .strip_prefix("rt=")
+            .unwrap_or_default()
+            .to_string();
+        assert!(!rt_token.is_empty());
+
+        let body_bytes = axum::body::to_bytes(res_login.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let login_res: LoginResponse = serde_json::from_slice(&body_bytes).unwrap();
+        let access_token = login_res.access_token.unwrap();
+
+        let verify_req = Request::post("/api/auth/verify")
+            .header("authorization", format!("Bearer {}", access_token))
+            .body(Body::empty())
+            .unwrap();
+        let res_verify = app.clone().oneshot(verify_req).await.unwrap();
+        assert_eq!(res_verify.status(), StatusCode::OK);
+
+        let refresh_req = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", rt_token))
+            .body(Body::empty())
+            .unwrap();
+        let res_refresh = app.clone().oneshot(refresh_req).await.unwrap();
+        assert_eq!(res_refresh.status(), StatusCode::OK);
+
+        let set_cookie2 = res_refresh
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        let new_rt_token = set_cookie2
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .strip_prefix("rt=")
+            .unwrap_or_default()
+            .to_string();
+        assert!(!new_rt_token.is_empty());
+
+        let body_bytes = axum::body::to_bytes(res_refresh.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let refresh_res: LoginResponse = serde_json::from_slice(&body_bytes).unwrap();
+        let new_access_token = refresh_res.access_token.unwrap();
+        assert!(!new_access_token.is_empty());
+
+        let logout_req = Request::post("/api/auth/logout")
+            .header("cookie", format!("rt={}", new_rt_token))
+            .body(Body::empty())
+            .unwrap();
+        let res_logout = app.clone().oneshot(logout_req).await.unwrap();
+        assert_eq!(res_logout.status(), StatusCode::OK);
+
+        let refresh_req2 = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", new_rt_token))
+            .body(Body::empty())
+            .unwrap();
+        let res_refresh2 = app.clone().oneshot(refresh_req2).await.unwrap();
+        assert_eq!(res_refresh2.status(), StatusCode::UNAUTHORIZED);
+        let _ = uid;
+    }
 }

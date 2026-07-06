@@ -393,4 +393,110 @@ mod tests {
             _ => panic!("Expected AppError::BadRequest"),
         }
     }
+
+    #[tokio::test]
+    async fn test_ensure_blog_embeddings_indexed_and_rag() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        sqlx::query("DELETE FROM content_embeddings")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM blog_posts")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        ensure_blog_embeddings_indexed(db.pool.as_ref())
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM content_embeddings")
+            .fetch_one(db.pool.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        sqlx::query(
+            r#"
+            INSERT INTO blog_posts (id, title, slug, summary, content_md, published, locale, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, true, 'en', now(), now())
+            "#
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind("Learning Rust Programming")
+        .bind("learning-rust")
+        .bind("A comprehensive guide to learning the Rust language.")
+        .bind("Rust is a systems programming language focused on safety and speed.")
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        ensure_blog_embeddings_indexed(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM content_embeddings")
+            .fetch_one(db.pool.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let chunks = fetch_rag_context(db.pool.as_ref(), "learning Rust language")
+            .await
+            .unwrap();
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].source_id, "learning-rust");
+        assert!(chunks[0].text.contains("systems programming"));
+
+        let empty_chunks = fetch_rag_context(db.pool.as_ref(), "a").await.unwrap();
+        assert!(empty_chunks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_chat_provider_error() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let state = AiState {
+            client: reqwest::Client::new(),
+            api_key: Some("dummy-key".to_string()),
+        };
+        let request = ChatRequest {
+            message: "Hello".to_string(),
+            history: vec![
+                ChatTurn {
+                    role: "user".to_string(),
+                    content: "hi".to_string(),
+                },
+                ChatTurn {
+                    role: "assistant".to_string(),
+                    content: "hello".to_string(),
+                },
+            ],
+        };
+        let res = chat(State(state), Json(request)).await;
+        match res {
+            Err(AppError::Internal(msg)) => assert!(msg.contains("AI provider error")),
+            _ => panic!("Expected AppError::Internal('AI provider error')"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chat_db_unavailable() {
+        let state = AiState {
+            client: reqwest::Client::new(),
+            api_key: Some("dummy-key".to_string()),
+        };
+        let request = ChatRequest {
+            message: "Hello".to_string(),
+            history: vec![],
+        };
+        let res = chat(State(state), Json(request)).await;
+        match res {
+            Err(AppError::DbUnavailable) => {}
+            _ => panic!("Expected AppError::DbUnavailable"),
+        }
+    }
 }

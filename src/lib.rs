@@ -787,7 +787,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // `env_lock` must serialize env mutations across the whole test.
     async fn swagger_ui_can_be_disabled_via_env() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ENABLE_SWAGGER_UI", "false");
         let app = create_app(RedisMode::Disabled);
 
@@ -808,7 +808,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn swagger_ui_enabled_by_default_in_development() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("ENABLE_SWAGGER_UI");
         std::env::set_var("ENVIRONMENT", "development");
         let app = create_app(RedisMode::Disabled);
@@ -829,7 +829,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn swagger_ui_disabled_by_default_in_production() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("ENABLE_SWAGGER_UI");
         std::env::set_var("ENVIRONMENT", "production");
         let app = create_app(RedisMode::Disabled);
@@ -850,7 +850,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn cors_uses_allowed_origins_over_frontend_origin() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ALLOWED_ORIGINS", "https://allowed.example");
         std::env::set_var("FRONTEND_ORIGIN", "https://frontend.example");
 
@@ -886,7 +886,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn cors_includes_localhost_in_development() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ALLOWED_ORIGINS", "https://infinitedim.vercel.app");
         std::env::set_var("ENVIRONMENT", "development");
 
@@ -917,5 +917,81 @@ mod tests {
 
         std::env::remove_var("ALLOWED_ORIGINS");
         std::env::remove_var("ENVIRONMENT");
+    }
+
+    #[test]
+    fn test_assert_production_environment_or_panic() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        // Pre-initialize the lazy_static secrets under valid env vars to prevent poisoning
+        std::env::set_var("JWT_SECRET", "a".repeat(32));
+        std::env::set_var("REFRESH_TOKEN_SECRET", "a".repeat(32));
+        let _ = &*routes::auth::JWT_SECRET;
+        let _ = &*routes::auth::REFRESH_SECRET;
+
+        std::env::set_var("ENVIRONMENT", "development");
+        assert_production_environment_or_panic();
+
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::remove_var("ADMIN_EMAIL");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("ADMIN_EMAIL", "admin@example.com");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("ADMIN_EMAIL", "real@example.com");
+        std::env::remove_var("ADMIN_HASH_PASSWORD");
+        std::env::remove_var("ADMIN_PASSWORD");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("ADMIN_PASSWORD", "pwd");
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("FRONTEND_ORIGIN");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("ALLOWED_ORIGINS", "https://example.com");
+        std::env::remove_var("GATE_TOKEN_SECRET");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("GATE_TOKEN_SECRET", "a".repeat(32));
+        std::env::remove_var("GATE_L2_ANSWER");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("GATE_L2_ANSWER", "l2answer");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_ok());
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ADMIN_EMAIL");
+        std::env::remove_var("ADMIN_PASSWORD");
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("GATE_TOKEN_SECRET");
+        std::env::remove_var("GATE_L2_ANSWER");
+    }
+
+    #[test]
+    fn test_load_env_file() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        load_env_file();
     }
 }

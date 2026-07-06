@@ -507,6 +507,22 @@ mod tests {
         let created: SeriesResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(created.slug, "getting-started");
 
+        // Call list_series_admin
+        let req_list_admin = Request::get("/api/admin/series")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_list_admin = app.clone().oneshot(req_list_admin).await.unwrap();
+        assert_eq!(res_list_admin.status(), StatusCode::OK);
+
+        // Call get_series_admin
+        let req_get_admin = Request::get("/api/admin/series/getting-started")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_get_admin = app.clone().oneshot(req_get_admin).await.unwrap();
+        assert_eq!(res_get_admin.status(), StatusCode::OK);
+
         let req = Request::get("/api/blog/series")
             .body(Body::empty())
             .unwrap();

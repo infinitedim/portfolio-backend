@@ -336,6 +336,25 @@ mod tests {
             std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).ok();
         }
 
-        let _ = std::fs::remove_dir_all(&parent);
+        let _guard_clear = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn test_build_rolling_appender() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portfolio-backend-appender-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let appender = build_rolling_appender(&tmp, "test-app.log");
+        assert!(appender.is_some());
+
+        let invalid_path = tmp.join("some-file");
+        std::fs::write(&invalid_path, b"hello").unwrap();
+        let appender_err = build_rolling_appender(&invalid_path, "test-err.log");
+        assert!(appender_err.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

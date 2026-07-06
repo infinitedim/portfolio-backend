@@ -225,6 +225,35 @@ mod tests {
         // 5. Should receive pong message
         let msg = read.next().await.unwrap().unwrap();
         let text = msg.to_text().unwrap();
-        assert!(text.contains("pong"));
+        assert!(text.contains("pong") || text.contains("Pong"));
+
+        // 6. Send invalid message -> Should receive error
+        write
+            .send(WsMessage::Text("invalid json".into()))
+            .await
+            .unwrap();
+        let msg = read.next().await.unwrap().unwrap();
+        let text = msg.to_text().unwrap();
+        assert!(text.contains("error") || text.contains("Error"));
+
+        // 7. Join another room while already in one -> Should succeed
+        let join_msg2 = serde_json::json!({
+            "type": "join",
+            "room": "blog"
+        })
+        .to_string();
+        write.send(WsMessage::Text(join_msg2.into())).await.unwrap();
+        let msg = read.next().await.unwrap().unwrap();
+        let text = msg.to_text().unwrap();
+        assert!(text.contains("roomCount"));
+        assert!(text.contains("blog"));
+
+        // 8. Send WS Ping frame -> Should receive Pong frame
+        write
+            .send(WsMessage::Ping(vec![1, 2, 3].into()))
+            .await
+            .unwrap();
+        let msg = read.next().await.unwrap().unwrap();
+        assert!(matches!(msg, WsMessage::Pong(_)));
     }
 }

@@ -631,6 +631,108 @@ mod integration_tests {
         let body_text = String::from_utf8(body.to_vec()).expect("utf8");
         assert_eq!(body_text, "yourblooo1:secret-l2\n");
     }
+
+    #[tokio::test]
+    async fn test_unlock_flow() {
+        let state = GateState::new(config());
+        let cookie = "session-3";
+
+        let res_forbid = unlock(State(state.clone()), headers(cookie, None)).await;
+        assert!(matches!(res_forbid, Err(AppError::Forbidden)));
+
+        login_level(state.clone(), cookie, 1, "yourblooo0", "yourblooo0").await;
+        login_level(state.clone(), cookie, 2, "yourblooo1", "secret-l2").await;
+        let _ = complete_level_3(
+            State(state.clone()),
+            headers(cookie, Some("https://example.com/terminal")),
+        )
+        .await
+        .unwrap();
+
+        let res_unlock = unlock(State(state.clone()), headers(cookie, None))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res_unlock.status(), StatusCode::OK);
+
+        let set_cookie = res_unlock
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(set_cookie.contains("portfolio_gate="));
+
+        let token = set_cookie
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .strip_prefix("portfolio_gate=")
+            .unwrap_or_default()
+            .to_string();
+
+        let mut status_headers = HeaderMap::new();
+        status_headers.insert(
+            header::COOKIE,
+            format!("portfolio_gate={token}").parse().unwrap(),
+        );
+        let res_status = status(State(state.clone()), status_headers)
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res_status.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res_status.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status_val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(status_val["unlocked"], true);
+    }
+
+    #[tokio::test]
+    async fn test_gate_empty_answers_and_secrets() {
+        let mut cfg = config();
+        cfg.l2_answer = "".to_string();
+        let state = GateState::new(cfg.clone());
+        {
+            let mut sessions = state.sessions.write().unwrap();
+            let mut sess = GateSession {
+                completed_levels: [1].into_iter().collect(),
+                failed_attempts: HashMap::new(),
+                created_at: Instant::now(),
+            };
+            sessions.insert("test-session".to_string(), sess);
+        }
+        let mut hdrs = HeaderMap::new();
+        hdrs.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str("gate_progress=test-session").unwrap(),
+        );
+        let res = challenge_2_users_txt(State(state.clone()), hdrs.clone()).await;
+        assert!(
+            matches!(res, Err(AppError::Internal(ref msg)) if msg.contains("L2 not configured"))
+        );
+
+        cfg.l2_answer = "secret-l2".to_string();
+        cfg.token_secret = "".to_string();
+        let state2 = GateState::new(cfg.clone());
+        {
+            let mut sessions = state2.sessions.write().unwrap();
+            let mut sess = GateSession {
+                completed_levels: [1, 2, 3].into_iter().collect(),
+                failed_attempts: HashMap::new(),
+                created_at: Instant::now(),
+            };
+            sessions.insert("test-session".to_string(), sess);
+        }
+        let res2 = unlock(State(state2), hdrs.clone()).await;
+        assert!(matches!(res2, Err(AppError::Internal(ref msg)) if msg.contains("not configured")));
+
+        let mut hdrs_unlocked = HeaderMap::new();
+        hdrs_unlocked.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str("portfolio_gate=some-token").unwrap(),
+        );
+        assert!(!is_unlocked(&hdrs_unlocked, &cfg));
+    }
 }
 
 #[cfg(test)]

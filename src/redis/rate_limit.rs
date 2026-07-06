@@ -177,6 +177,28 @@ mod tests {
         assert_eq!(extract_client_ip(&headers, None), "203.0.113.1".to_string());
     }
 
+    #[test]
+    fn extract_client_ip_real_ip_and_fallbacks() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "198.51.100.1".parse().unwrap());
+        assert_eq!(
+            extract_client_ip(&headers, None),
+            "198.51.100.1".to_string()
+        );
+
+        let headers_empty = HeaderMap::new();
+        let peer_addr = "192.0.2.1:12345".parse::<SocketAddr>().ok();
+        assert_eq!(
+            extract_client_ip(&headers_empty, peer_addr),
+            "192.0.2.1".to_string()
+        );
+
+        assert_eq!(
+            extract_client_ip(&headers_empty, None),
+            "unknown".to_string()
+        );
+    }
+
     #[tokio::test]
     async fn redis_rate_limit_blocks_after_max() {
         let Some(url) = std::env::var("TEST_REDIS_URL")
@@ -202,5 +224,109 @@ mod tests {
 
         let blocked = check_rate_limit(&pool, &config, &ip).await;
         assert!(blocked.is_err());
+    }
+
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::middleware::from_fn_with_state;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_rate_limit_middleware_success_and_rejection() {
+        let Some(url) = std::env::var("TEST_REDIS_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+
+        let pool = RedisPool::connect(&url).await.expect("connect");
+        let limit_state = Arc::new(RedisRateLimitState {
+            pool,
+            config: RateLimitConfig {
+                bucket: "test_mw",
+                max_requests: 2,
+                window_secs: 10,
+            },
+        });
+
+        use axum::extract::connect_info::MockConnectInfo;
+        let app = Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .layer(from_fn_with_state(
+                limit_state.clone(),
+                redis_rate_limit_middleware,
+            ))
+            .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+
+        let req = Request::get("/test").body(Body::empty()).unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let req = Request::get("/test").body(Body::empty()).unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let req = Request::get("/test").body(Body::empty()).unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_middleware_redis_error_fail_open() {
+        let Some(url) = std::env::var("TEST_REDIS_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+
+        let pool = RedisPool::connect(&url).await.expect("connect");
+        let limit_state = Arc::new(RedisRateLimitState {
+            pool: pool.clone(),
+            config: RateLimitConfig {
+                bucket: "test_err",
+                max_requests: 1,
+                window_secs: 10,
+            },
+        });
+
+        // Seed the key with a wrong type (HASH) to force a WRONGTYPE RedisError
+        let mut conn = pool.connection();
+        let key = "ratelimit:test_err:127.0.0.1";
+        let _: () = redis::cmd("DEL")
+            .arg(key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let _: () = redis::cmd("HSET")
+            .arg(key)
+            .arg("field")
+            .arg("value")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+
+        use axum::extract::connect_info::MockConnectInfo;
+        let app = Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .layer(from_fn_with_state(
+                limit_state.clone(),
+                redis_rate_limit_middleware,
+            ))
+            .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+
+        let req = Request::get("/test").body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Clean up
+        let _: () = redis::cmd("DEL")
+            .arg(key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
     }
 }

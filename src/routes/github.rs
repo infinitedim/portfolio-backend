@@ -386,4 +386,48 @@ mod tests {
         assert_eq!(val["totalStars"], 2);
         assert_eq!(val["repositories"][0]["name"], "repo1");
     }
+
+    #[tokio::test]
+    async fn test_github_stale_cache_hit() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.clear();
+            cache.insert(
+                "/users/infinitedim".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "login": "infinitedim",
+                        "name": "Dimas Saputra",
+                        "avatar_url": "https://avatar.url",
+                        "bio": "Developer",
+                        "public_repos": 10,
+                        "followers": 5,
+                        "following": 5,
+                        "html_url": "https://github.com/infinitedim",
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }),
+                    fetched_at: Instant::now() - Duration::from_secs(30 * 60),
+                },
+            );
+        }
+
+        let response = get_user(Path("infinitedim".into())).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_github_cache_miss_failure() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.clear();
+        }
+
+        let response = get_user(Path("some-non-existent-user-xyz-123456789".into()))
+            .await
+            .into_response();
+        assert!(
+            response.status() == StatusCode::NOT_FOUND
+                || response.status() == StatusCode::BAD_GATEWAY
+        );
+    }
 }

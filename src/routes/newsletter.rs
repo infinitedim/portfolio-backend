@@ -466,5 +466,31 @@ mod tests {
         };
         let res = unsubscribe(Json(req_unsub)).await.unwrap().into_response();
         assert_eq!(res.status(), StatusCode::OK);
+
+        // 7. Negative cases
+        let res_err = confirm(Query(ConfirmQuery {
+            token: "".to_string(),
+        }))
+        .await;
+        assert!(res_err.is_err());
+        let res_err2 = confirm(Query(ConfirmQuery {
+            token: "invalid-token".to_string(),
+        }))
+        .await;
+        assert!(res_err2.is_err());
+
+        let res_unsub_err = unsubscribe(Json(UnsubscribeRequest {
+            token: "".to_string(),
+        }))
+        .await;
+        assert!(res_unsub_err.is_err());
+        let res_unsub_err2 = unsubscribe(Json(UnsubscribeRequest {
+            token: "invalid-token".to_string(),
+        }))
+        .await;
+        assert!(res_unsub_err2.is_err());
+
+        let res_list_err = list_subscribers(HeaderMap::new()).await;
+        assert!(res_list_err.is_err());
     }
 }

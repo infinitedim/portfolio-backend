@@ -858,4 +858,201 @@ mod tests {
         assert_eq!(res_bad.status(), axum::http::StatusCode::UNAUTHORIZED);
         let _ = uid;
     }
+
+    #[tokio::test]
+    async fn db_disable_2fa_flow() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let email = "twofa-disable@test.local";
+        let password = "supersecretpassword";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .unwrap();
+        let bearer = crate::test_support::admin_bearer_for(&uid, email, "SUPER_ADMIN");
+
+        let app = axum::Router::new()
+            .route("/api/auth/2fa/setup", post(setup))
+            .route("/api/auth/2fa/verify", post(verify_setup))
+            .route("/api/auth/2fa/disable", post(disable))
+            .route("/api/auth/2fa/status", get(status));
+
+        let res_status = app
+            .clone()
+            .oneshot(
+                Request::get("/api/auth/2fa/status")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_status.status(), axum::http::StatusCode::OK);
+        let body_status: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_status.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body_status["enabled"], false);
+
+        let res_dis_not_conf = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/disable")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "password": password,
+                            "code": "123456"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res_dis_not_conf.status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+
+        let res_s = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/setup")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_s.status(), axum::http::StatusCode::OK);
+        let setup_body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_s.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let secret_b32 = setup_body["secret"].as_str().unwrap();
+
+        let code = {
+            use totp_rs::{Algorithm as TotpAlg, Secret, TOTP};
+            let secret_bytes = Secret::Encoded(secret_b32.to_string())
+                .to_bytes()
+                .expect("bytes");
+            let issuer = std::env::var("TOTP_ISSUER")
+                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            TOTP::new(
+                TotpAlg::SHA1,
+                6,
+                1,
+                30,
+                secret_bytes,
+                Some(issuer),
+                email.to_string(),
+            )
+            .expect("totp")
+            .generate_current()
+            .expect("code")
+        };
+
+        let res_v = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/verify")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({ "code": code }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_v.status(), axum::http::StatusCode::OK);
+
+        let res_dis_wrong_pw = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/disable")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "password": "wrongpassword",
+                            "code": code
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res_dis_wrong_pw.status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+
+        let res_dis_wrong_code = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/disable")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "password": password,
+                            "code": "000000"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res_dis_wrong_code.status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+
+        let res_dis_ok = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/disable")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "password": password,
+                            "code": code
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_dis_ok.status(), axum::http::StatusCode::OK);
+
+        let res_status2 = app
+            .clone()
+            .oneshot(
+                Request::get("/api/auth/2fa/status")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body_status2: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_status2.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body_status2["enabled"], false);
+        let _ = uid;
+    }
 }

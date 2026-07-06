@@ -653,4 +653,37 @@ mod tests {
         let (status, _, _) = call(upload_router(), req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn list_images_happy_path() {
+        let dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        std::fs::write(dir.path.join("test-list.png"), b"dummy content").unwrap();
+
+        let req = Request::get("/api/upload/images")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::OK);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("test-list.png"));
+    }
+
+    #[test]
+    fn test_upload_helpers() {
+        assert_eq!(get_extension_from_mime("image/other"), "bin");
+        assert_eq!(get_extension_from_mime("image/webp"), "webp");
+
+        assert!(!sanitize_filename("a/b"));
+        assert!(!sanitize_filename("a\\b"));
+        assert!(sanitize_filename("valid-file_name.png"));
+
+        assert_eq!(validate_image_magic_bytes(&[1, 2, 3]), None);
+        assert_eq!(
+            validate_image_magic_bytes(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some("image/jpeg")
+        );
+    }
 }
