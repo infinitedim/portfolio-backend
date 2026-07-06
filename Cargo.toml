@@ -103,3 +103,6 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 # OpenAPI string formats. Swagger UI is mounted under `/api/docs/`.
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.26"

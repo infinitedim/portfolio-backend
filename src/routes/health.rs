@@ -400,4 +400,69 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ready");
     }
+
+    #[tokio::test]
+    async fn test_health_database_route_ok() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/database").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "healthy");
+        assert!(body.response_time.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_health_redis_route_healthy() {
+        let Some(url) = std::env::var("TEST_REDIS_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+        let pool = crate::redis::RedisPool::connect(&url)
+            .await
+            .expect("connect");
+        let health_state = HealthState {
+            redis: Arc::new(RedisMode::Connected(Arc::new(pool))),
+        };
+        let app = Router::new()
+            .route("/health/redis", get(health_redis))
+            .with_state(health_state);
+        let (status, body) = get_json::<ServiceCheck>(app, "/health/redis").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "healthy");
+        assert!(body.response_time.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_health_detailed_route_ok() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+        std::env::set_var("DATABASE_URL", &database_url);
+        init_start_time();
+        let (status, body) =
+            get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        std::env::remove_var("DATABASE_URL");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.checks.database.status, "healthy");
+    }
+
+    #[tokio::test]
+    async fn test_health_ready_route_ok() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+        std::env::set_var("DATABASE_URL", &database_url);
+        init_start_time();
+        let (status, body) = get_json::<ReadyResponse>(test_router(), "/health/ready").await;
+        std::env::remove_var("DATABASE_URL");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ready");
+        assert_eq!(body.checks.unwrap().database, "healthy");
+    }
 }

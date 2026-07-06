@@ -309,4 +309,81 @@ mod tests {
         let response = get_stats(Path("".into())).await.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn get_user_cached_happy_path() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/users/infinitedim".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "login": "infinitedim",
+                        "name": "Dimas Saputra",
+                        "avatar_url": "https://avatar.url",
+                        "bio": "Developer",
+                        "public_repos": 10,
+                        "followers": 5,
+                        "following": 5,
+                        "html_url": "https://github.com/infinitedim",
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        let response = get_user(Path("infinitedim".into())).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val["login"], "infinitedim");
+        assert_eq!(val["name"], "Dimas Saputra");
+    }
+
+    #[tokio::test]
+    async fn get_stats_cached_happy_path() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/users/infinitedim".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "followers": 5,
+                        "following": 5,
+                        "public_repos": 10
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
+            cache.insert(
+                "/users/infinitedim/repos?sort=updated&per_page=100".to_string(),
+                CacheEntry {
+                    body: serde_json::json!([
+                        {
+                            "name": "repo1",
+                            "description": "desc1",
+                            "stargazers_count": 2,
+                            "forks_count": 1,
+                            "language": "Rust",
+                            "updated_at": "2024-01-02T00:00:00Z",
+                            "html_url": "https://github.com/infinitedim/repo1"
+                        }
+                    ]),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        let response = get_stats(Path("infinitedim".into())).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val["totalStars"], 2);
+        assert_eq!(val["repositories"][0]["name"], "repo1");
+    }
 }

@@ -526,6 +526,43 @@ mod tests {
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
+        // Update series title and description
+        let req_update = Request::patch("/api/admin/series/getting-started")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "title": "New Title",
+                    "description": "New description"
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_update = app.clone().oneshot(req_update).await.unwrap();
+        assert_eq!(res_update.status(), StatusCode::OK);
+        let updated: SeriesResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res_update.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(updated.title, "New Title");
+
+        // Invalid slug validation on update
+        let req_invalid = Request::patch("/api/admin/series/getting_started_invalid")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "title": "New Title",
+                    "description": null
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_invalid = app.clone().oneshot(req_invalid).await.unwrap();
+        assert_eq!(res_invalid.status(), StatusCode::BAD_REQUEST);
+
         let req = Request::delete("/api/admin/series/getting-started")
             .header(axum::http::header::AUTHORIZATION, bearer)
             .body(Body::empty())

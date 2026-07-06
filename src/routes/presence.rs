@@ -173,4 +173,58 @@ mod tests {
         assert_eq!(normalize_room(""), "site");
         assert_eq!(normalize_room("  blog  "), "blog");
     }
+
+    #[tokio::test]
+    async fn test_ws_presence_integration() {
+        use axum::routing::get;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let state = PresenceState::new(&RedisMode::Disabled);
+        let app = axum::Router::new()
+            .route("/ws", get(ws_handler))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("ws://{}/ws", addr);
+        let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        let (mut write, mut read) = ws_stream.split();
+
+        // 1. Should receive Welcome message first
+        let msg = read.next().await.unwrap().unwrap();
+        let text = msg.to_text().unwrap();
+        assert!(text.contains("welcome"));
+
+        // 2. Send join message
+        let join_msg = serde_json::json!({
+            "type": "join",
+            "room": "lobby"
+        })
+        .to_string();
+        write.send(WsMessage::Text(join_msg.into())).await.unwrap();
+
+        // 3. Should receive roomCount message
+        let msg = read.next().await.unwrap().unwrap();
+        let text = msg.to_text().unwrap();
+        assert!(text.contains("roomCount"));
+        assert!(text.contains("lobby"));
+
+        // 4. Send ping message
+        let ping_msg = serde_json::json!({
+            "type": "ping"
+        })
+        .to_string();
+        write.send(WsMessage::Text(ping_msg.into())).await.unwrap();
+
+        // 5. Should receive pong message
+        let msg = read.next().await.unwrap().unwrap();
+        let text = msg.to_text().unwrap();
+        assert!(text.contains("pong"));
+    }
 }

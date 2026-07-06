@@ -114,6 +114,27 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
     ])
 });
 
+static STATIC_SKILLS: Lazy<Value> = Lazy::new(|| {
+    serde_json::json!([
+        {
+            "name": "Frontend",
+            "skills": [
+                { "name": "React", "level": 90 },
+                { "name": "TypeScript", "level": 85 },
+                { "name": "Next.js", "level": 85 }
+            ]
+        },
+        {
+            "name": "Backend",
+            "skills": [
+                { "name": "Rust", "level": 75 },
+                { "name": "Node.js", "level": 80 },
+                { "name": "PostgreSQL", "level": 75 }
+            ]
+        }
+    ])
+});
+
 static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     serde_json::json!({
         "name": "Developer",
@@ -130,6 +151,7 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
 pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
         "projects" => Some(STATIC_PROJECTS.clone()),
+        "skills" => Some(STATIC_SKILLS.clone()),
         "experience" => Some(serde_json::json!([])),
         "about" => Some(STATIC_ABOUT.clone()),
         _ => None,

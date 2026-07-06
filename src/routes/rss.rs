@@ -159,6 +159,8 @@ pub async fn rss_feed() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
+    use std::time::Instant;
 
     #[test]
     fn test_escape_xml() {
@@ -172,5 +174,75 @@ mod tests {
         use chrono::TimeZone;
         let dt = chrono::Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         assert!(rfc822(&dt).contains("2024"));
+    }
+
+    #[tokio::test]
+    async fn test_rss_feed_cached() {
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = Some(RssCache {
+                xml: "test-cached-xml".to_string(),
+                generated_at: Instant::now(),
+            });
+        }
+        let response = rss_feed().await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body_str, "test-cached-xml");
+    }
+
+    #[tokio::test]
+    async fn test_rss_feed_no_db() {
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = None;
+        }
+        let response = rss_feed().await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_rss_feed_with_db() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = None;
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO blog_posts (id, title, slug, summary, content_md, published, locale, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind("Test Blog Post")
+        .bind("test-blog-post")
+        .bind("This is a test summary.")
+        .bind("This is a test content.")
+        .bind(true)
+        .bind("en")
+        .bind(chrono::Utc::now())
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        let response = rss_feed().await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert!(body_str.contains("Test Blog Post"));
+        assert!(body_str.contains("test-blog-post"));
+        assert!(body_str.contains("This is a test summary."));
     }
 }

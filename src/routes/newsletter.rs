@@ -385,6 +385,8 @@ pub fn hash_api_key(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
+    use std::sync::Arc;
 
     #[test]
     fn plausible_email_validation() {
@@ -396,5 +398,73 @@ mod tests {
     fn hash_api_key_is_deterministic() {
         assert_eq!(hash_api_key("abc"), hash_api_key("abc"));
         assert_ne!(hash_api_key("abc"), hash_api_key("def"));
+    }
+
+    #[tokio::test]
+    async fn test_newsletter_full_flow() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let mailer = Arc::new(crate::email::NoopMailer);
+
+        // 1. Subscribe with invalid email -> BadRequest
+        let req = SubscribeRequest {
+            email: "invalid".to_string(),
+        };
+        let res = subscribe(State(mailer.clone()), Json(req)).await;
+        assert!(res.is_err());
+
+        // 2. Subscribe with valid email -> success
+        let req = SubscribeRequest {
+            email: "user@example.com".to_string(),
+        };
+        let res = subscribe(State(mailer.clone()), Json(req))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // 3. Confirm subscription
+        let sub: NewsletterSubscriber =
+            sqlx::query_as("SELECT * FROM newsletter_subscribers WHERE email = 'user@example.com'")
+                .fetch_one(&*db.pool)
+                .await
+                .unwrap();
+        let token = sub.confirm_token.unwrap();
+        let query = ConfirmQuery { token };
+        let res = confirm(Query(query)).await.unwrap().into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // 4. Admin list subscribers
+        let token_header = crate::test_support::admin_bearer();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            token_header.parse().unwrap(),
+        );
+
+        let res_list = list_subscribers(headers.clone())
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res_list.status(), StatusCode::OK);
+
+        // 5. Admin broadcast
+        let req_broadcast = BroadcastRequest {
+            subject: "Hello".to_string(),
+            body: "World".to_string(),
+        };
+        let res_broadcast = broadcast(headers, State(mailer.clone()), Json(req_broadcast))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res_broadcast.status(), StatusCode::OK);
+
+        // 6. Unsubscribe
+        let req_unsub = UnsubscribeRequest {
+            token: sub.unsubscribe_token,
+        };
+        let res = unsubscribe(Json(req_unsub)).await.unwrap().into_response();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }

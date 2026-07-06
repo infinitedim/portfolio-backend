@@ -281,3 +281,98 @@ pub async fn get_resource_progress(
         Err((status, json)) => (status, json).into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Path;
+    use axum::http::StatusCode;
+
+    static TEST_MUTEX: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+    #[tokio::test]
+    async fn test_roadmap_endpoints_cached() {
+        let _guard = TEST_MUTEX.lock().await;
+        {
+            let mut state = STATE.lock().await;
+            state.cache_set("v1-streak".to_string(), serde_json::json!({"streak": 5}));
+            state.cache_set(
+                "v1-user-dashboard".to_string(),
+                serde_json::json!({"dashboard": true}),
+            );
+            state.cache_set(
+                "v1-get-user-teams".to_string(),
+                serde_json::json!({"teams": []}),
+            );
+            state.cache_set(
+                "v1-list-favorite-roadmaps".to_string(),
+                serde_json::json!({"favourites": []}),
+            );
+            state.cache_set(
+                "v1-get-user-resource-progress?resourceId=rust&resourceType=roadmap".to_string(),
+                serde_json::json!({"progress": 100}),
+            );
+        }
+
+        let response = get_streak().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val["streak"], 5);
+
+        let response = get_dashboard().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(val["dashboard"].as_bool().unwrap());
+
+        let response = get_teams().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = get_favourites().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = get_resource_progress(Path("rust".to_string()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val["progress"], 100);
+    }
+
+    #[tokio::test]
+    async fn test_roadmap_unconfigured_credentials() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        // Temporarily clear environment variables to ensure credentials are unconfigured
+        let email = std::env::var("ROADMAP_EMAIL").ok();
+        let password = std::env::var("ROADMAP_PASSWORD").ok();
+        std::env::remove_var("ROADMAP_EMAIL");
+        std::env::remove_var("ROADMAP_PASSWORD");
+
+        {
+            let mut state = STATE.lock().await;
+            state.cache.clear();
+            state.auth_token = None;
+        }
+
+        let response = get_streak().await.into_response();
+
+        // Restore environment variables
+        if let Some(val) = email {
+            std::env::set_var("ROADMAP_EMAIL", val);
+        }
+        if let Some(val) = password {
+            std::env::set_var("ROADMAP_PASSWORD", val);
+        }
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+}

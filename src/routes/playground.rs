@@ -154,6 +154,7 @@ pub async fn get_snippet(Path(id): Path<Uuid>) -> Result<impl IntoResponse, AppE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     #[test]
     fn validate_rejects_oversized_code() {
@@ -173,5 +174,60 @@ mod tests {
             code: "console.log('hi')".to_string(),
         };
         assert!(validate_create(&req).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_playground_snippets_full_flow() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let req1 = CreateSnippetRequest {
+            title: "My Snippet".to_string(),
+            language: "rust".to_string(),
+            code: "fn main() {}".to_string(),
+        };
+        let res = create_snippet(HeaderMap::new(), Json(req1)).await;
+        assert!(res.is_err());
+
+        let token_header = crate::test_support::admin_bearer();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            token_header.parse().unwrap(),
+        );
+
+        let req2 = CreateSnippetRequest {
+            title: "My Snippet".to_string(),
+            language: "rust".to_string(),
+            code: "fn main() {}".to_string(),
+        };
+        let res = create_snippet(headers, Json(req2))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(created["title"], "My Snippet");
+        let id_str = created["id"].as_str().unwrap();
+        let id = Uuid::parse_str(id_str).unwrap();
+
+        let res_get = get_snippet(Path(id)).await.unwrap().into_response();
+        assert_eq!(res_get.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(res_get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let fetched_id_str = fetched["id"].as_str().unwrap();
+        let fetched_id = Uuid::parse_str(fetched_id_str).unwrap();
+        assert_eq!(fetched_id, id);
+        assert_eq!(fetched["code"], "fn main() {}");
+
+        let res_not_found = get_snippet(Path(Uuid::new_v4())).await;
+        assert!(res_not_found.is_err());
     }
 }

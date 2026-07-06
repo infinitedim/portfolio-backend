@@ -337,6 +337,12 @@ mod tests {
     }
 
     #[test]
+    fn tokenize_query_empty_input() {
+        let tokens = tokenize_query("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
     fn build_system_prompt_includes_chunks() {
         let chunks = vec![RagChunk {
             source_type: "blog".to_string(),
@@ -346,5 +352,45 @@ mod tests {
         let prompt = build_system_prompt(&chunks);
         assert!(prompt.contains("hello"));
         assert!(prompt.contains("Hello world"));
+    }
+
+    #[test]
+    fn build_system_prompt_empty_chunks() {
+        let prompt = build_system_prompt(&[]);
+        assert!(prompt.contains("helpful assistant"));
+    }
+
+    #[tokio::test]
+    async fn test_chat_not_configured() {
+        let state = AiState {
+            client: reqwest::Client::new(),
+            api_key: None,
+        };
+        let request = ChatRequest {
+            message: "Hello".to_string(),
+            history: vec![],
+        };
+        let res = chat(State(state), Json(request)).await;
+        match res {
+            Err(AppError::Internal(msg)) => assert!(msg.contains("not configured")),
+            _ => panic!("Expected AppError::Internal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chat_oversized_message() {
+        let state = AiState {
+            client: reqwest::Client::new(),
+            api_key: Some("dummy-key".to_string()),
+        };
+        let request = ChatRequest {
+            message: "a".repeat(4001),
+            history: vec![],
+        };
+        let res = chat(State(state), Json(request)).await;
+        match res {
+            Err(AppError::BadRequest(msg)) => assert!(msg.contains("must be")),
+            _ => panic!("Expected AppError::BadRequest"),
+        }
     }
 }

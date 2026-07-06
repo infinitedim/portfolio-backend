@@ -597,4 +597,60 @@ mod tests {
         let (status, _, _) = call(upload_router(), req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn delete_non_existent_file() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let req = Request::delete("/api/upload/image/doesnotexist.png")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_empty_file() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let boundary = "upload-test-boundary";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "image.png", &[])))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_file_too_large() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        let boundary = "upload-test-boundary";
+        let oversized = vec![0u8; 6 * 1024 * 1024]; // 6MB
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                "image.png",
+                &oversized,
+            )))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
