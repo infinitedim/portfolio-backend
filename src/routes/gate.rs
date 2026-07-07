@@ -694,7 +694,7 @@ mod integration_tests {
         let state = GateState::new(cfg.clone());
         {
             let mut sessions = state.sessions.write().unwrap();
-            let mut sess = GateSession {
+            let sess = GateSession {
                 completed_levels: [1].into_iter().collect(),
                 failed_attempts: HashMap::new(),
                 created_at: Instant::now(),
@@ -716,7 +716,7 @@ mod integration_tests {
         let state2 = GateState::new(cfg.clone());
         {
             let mut sessions = state2.sessions.write().unwrap();
-            let mut sess = GateSession {
+            let sess = GateSession {
                 completed_levels: [1, 2, 3].into_iter().collect(),
                 failed_attempts: HashMap::new(),
                 created_at: Instant::now(),
