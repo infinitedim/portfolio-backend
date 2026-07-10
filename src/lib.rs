@@ -458,6 +458,10 @@ pub fn create_app(redis: RedisMode) -> Router {
             get(routes::roadmap::get_resource_progress),
         )
         .route(
+            "/api/roadmap/detail/{techstack}",
+            get(routes::roadmap::get_roadmap_detail),
+        )
+        .route(
             "/api/portfolio",
             get(routes::portfolio::get_portfolio).patch(routes::portfolio::update_portfolio),
         )
