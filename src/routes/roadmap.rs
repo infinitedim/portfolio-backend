@@ -282,6 +282,34 @@ pub async fn get_resource_progress(
     }
 }
 
+/// GET /api/roadmap/detail/{techstack}
+/// Proxies `roadmap.sh/api/v1-official-roadmap/{techstack}`
+///
+/// Returns the full roadmap structure: `nodes[]`, `edges[]`, and roadmap
+/// metadata (title, description, slug, dimensions, etc.). The shape matches
+/// `src/types/detailed_roadmap.ts` on the frontend and is forwarded as-is.
+#[utoipa::path(
+    get,
+    path = "/api/roadmap/detail/{techstack}",
+    tag = "Roadmap",
+    params(
+        ("techstack" = String, Path, description = "The technology stack/roadmap slug (e.g. \"flutter\", \"rust\")")
+    ),
+    responses(
+        (status = 200, description = "Full roadmap detail: nodes[], edges[], and roadmap metadata"),
+        (status = 502, description = "Upstream error or unreachable")
+    )
+)]
+pub async fn get_roadmap_detail(
+    axum::extract::Path(techstack): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let path = format!("v1-official-roadmap/{}", techstack);
+    match cached_fetch(&path).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err((status, json)) => (status, json).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +339,10 @@ mod tests {
             state.cache_set(
                 "v1-get-user-resource-progress?resourceId=rust&resourceType=roadmap".to_string(),
                 serde_json::json!({"progress": 100}),
+            );
+            state.cache_set(
+                "v1-official-roadmap/flutter".to_string(),
+                serde_json::json!({"nodes": [], "edges": []}),
             );
         }
 
@@ -345,6 +377,26 @@ mod tests {
             .unwrap();
         let val: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(val["progress"], 100);
+
+        // New: get_roadmap_detail with seeded flutter cache key
+        let response = get_roadmap_detail(Path("flutter".to_string()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(
+            val["nodes"].as_array().is_some(),
+            "nodes should be an array"
+        );
+        assert!(
+            val["edges"].as_array().is_some(),
+            "edges should be an array"
+        );
+        assert_eq!(val["nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(val["edges"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
