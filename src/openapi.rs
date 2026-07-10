@@ -52,13 +52,13 @@ impl Modify for SecurityAddon {
                        token issued by `/api/auth/login`.",
         contact(
             name = "Dimas Saputra",
-            url = "https://infinitedim.vercel.app"
+            url = "https://infinitedim.dev"
         ),
         license(name = "MIT")
     ),
     servers(
         (url = "http://localhost:8080", description = "Local development"),
-        (url = "https://api.infinitedim.vercel.app", description = "Production")
+        (url = "https://api.infinitedim.dev", description = "Production")
     ),
     tags(
         (name = "Authentication", description = "Admin login, registration, and token lifecycle"),

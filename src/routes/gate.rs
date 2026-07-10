@@ -756,16 +756,16 @@ mod tests {
     #[test]
     fn referer_validation_accepts_terminal_url() {
         assert!(is_valid_terminal_referer(
-            "https://infinitedim.vercel.app/terminal",
-            "https://infinitedim.vercel.app"
+            "https://infinitedim.dev/terminal",
+            "https://infinitedim.dev"
         ));
         assert!(is_valid_terminal_referer(
-            "https://infinitedim.vercel.app/terminal/",
-            "https://infinitedim.vercel.app/"
+            "https://infinitedim.dev/terminal/",
+            "https://infinitedim.dev/"
         ));
         assert!(!is_valid_terminal_referer(
-            "https://infinitedim.vercel.app/gate/3",
-            "https://infinitedim.vercel.app"
+            "https://infinitedim.dev/gate/3",
+            "https://infinitedim.dev"
         ));
     }
 }

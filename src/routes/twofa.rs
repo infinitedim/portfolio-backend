@@ -54,10 +54,10 @@ const CHALLENGE_TOKEN_EXPIRY_MINUTES: i64 = 5;
 const CHALLENGE_AUDIENCE_SUFFIX: &str = "-2fa-challenge";
 
 /// Issuer label baked into the otpauth URI. Configurable so the QR shows
-/// e.g. "infinitedim.vercel.app" in Authenticator apps instead of an opaque
+/// e.g. "infinitedim.dev" in Authenticator apps instead of an opaque
 /// default.
 fn totp_issuer_label() -> String {
-    std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.vercel.app".to_string())
+    std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.dev".to_string())
 }
 
 fn challenge_audience() -> String {
@@ -698,8 +698,8 @@ mod tests {
             let secret_bytes = Secret::Encoded(secret_b32.to_string())
                 .to_bytes()
                 .expect("bytes");
-            let issuer = std::env::var("TOTP_ISSUER")
-                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.dev".to_string());
             TOTP::new(
                 TotpAlg::SHA1,
                 6,
@@ -781,8 +781,8 @@ mod tests {
             let secret_bytes = Secret::Encoded(secret_b32.to_string())
                 .to_bytes()
                 .expect("bytes");
-            let issuer = std::env::var("TOTP_ISSUER")
-                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.dev".to_string());
             TOTP::new(
                 TotpAlg::SHA1,
                 6,
@@ -944,8 +944,8 @@ mod tests {
             let secret_bytes = Secret::Encoded(secret_b32.to_string())
                 .to_bytes()
                 .expect("bytes");
-            let issuer = std::env::var("TOTP_ISSUER")
-                .unwrap_or_else(|_| "infinitedim.vercel.app".to_string());
+            let issuer =
+                std::env::var("TOTP_ISSUER").unwrap_or_else(|_| "infinitedim.dev".to_string());
             TOTP::new(
                 TotpAlg::SHA1,
                 6,

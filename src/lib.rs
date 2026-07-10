@@ -891,7 +891,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn cors_includes_localhost_in_development() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("ALLOWED_ORIGINS", "https://infinitedim.vercel.app");
+        std::env::set_var("ALLOWED_ORIGINS", "https://infinitedim.dev");
         std::env::set_var("ENVIRONMENT", "development");
 
         let app = Router::new()

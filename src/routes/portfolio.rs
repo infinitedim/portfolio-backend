@@ -81,7 +81,7 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
         "name": "Terminal Portfolio",
         "description": "Portfolio interaktif bergaya terminal dengan Next.js 15, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
         "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Tailwind CSS"],
-        "demoUrl": "https://infinitedim.vercel.app",
+        "demoUrl": "https://infinitedim.dev",
         "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
         "status": "active",
         "featured": true
