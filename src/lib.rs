@@ -923,6 +923,39 @@ mod tests {
         std::env::remove_var("ENVIRONMENT");
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn preflight_to_analytics_pageview_succeeds_in_app() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ALLOWED_ORIGINS", "https://infinitedim.dev");
+
+        let app = create_app(RedisMode::Disabled);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/analytics/pageview")
+                    .header("origin", "https://infinitedim.dev")
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-headers", "content-type")
+                    .body(Body::empty())
+                    .expect("preflight request"),
+            )
+            .await
+            .expect("preflight response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://infinitedim.dev")
+        );
+
+        std::env::remove_var("ALLOWED_ORIGINS");
+    }
+
     #[test]
     fn test_assert_production_environment_or_panic() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
