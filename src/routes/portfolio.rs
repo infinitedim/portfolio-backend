@@ -68,72 +68,11 @@ pub struct RestorePortfolioResponse {
     pub data: Value,
 }
 
-pub const VALID_SECTIONS: &[&str] = &["skills", "projects", "experience", "about"];
+pub const VALID_SECTIONS: &[&str] = &["projects", "experience", "about"];
 
 pub fn is_valid_section(section: &str) -> bool {
     VALID_SECTIONS.contains(&section.to_lowercase().as_str())
 }
-
-static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
-    serde_json::json!([
-      {
-        "id": "terminal-portfolio",
-        "name": "Terminal Portfolio",
-        "description": "Portfolio interaktif bergaya terminal dengan Next.js 15, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
-        "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Tailwind CSS"],
-        "demoUrl": "https://infinitedim.dev",
-        "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
-        "status": "active",
-        "featured": true
-      },
-      {
-        "id": "cellink",
-        "name": "Cellink B2B Travel Platform",
-        "description": "Platform B2B untuk agen travel dengan fitur pemesanan penerbangan, kereta, hotel, event, dan transaksi PPOB. Dibangun dengan Flutter dan dideploy di Kubernetes.",
-        "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus"],
-        "status": "active",
-        "featured": true
-      },
-      {
-        "id": "medmind",
-        "name": "MedMind",
-        "description": "Aplikasi jurnal kesehatan Flutter berbasis privacy-first dengan on-device ML (TFLite). Arsitektur Clean Architecture + Riverpod, pipeline ML Python/TensorFlow untuk symptom correlation dan NLP extraction.",
-        "technologies": ["Flutter", "TensorFlow", "TFLite", "Python", "Riverpod", "Clean Architecture"],
-        "githubUrl": "https://github.com/infinitedim/medmind",
-        "status": "in-progress",
-        "featured": true
-      },
-      {
-        "id": "devix-store",
-        "name": "Devix Digital Store",
-        "description": "Platform penjualan produk digital untuk SMB dengan Next.js 16 App Router, Prisma, Supabase, dual payment provider (Stripe + Lemon Squeezy) behind feature flag, dan Upstash Redis untuk rate limiting.",
-        "technologies": ["Next.js", "TypeScript", "Prisma", "Supabase", "Stripe", "Upstash Redis"],
-        "status": "in-progress",
-        "featured": false
-      }
-    ])
-});
-
-static STATIC_SKILLS: Lazy<Value> = Lazy::new(|| {
-    serde_json::json!([
-        {
-            "name": "Frontend",
-            "skills": [
-                { "name": "React", "level": 90 },
-                { "name": "TypeScript", "level": 85 },
-                { "name": "Next.js", "level": 85 }
-            ]
-        },
-        {
-            "name": "Backend",
-            "skills": [
-                { "name": "Rust", "level": 75 },
-                { "name": "Node.js", "level": 80 },
-                { "name": "PostgreSQL", "level": 75 }
-            ]
-        }
-    ])
-});
 
 static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     serde_json::json!({
@@ -150,8 +89,7 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
 
 pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
-        "projects" => Some(STATIC_PROJECTS.clone()),
-        "skills" => Some(STATIC_SKILLS.clone()),
+        "projects" => Some(serde_json::json!([])),
         "experience" => Some(serde_json::json!([])),
         "about" => Some(STATIC_ABOUT.clone()),
         _ => None,
@@ -553,8 +491,8 @@ mod tests {
 
     #[test]
     fn test_is_valid_section() {
-        assert!(is_valid_section("skills"));
-        assert!(is_valid_section("Skills"));
+        assert!(!is_valid_section("skills"));
+        assert!(!is_valid_section("Skills"));
         assert!(is_valid_section("projects"));
         assert!(is_valid_section("experience"));
         assert!(is_valid_section("about"));
@@ -564,8 +502,8 @@ mod tests {
 
     #[test]
     fn test_get_static_data() {
-        assert!(get_static_data("skills").is_some());
-        assert!(get_static_data("projects").is_some());
+        assert!(get_static_data("skills").is_none());
+        assert_eq!(get_static_data("projects"), Some(serde_json::json!([])));
         assert!(get_static_data("experience").is_some());
         assert!(get_static_data("about").is_some());
         assert!(get_static_data("invalid").is_none());
@@ -586,9 +524,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_portfolio_skills_returns_ok_with_data() {
+    async fn test_get_portfolio_projects_returns_ok_with_data() {
         let (status, body) =
-            get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=skills")
+            get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=projects")
                 .await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.data.is_some());
@@ -601,7 +539,7 @@ mod tests {
             portfolio_router(),
             "/api/portfolio",
             &UpdatePortfolioRequest {
-                section: "skills".to_string(),
+                section: "projects".to_string(),
                 data: serde_json::json!({"test": true}),
             },
         )
@@ -622,7 +560,7 @@ mod tests {
         let patch_body = |data: serde_json::Value| {
             Body::from(
                 serde_json::to_vec(&UpdatePortfolioRequest {
-                    section: "skills".to_string(),
+                    section: "about".to_string(),
                     data,
                 })
                 .unwrap(),
@@ -645,7 +583,7 @@ mod tests {
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let req = Request::get("/api/admin/portfolio/versions?section=skills")
+        let req = Request::get("/api/admin/portfolio/versions?section=about")
             .header(axum::http::header::AUTHORIZATION, bearer.clone())
             .body(Body::empty())
             .unwrap();
@@ -667,7 +605,7 @@ mod tests {
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let (_, body) = get_json::<PortfolioResponse>(app, "/api/portfolio?section=skills").await;
+        let (_, body) = get_json::<PortfolioResponse>(app, "/api/portfolio?section=about").await;
         assert_eq!(body.data, Some(v1));
     }
 }
