@@ -106,3 +106,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.26"
+
+[patch.crates-io]
+crossbeam-epoch = { path = "local-crates/crossbeam-epoch" }
+
