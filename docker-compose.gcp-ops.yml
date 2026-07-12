@@ -1,9 +1,6 @@
 # GCP ops VM compose stack: Postgres + observability.
 # Backend runs on Cloud Run, not in this stack.
 # Data volumes mount to /mnt/data (persistent disk).
-
-name: portfolio-ops
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -109,12 +106,12 @@ services:
     container_name: portfolio-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_SERVER_ROOT_URL: https://logs.infinitedim.dev
       GF_EXPLORE_ENABLED: "true"
       GF_ALERTING_ENABLED: "true"
     volumes:
