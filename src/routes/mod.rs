@@ -8,7 +8,6 @@ pub mod github;
 pub mod health;
 pub mod logs;
 pub mod newsletter;
-pub mod playground;
 pub mod portfolio;
 pub mod presence;
 pub mod roadmap;

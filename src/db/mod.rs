@@ -55,9 +55,6 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
         .min_connections(config.min_connections)
-        // The pool's acquire timeout governs *runtime* checkouts, not the
-        // initial connect. Keep it short so a stalled handler fails fast,
-        // and let `connect_timeout_secs` cover the boot-time TCP/TLS dial.
         .acquire_timeout(std::time::Duration::from_secs(3))
         .idle_timeout(std::time::Duration::from_secs(config.idle_timeout_secs))
         .max_lifetime(std::time::Duration::from_secs(1800))
@@ -75,14 +72,6 @@ pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Er
     Ok(pool)
 }
 
-/// Retry [`init_pool`] with exponential backoff. Compose and most
-/// PaaS schedulers report Postgres as "healthy" the moment `pg_isready`
-/// returns, but the embedded DNS for the service hostname can still be
-/// briefly missing on first boot — and we'd rather wait a few seconds than
-/// crash-loop the container.
-///
-/// Returns `Ok` on the first successful connect, or `Err` once the total
-/// time budget is exhausted. The caller decides whether to panic on `Err`.
 pub async fn init_pool_with_retry(
     config: Option<DbConfig>,
     max_total_wait: std::time::Duration,
@@ -141,13 +130,6 @@ pub fn get_pool() -> Option<Arc<PgPool>> {
     DB_POOL.get().cloned()
 }
 
-/// Test-only override for the process-wide pool.
-///
-/// Production code reads `DB_POOL` (a `OnceCell`) which can only be set once.
-/// Tests need to install their own pool (per-schema isolation, see
-/// [`crate::test_support`]) and clear it again at the end of the test, which
-/// `OnceCell` cannot express. This module provides a separate slot consulted
-/// only under `cfg(test)`; it never appears in release builds.
 #[cfg(test)]
 pub(crate) mod test_override {
     use super::*;
@@ -173,19 +155,11 @@ pub(crate) mod test_override {
     }
 }
 
-/// Install a pool as the value returned by [`get_pool`] for the current test.
-///
-/// Tests should hold the global serialization lock from [`crate::test_support`]
-/// while this override is active so concurrent tests do not see each other's
-/// pools. Pair with [`clear_test_pool`] at the end of the test (the helper
-/// guard returned by `test_support::acquire_test_pool` does this on `Drop`).
 #[cfg(test)]
 pub(crate) fn set_test_pool(pool: Arc<PgPool>) {
     test_override::set(pool);
 }
 
-/// Drop the test-only pool override and let `get_pool` fall back to the real
-/// `DB_POOL` (which is normally unset in tests, so handlers will see "no DB").
 #[cfg(test)]
 pub(crate) fn clear_test_pool() {
     test_override::clear();
@@ -230,11 +204,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Multi-statement DDL must go through `raw_sql` (simple query protocol).
-    // `sqlx::query` uses prepared statements and Postgres rejects more than
-    // one command per prepare with: "cannot insert multiple commands into a
-    // prepared statement".
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
@@ -244,7 +213,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -258,7 +226,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -273,7 +240,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash 
@@ -282,7 +248,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at 
@@ -291,7 +256,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
@@ -306,7 +270,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_admin_refresh_tokens_token_hash
@@ -317,7 +280,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS portfolio_sections (
@@ -329,7 +291,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS blog_posts (
@@ -347,7 +308,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_posts_slug
@@ -360,7 +320,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         ALTER TABLE blog_posts
@@ -371,7 +330,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_blog_posts_tags ON blog_posts USING GIN(tags);
@@ -380,8 +338,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Sprint 2 feature #11/#19: contact form messages and admin inbox.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS contact_messages (
@@ -399,7 +355,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at
@@ -410,8 +365,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Sprint 2 feature #15: blog scheduling.
     sqlx::query(
         r#"
         ALTER TABLE blog_posts
@@ -420,7 +373,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_blog_posts_publish_at
@@ -430,8 +382,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Sprint 2 feature #16: TOTP 2FA columns on admin_users.
     sqlx::query(
         r#"
         ALTER TABLE admin_users
@@ -442,8 +392,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Sprint 3 feature #23: blog series / collections.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS blog_series (
@@ -458,7 +406,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blog_series_slug ON blog_series(slug);
@@ -466,7 +413,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         ALTER TABLE blog_posts
@@ -476,7 +422,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_blog_posts_series_id
@@ -485,8 +430,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Sprint 3 feature #24: portfolio section versioning.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS portfolio_versions (
@@ -499,7 +442,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_portfolio_versions_section_key
@@ -535,33 +477,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Phase 3A: live coding playground snippets.
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS playground_snippets (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            title TEXT NOT NULL,
-            language TEXT NOT NULL DEFAULT 'javascript',
-            code TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_playground_snippets_created_at
-            ON playground_snippets(created_at DESC)
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Phase 3B: newsletter double opt-in subscribers.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS newsletter_subscribers (
@@ -578,7 +493,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::raw_sql(
         r#"
         CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_confirmed
@@ -592,8 +506,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
-    // Phase 3C: headless CMS API keys.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS api_keys (
@@ -608,7 +520,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash
@@ -618,7 +529,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Phase 4A: AI assistant RAG chunks (pgvector optional; text search fallback).
     let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
         .execute(pool)
         .await;

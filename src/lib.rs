@@ -370,16 +370,6 @@ pub fn create_app(redis: RedisMode) -> Router {
             post(routes::portfolio::restore_portfolio_version),
         );
 
-    let playground_routes = Router::new()
-        .route(
-            "/api/playground/snippets",
-            post(routes::playground::create_snippet),
-        )
-        .route(
-            "/api/playground/snippets/{id}",
-            get(routes::playground::get_snippet),
-        );
-
     let newsletter_public = with_rate_limit!(
         Router::new()
             .route(
@@ -505,7 +495,6 @@ pub fn create_app(redis: RedisMode) -> Router {
         .merge(contact_public)
         .merge(newsletter_public)
         .merge(newsletter_admin)
-        .merge(playground_routes)
         .merge(cms_routes)
         .merge(ai_routes)
         .merge(presence_routes)

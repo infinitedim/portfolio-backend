@@ -211,17 +211,6 @@ pub struct ContactMessage {
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct PlaygroundSnippet {
-    pub id: Uuid,
-    pub title: String,
-    pub language: String,
-    pub code: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct NewsletterSubscriber {
     pub id: Uuid,
     pub email: String,
