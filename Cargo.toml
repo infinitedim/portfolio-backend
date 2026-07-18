@@ -56,13 +56,14 @@ hex = "0.4"
 md5 = "0.8"
 
 # Database
-sqlx = { version = "0.9", default-features = false, features = [
+sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
   "tls-rustls",
   "postgres",
   "chrono",
   "uuid",
   "derive",
+  "json",
 ] }
 
 # HTML sanitization (blog)
