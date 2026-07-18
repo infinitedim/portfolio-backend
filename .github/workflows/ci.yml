@@ -387,7 +387,7 @@ jobs:
       - name: Setup Go for hey
         uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       - name: Install hey
         run: go install github.com/rakyll/hey@latest
