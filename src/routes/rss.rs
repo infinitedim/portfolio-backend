@@ -197,6 +197,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_rss_feed_no_db() {
+        let _db = crate::test_support::acquire_test_pool().await;
+        crate::db::clear_test_pool();
+
         {
             let mut guard = RSS_CACHE.lock().unwrap();
             *guard = None;
