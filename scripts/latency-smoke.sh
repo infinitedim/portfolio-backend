@@ -20,11 +20,11 @@ command -v hey >/dev/null 2>&1 || {
 check_route() {
   local method="$1"
   local path="$2"
-  local extra_args="${3:-}"
+  local body="${3:-}"
 
   local result
   if [ "$method" = "POST" ]; then
-    result=$(hey -n "$REQUESTS" -c "$CONCURRENCY" -m POST $extra_args "${BASE_URL}${path}" 2>&1)
+    result=$(hey -n "$REQUESTS" -c "$CONCURRENCY" -m POST -H "Content-Type: application/json" -d "$body" "${BASE_URL}${path}" 2>&1)
   else
     result=$(hey -n "$REQUESTS" -c "$CONCURRENCY" "${BASE_URL}${path}" 2>&1)
   fi
@@ -67,7 +67,7 @@ check_route GET /health/database
 check_route GET /health/redis
 check_route GET /health/ready
 check_route GET /metrics
-check_route POST /api/analytics/pageview '-H "Content-Type: application/json" -d {"path":"/test"}'
+check_route POST /api/analytics/pageview '{"path":"/test"}'
 check_route GET /api/gate/status
 
 echo ""
@@ -77,7 +77,7 @@ check_route GET /api/blog/tags
 check_route GET /api/rss
 check_route GET /api/portfolio
 check_route GET /api/blog/series
-check_route POST "/api/logs" '-H "Content-Type: application/json" -d {"entries":[{"level":"info","message":"test","timestamp":"2026-01-01T00:00:00Z"}]}'
+check_route POST "/api/logs" '{"entries":[{"level":"info","message":"test","timestamp":"2026-01-01T00:00:00Z"}]}'
 
 echo ""
 echo "--- Tier C (proxy, cache-hit only) ---"
