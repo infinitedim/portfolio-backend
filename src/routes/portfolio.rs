@@ -139,11 +139,10 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     serde_json::json!({
         "name": "Developer",
         "title": "Full Stack Developer",
-        "bio": "A passionate developer building modern web applications.",
-        "location": "Remote",
+        "bio": "Software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International, with hands-on experience across the full development lifecycle — from mobile UI to API integration and production deployment. Outside of work, actively developing personal projects using Rust/Axum and Next.js to broaden backend and web expertise.",
         "contact": {
-            "email": "dev@example.com",
-            "github": "https://github.com/developer"
+            "email": "dragdimas9@gmail.com",
+            "github": "https://github.com/infinitedim"
         }
     })
 });
@@ -152,7 +151,30 @@ pub fn get_static_data(section: &str) -> Option<Value> {
     match section.to_lowercase().as_str() {
         "projects" => Some(STATIC_PROJECTS.clone()),
         "skills" => Some(STATIC_SKILLS.clone()),
-        "experience" => Some(serde_json::json!([])),
+        "experience" => Some(serde_json::json!([
+            {
+                "company": "PT Voltras International",
+                "position": "Software Developer",
+                "duration": "June 2023 - Present",
+                "description": [
+                    "Developed and maintained cross-platform mobile applications for a B2B travel agent platform",
+                    "Engineered a reusable seat mapping system adaptable across multiple layout types",
+                    "Implemented role-based access control with dynamic menu configuration served via CDN",
+                    "Collaborated with cross-functional teams in an agile environment"
+                ],
+                "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus", "Firebase"]
+            },
+            {
+                "company": "PT Qtera Mandiri",
+                "position": "Web Content Writer",
+                "duration": "January 2021 - April 2021",
+                "description": [
+                    "Produced SEO-optimized web content for a technology company",
+                    "Demonstrated adaptability in tone and audience targeting"
+                ],
+                "technologies": ["Blogging", "SEO", "Content Writing", "Teamwork", "Communication", "Adaptability"]
+            }
+        ])),
         "about" => Some(STATIC_ABOUT.clone()),
         _ => None,
     }
