@@ -139,7 +139,7 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     serde_json::json!({
         "name": "Developer",
         "title": "Full Stack Developer",
-        "bio": "Software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International, with hands-on experience across the full development lifecycle — from mobile UI to API integration and production deployment. Outside of work, actively developing personal projects using Rust/Axum and Next.js to broaden backend and web expertise.",
+        "bio": "A software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International, with hands-on experience across the full development lifecycle — from mobile UI to API integration and production deployment. Outside of work, actively developing personal projects using Rust/Axum and Next.js to broaden backend and web expertise.",
         "contact": {
             "email": "dragdimas9@gmail.com",
             "github": "https://github.com/infinitedim"
