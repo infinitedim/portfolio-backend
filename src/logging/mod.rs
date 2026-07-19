@@ -143,7 +143,37 @@ pub fn init() -> Vec<WorkerGuard> {
         ))
     });
 
-    let subscriber = tracing_subscriber::registry().with(env_filter);
+    let (loki_layer, loki_task) = if let Ok(loki_url_str) = std::env::var("LOKI_URL") {
+        let trimmed = loki_url_str.trim();
+        if trimmed.is_empty() {
+            (None, None)
+        } else if let Ok(url) = url::Url::parse(trimmed) {
+            match tracing_loki::builder()
+                .label("application", "portfolio-backend")
+                .and_then(|b| b.label("environment", environment.as_str()))
+                .and_then(|b| b.build_url(url))
+            {
+                Ok((layer, task)) => (Some(layer), Some(task)),
+                Err(e) => {
+                    eprintln!("[logging] failed to initialize Loki layer: {}", e);
+                    (None, None)
+                }
+            }
+        } else {
+            eprintln!("[logging] invalid LOKI_URL format: {}", trimmed);
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
+    if let Some(task) = loki_task {
+        tokio::spawn(task);
+    }
+
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(loki_layer);
 
     if is_production {
         let file_layer = file_writer.map(|w| {
