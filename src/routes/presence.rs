@@ -145,7 +145,7 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                                     serde_json::to_string(&ServerMessage::RoomCount { room, count })
                                         .unwrap_or_default();
                                 let _ = sender.send(Message::Text(payload.into())).await;
-                                
+
                                 let new_total = state.backend.total_connections().await.unwrap_or(0);
                                 let _ = state.broadcast_tx.send(new_total);
                             }
@@ -229,7 +229,14 @@ mod tests {
         let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
         let (mut write, mut read) = ws_stream.split();
 
-        async fn wait_for_msg(read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>, contains: &str) -> String {
+        async fn wait_for_msg(
+            read: &mut futures_util::stream::SplitStream<
+                tokio_tungstenite::WebSocketStream<
+                    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+                >,
+            >,
+            contains: &str,
+        ) -> String {
             loop {
                 let msg = read.next().await.unwrap().unwrap();
                 let text = msg.to_text().unwrap();
@@ -291,7 +298,7 @@ mod tests {
             .send(WsMessage::Ping(vec![1, 2, 3].into()))
             .await
             .unwrap();
-        
+
         loop {
             let msg = read.next().await.unwrap().unwrap();
             if matches!(msg, WsMessage::Pong(_)) {
