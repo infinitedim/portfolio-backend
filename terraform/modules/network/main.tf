@@ -111,3 +111,17 @@ resource "google_compute_firewall" "deny_all_ingress" {
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["ops-vm"]
 }
+
+resource "google_compute_firewall" "allow_loki" {
+  name    = "portfolio-${var.environment}-allow-loki"
+  network = google_compute_network.main.name
+  project = var.project_id
+
+  allow {
+    protocol = "tcp"
+    ports    = ["3100"]
+  }
+
+  source_ranges = ["10.10.1.0/28", "10.10.0.0/24"]
+  target_tags   = ["ops-vm"]
+}
