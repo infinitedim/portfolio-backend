@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::redis::presence_store::{build_presence_backend, PresenceBackend};
@@ -19,12 +20,15 @@ use crate::redis::presence_store::{build_presence_backend, PresenceBackend};
 #[derive(Clone)]
 pub struct PresenceState {
     backend: Arc<dyn PresenceBackend>,
+    broadcast_tx: broadcast::Sender<u32>,
 }
 
 impl PresenceState {
     pub fn new(redis: &crate::redis::RedisMode) -> Self {
+        let (broadcast_tx, _) = broadcast::channel(64);
         Self {
             backend: build_presence_backend(redis),
+            broadcast_tx,
         }
     }
 }
@@ -73,6 +77,8 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
     let mut current_room: Option<String> = None;
     let mut watchdog = None::<tokio::task::JoinHandle<()>>;
 
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
+
     let total = state.backend.total_connections().await.unwrap_or(0);
     let welcome = serde_json::to_string(&ServerMessage::Welcome {
         total_connections: total,
@@ -82,69 +88,94 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
         return;
     }
 
-    while let Some(msg) = receiver.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(_) => break,
-        };
+    let (tx_to_ws, mut rx_from_bcast) = tokio::sync::mpsc::channel::<String>(8);
+    tokio::spawn(async move {
+        while let Ok(total) = broadcast_rx.recv().await {
+            let msg = serde_json::to_string(&ServerMessage::Welcome {
+                total_connections: total,
+            })
+            .unwrap_or_default();
+            if tx_to_ws.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
 
-        match msg {
-            Message::Text(text) => {
-                let parsed: Result<ClientMessage, _> = serde_json::from_str(&text);
-                match parsed {
-                    Ok(ClientMessage::Join { room }) => {
-                        if let Some(old) = current_room.take() {
-                            let _ = state.backend.leave_conn(&conn_id).await;
-                            let _ = old;
-                        }
-                        if let Some(handle) = watchdog.take() {
-                            handle.abort();
-                        }
+    loop {
+        tokio::select! {
+            msg = receiver.next() => {
+                let msg = match msg {
+                    Some(Ok(m)) => m,
+                    _ => break,
+                };
 
-                        let room = normalize_room(&room);
-                        let count = state.backend.join_room(&conn_id, &room).await.unwrap_or(0);
-                        current_room = Some(room.clone());
-
-                        let backend = state.backend.clone();
-                        let conn = conn_id.clone();
-                        watchdog = Some(tokio::spawn(async move {
-                            loop {
-                                tokio::time::sleep(Duration::from_secs(45)).await;
-                                match backend.refresh_conn(&conn).await {
-                                    Ok(true) => continue,
-                                    _ => {
-                                        let _ = backend.leave_conn(&conn).await;
-                                        break;
-                                    }
+                match msg {
+                    Message::Text(text) => {
+                        let parsed: Result<ClientMessage, _> = serde_json::from_str(&text);
+                        match parsed {
+                            Ok(ClientMessage::Join { room }) => {
+                                if let Some(old) = current_room.take() {
+                                    let _ = state.backend.leave_conn(&conn_id).await;
+                                    let _ = old;
                                 }
-                            }
-                        }));
+                                if let Some(handle) = watchdog.take() {
+                                    handle.abort();
+                                }
 
-                        let payload =
-                            serde_json::to_string(&ServerMessage::RoomCount { room, count })
+                                let room = normalize_room(&room);
+                                let count = state.backend.join_room(&conn_id, &room).await.unwrap_or(0);
+                                current_room = Some(room.clone());
+
+                                let backend = state.backend.clone();
+                                let conn = conn_id.clone();
+                                watchdog = Some(tokio::spawn(async move {
+                                    loop {
+                                        tokio::time::sleep(Duration::from_secs(45)).await;
+                                        match backend.refresh_conn(&conn).await {
+                                            Ok(true) => continue,
+                                            _ => {
+                                                let _ = backend.leave_conn(&conn).await;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }));
+
+                                let payload =
+                                    serde_json::to_string(&ServerMessage::RoomCount { room, count })
+                                        .unwrap_or_default();
+                                let _ = sender.send(Message::Text(payload.into())).await;
+                                
+                                let new_total = state.backend.total_connections().await.unwrap_or(0);
+                                let _ = state.broadcast_tx.send(new_total);
+                            }
+                            Ok(ClientMessage::Ping) => {
+                                let _ = state.backend.refresh_conn(&conn_id).await;
+                                let payload =
+                                    serde_json::to_string(&ServerMessage::Pong).unwrap_or_default();
+                                let _ = sender.send(Message::Text(payload.into())).await;
+                            }
+                            Err(_) => {
+                                let payload = serde_json::to_string(&ServerMessage::Error {
+                                    message: "invalid message".to_string(),
+                                })
                                 .unwrap_or_default();
-                        let _ = sender.send(Message::Text(payload.into())).await;
+                                let _ = sender.send(Message::Text(payload.into())).await;
+                            }
+                        }
                     }
-                    Ok(ClientMessage::Ping) => {
-                        let _ = state.backend.refresh_conn(&conn_id).await;
-                        let payload =
-                            serde_json::to_string(&ServerMessage::Pong).unwrap_or_default();
-                        let _ = sender.send(Message::Text(payload.into())).await;
+                    Message::Close(_) => break,
+                    Message::Ping(payload) => {
+                        let _ = sender.send(Message::Pong(payload)).await;
                     }
-                    Err(_) => {
-                        let payload = serde_json::to_string(&ServerMessage::Error {
-                            message: "invalid message".to_string(),
-                        })
-                        .unwrap_or_default();
-                        let _ = sender.send(Message::Text(payload.into())).await;
-                    }
+                    _ => {}
                 }
             }
-            Message::Close(_) => break,
-            Message::Ping(payload) => {
-                let _ = sender.send(Message::Pong(payload)).await;
+            Some(msg) = rx_from_bcast.recv() => {
+                if sender.send(Message::Text(msg.into())).await.is_err() {
+                    break;
+                }
             }
-            _ => {}
         }
     }
 
@@ -153,6 +184,8 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
     }
     if current_room.is_some() {
         let _ = state.backend.leave_conn(&conn_id).await;
+        let new_total = state.backend.total_connections().await.unwrap_or(0);
+        let _ = state.broadcast_tx.send(new_total);
     }
 }
 
@@ -196,9 +229,18 @@ mod tests {
         let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
         let (mut write, mut read) = ws_stream.split();
 
+        async fn wait_for_msg(read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>, contains: &str) -> String {
+            loop {
+                let msg = read.next().await.unwrap().unwrap();
+                let text = msg.to_text().unwrap();
+                if text.to_lowercase().contains(&contains.to_lowercase()) {
+                    return text.to_string();
+                }
+            }
+        }
+
         // 1. Should receive Welcome message first
-        let msg = read.next().await.unwrap().unwrap();
-        let text = msg.to_text().unwrap();
+        let text = wait_for_msg(&mut read, "welcome").await;
         assert!(text.contains("welcome"));
 
         // 2. Send join message
@@ -210,8 +252,7 @@ mod tests {
         write.send(WsMessage::Text(join_msg.into())).await.unwrap();
 
         // 3. Should receive roomCount message
-        let msg = read.next().await.unwrap().unwrap();
-        let text = msg.to_text().unwrap();
+        let text = wait_for_msg(&mut read, "roomCount").await;
         assert!(text.contains("roomCount"));
         assert!(text.contains("lobby"));
 
@@ -223,8 +264,7 @@ mod tests {
         write.send(WsMessage::Text(ping_msg.into())).await.unwrap();
 
         // 5. Should receive pong message
-        let msg = read.next().await.unwrap().unwrap();
-        let text = msg.to_text().unwrap();
+        let text = wait_for_msg(&mut read, "pong").await;
         assert!(text.contains("pong") || text.contains("Pong"));
 
         // 6. Send invalid message -> Should receive error
@@ -232,8 +272,7 @@ mod tests {
             .send(WsMessage::Text("invalid json".into()))
             .await
             .unwrap();
-        let msg = read.next().await.unwrap().unwrap();
-        let text = msg.to_text().unwrap();
+        let text = wait_for_msg(&mut read, "error").await;
         assert!(text.contains("error") || text.contains("Error"));
 
         // 7. Join another room while already in one -> Should succeed
@@ -243,8 +282,7 @@ mod tests {
         })
         .to_string();
         write.send(WsMessage::Text(join_msg2.into())).await.unwrap();
-        let msg = read.next().await.unwrap().unwrap();
-        let text = msg.to_text().unwrap();
+        let text = wait_for_msg(&mut read, "roomCount").await;
         assert!(text.contains("roomCount"));
         assert!(text.contains("blog"));
 
@@ -253,7 +291,12 @@ mod tests {
             .send(WsMessage::Ping(vec![1, 2, 3].into()))
             .await
             .unwrap();
-        let msg = read.next().await.unwrap().unwrap();
-        assert!(matches!(msg, WsMessage::Pong(_)));
+        
+        loop {
+            let msg = read.next().await.unwrap().unwrap();
+            if matches!(msg, WsMessage::Pong(_)) {
+                break;
+            }
+        }
     }
 }
