@@ -50,10 +50,17 @@ enum ClientMessage {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ServerMessage {
     #[serde(rename_all = "camelCase")]
-    Welcome { total_connections: u32 },
-    RoomCount { room: String, count: u32 },
+    Welcome {
+        total_connections: u32,
+    },
+    RoomCount {
+        room: String,
+        count: u32,
+    },
     Pong,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 fn normalize_room(room: &str) -> String {
