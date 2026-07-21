@@ -49,6 +49,7 @@ enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ServerMessage {
+    #[serde(rename_all = "camelCase")]
     Welcome { total_connections: u32 },
     RoomCount { room: String, count: u32 },
     Pong,
@@ -75,7 +76,6 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
     let (mut sender, mut receiver) = socket.split();
     let conn_id = Uuid::new_v4().to_string();
     let mut current_room: Option<String> = None;
-    let mut watchdog = None::<tokio::task::JoinHandle<()>>;
 
     let mut broadcast_rx = state.broadcast_tx.subscribe();
 
@@ -101,9 +101,16 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
         }
     });
 
+    let timeout_duration = Duration::from_secs(90);
+    let mut last_activity = tokio::time::Instant::now();
+
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(last_activity + timeout_duration) => {
+                break;
+            }
             msg = receiver.next() => {
+                last_activity = tokio::time::Instant::now();
                 let msg = match msg {
                     Some(Ok(m)) => m,
                     _ => break,
@@ -118,28 +125,10 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                                     let _ = state.backend.leave_conn(&conn_id).await;
                                     let _ = old;
                                 }
-                                if let Some(handle) = watchdog.take() {
-                                    handle.abort();
-                                }
 
                                 let room = normalize_room(&room);
                                 let count = state.backend.join_room(&conn_id, &room).await.unwrap_or(0);
                                 current_room = Some(room.clone());
-
-                                let backend = state.backend.clone();
-                                let conn = conn_id.clone();
-                                watchdog = Some(tokio::spawn(async move {
-                                    loop {
-                                        tokio::time::sleep(Duration::from_secs(45)).await;
-                                        match backend.refresh_conn(&conn).await {
-                                            Ok(true) => continue,
-                                            _ => {
-                                                let _ = backend.leave_conn(&conn).await;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }));
 
                                 let payload =
                                     serde_json::to_string(&ServerMessage::RoomCount { room, count })
@@ -179,9 +168,6 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
         }
     }
 
-    if let Some(handle) = watchdog.take() {
-        handle.abort();
-    }
     if current_room.is_some() {
         let _ = state.backend.leave_conn(&conn_id).await;
         let new_total = state.backend.total_connections().await.unwrap_or(0);
