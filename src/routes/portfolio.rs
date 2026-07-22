@@ -162,7 +162,8 @@ pub fn get_static_data(section: &str) -> Option<Value> {
                     "Implemented role-based access control with dynamic menu configuration served via CDN",
                     "Collaborated with cross-functional teams in an agile environment"
                 ],
-                "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus", "Firebase"]
+                "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus", "Firebase"],
+                "type": "full-time"
             },
             {
                 "company": "PT Qtera Mandiri",
@@ -172,7 +173,8 @@ pub fn get_static_data(section: &str) -> Option<Value> {
                     "Produced SEO-optimized web content for a technology company",
                     "Demonstrated adaptability in tone and audience targeting"
                 ],
-                "technologies": ["Blogging", "SEO", "Content Writing", "Teamwork", "Communication", "Adaptability"]
+                "technologies": ["Blogging", "SEO", "Content Writing", "Teamwork", "Communication", "Adaptability"],
+                "type": "intern"
             }
         ])),
         "about" => Some(STATIC_ABOUT.clone()),
