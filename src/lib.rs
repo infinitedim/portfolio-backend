@@ -280,14 +280,16 @@ pub fn create_app(redis: RedisMode) -> Router {
         &redis,
         RateLimitConfig::AUTH,
         auth_governor
-    );
+    )
+    .layer(RequestBodyLimitLayer::new(64 * 1024)); // 64KB strict limit for auth payloads
 
     let logs_routes = with_rate_limit!(
         Router::new().route("/api/logs", post(routes::logs::receive_client_logs)),
         &redis,
         RateLimitConfig::LOGS,
         logs_governor
-    );
+    )
+    .layer(RequestBodyLimitLayer::new(128 * 1024)); // 128KB limit for logs
 
     let analytics_routes = with_rate_limit!(
         Router::new().route("/api/analytics/pageview", post(metrics::record_pageview)),
@@ -322,7 +324,8 @@ pub fn create_app(redis: RedisMode) -> Router {
         RateLimitConfig::CONTACT,
         contact_governor
     )
-    .with_state(mailer);
+    .with_state(mailer)
+    .layer(RequestBodyLimitLayer::new(64 * 1024)); // 64KB limit for contact form
 
     let admin_messages_routes = Router::new()
         .route("/api/admin/messages", get(routes::contact::list_messages))
@@ -473,7 +476,7 @@ pub fn create_app(redis: RedisMode) -> Router {
             get(routes::series::get_series_public),
         )
         .route("/metrics", get(metrics::metrics_handler))
-        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024));
+        .layer(RequestBodyLimitLayer::new(512 * 1024)); // reduced from 2MB to 512KB for general API endpoints
 
     let health_state = routes::health::HealthState {
         redis: Arc::new(redis.clone()),

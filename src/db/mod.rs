@@ -23,7 +23,7 @@ impl Default for DbConfig {
             max_connections: std::env::var("DB_POOL_MAX")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(10),
+                .unwrap_or(20), // Cap at 20 (Cloud Run instances will scale, keep this low per instance)
             min_connections: std::env::var("DB_POOL_MIN")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -31,11 +31,11 @@ impl Default for DbConfig {
             connect_timeout_secs: std::env::var("DB_CONNECT_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(10),
+                .unwrap_or(5), // Drop from 10 to 5s to fail fast
             idle_timeout_secs: std::env::var("DB_IDLE_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(300),
+                .unwrap_or(60), // Drop from 300 to 60s to free connections faster
         }
     }
 }
