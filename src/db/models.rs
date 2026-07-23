@@ -241,3 +241,19 @@ pub struct ContentEmbeddingRow {
     pub chunk_text: String,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PortfolioExperience {
+    pub id: Uuid,
+    pub company: String,
+    pub position: serde_json::Value,
+    pub duration: serde_json::Value,
+    pub description: serde_json::Value,
+    pub technologies: Vec<String>,
+    #[sqlx(rename = "type")]
+    #[serde(rename = "type")]
+    pub experience_type: String,
+    pub display_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}

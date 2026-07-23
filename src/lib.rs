@@ -371,6 +371,20 @@ pub fn create_app(redis: RedisMode) -> Router {
         .route(
             "/api/admin/portfolio/versions/{id}/restore",
             post(routes::portfolio::restore_portfolio_version),
+        )
+        .route(
+            "/api/admin/portfolio/experience",
+            get(routes::portfolio::list_experiences_admin)
+                .post(routes::portfolio::create_experience),
+        )
+        .route(
+            "/api/admin/portfolio/experience/{id}",
+            patch(routes::portfolio::update_experience)
+                .delete(routes::portfolio::delete_experience),
+        )
+        .route(
+            "/api/admin/portfolio/experience/{id}/locale/{locale}",
+            patch(routes::portfolio::override_experience_locale),
         );
 
     let newsletter_public = with_rate_limit!(
@@ -457,6 +471,10 @@ pub fn create_app(redis: RedisMode) -> Router {
         .route(
             "/api/portfolio",
             get(routes::portfolio::get_portfolio).patch(routes::portfolio::update_portfolio),
+        )
+        .route(
+            "/api/portfolio/experience",
+            get(routes::portfolio::get_experience_i18n),
         )
         .route(
             "/api/blog",
@@ -639,6 +657,8 @@ pub async fn run() {
                     } else {
                         tracing::error!("Failed to run database migrations: {}", e);
                     }
+                } else {
+                    routes::portfolio::seed_experience_data(pool.as_ref()).await;
                 }
             }
             Err(e) => {

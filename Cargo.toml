@@ -99,6 +99,9 @@ metrics-exporter-prometheus = "0.16"
 # Redis (health, rate limiting, presence)
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
+# In-memory cache (experience translations)
+moka = { version = "0.12", features = ["future"] }
+
 # OpenAPI / Swagger documentation. `axum_extras` lets utoipa parse path /
 # query params automatically; `uuid` and `chrono` map our DB types to
 # OpenAPI string formats. Swagger UI is mounted under `/api/docs/`.

@@ -586,6 +586,32 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- portfolio_experiences (i18n JSONB) ---
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS portfolio_experiences (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            company TEXT NOT NULL,
+            position JSONB NOT NULL DEFAULT '{}',
+            duration JSONB NOT NULL DEFAULT '{}',
+            description JSONB NOT NULL DEFAULT '{}',
+            technologies TEXT[] NOT NULL DEFAULT '{}',
+            type TEXT NOT NULL DEFAULT 'full-time',
+            display_order INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_portfolio_experiences_order ON portfolio_experiences(display_order ASC)",
+    )
+    .execute(pool)
+    .await?;
+
     tracing::info!("Database migrations completed successfully");
 
     Ok(())

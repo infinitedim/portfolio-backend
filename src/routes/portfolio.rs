@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::db::{self, models::PortfolioSection};
 use crate::routes::auth::require_admin;
+use crate::routes::translation;
 use crate::routes::ErrorResponse;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -68,6 +69,56 @@ pub struct RestorePortfolioResponse {
     pub data: Value,
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ExperienceQuery {
+    #[serde(default = "default_locale")]
+    pub locale: String,
+}
+
+fn default_locale() -> String {
+    "en_US".to_string()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateExperienceRequest {
+    pub company: String,
+    pub position: String,
+    pub duration: String,
+    pub description: Vec<String>,
+    pub technologies: Vec<String>,
+    #[serde(default = "default_type")]
+    #[serde(rename = "type")]
+    pub experience_type: String,
+    #[serde(default)]
+    pub display_order: i32,
+}
+
+fn default_type() -> String {
+    "full-time".to_string()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateExperienceRequest {
+    pub company: Option<String>,
+    pub position: Option<String>,
+    pub duration: Option<String>,
+    pub description: Option<Vec<String>>,
+    pub technologies: Option<Vec<String>>,
+    #[serde(rename = "type")]
+    pub experience_type: Option<String>,
+    pub display_order: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct LocaleOverrideRequest {
+    pub position: Option<String>,
+    pub duration: Option<String>,
+    pub description: Option<Vec<String>>,
+}
+
 pub const VALID_SECTIONS: &[&str] = &["skills", "projects", "experience", "about"];
 
 pub fn is_valid_section(section: &str) -> bool {
@@ -83,14 +134,6 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
         "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Tailwind CSS"],
         "demoUrl": "https://infinitedim.dev",
         "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
-        "status": "active",
-        "featured": true
-      },
-      {
-        "id": "cellink",
-        "name": "Cellink B2B Travel Platform",
-        "description": "Platform B2B untuk agen travel dengan fitur pemesanan penerbangan, kereta, hotel, event, dan transaksi PPOB. Dibangun dengan Flutter dan dideploy di Kubernetes.",
-        "technologies": ["Flutter", "Kubernetes", "Grafana", "Loki", "Prometheus"],
         "status": "active",
         "featured": true
       },
@@ -528,6 +571,600 @@ pub async fn restore_portfolio_version(
             data: content,
         }),
     ))
+}
+// ---- Experience CRUD with i18n ----
+
+use moka::future::Cache as MokaCache;
+use std::sync::Arc;
+use std::time::Duration;
+
+static EXPERIENCE_CACHE: once_cell::sync::Lazy<Arc<MokaCache<String, Value>>> =
+    once_cell::sync::Lazy::new(|| {
+        Arc::new(
+            MokaCache::builder()
+                .max_capacity(100)
+                .time_to_live(Duration::from_secs(300))
+                .build(),
+        )
+    });
+
+fn invalidate_experience_cache() {
+    // Invalidate all cached locale variants
+    EXPERIENCE_CACHE.invalidate_all();
+}
+
+/// GET /api/portfolio/experience?locale=en_US
+/// Returns experience list with fields resolved to the requested locale.
+pub async fn get_experience_i18n(Query(query): Query<ExperienceQuery>) -> impl IntoResponse {
+    let locale = query.locale;
+    let cache_key = format!("experience:{}", locale);
+
+    // Check cache first
+    if let Some(cached) = EXPERIENCE_CACHE.get(&cache_key).await {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            "public, max-age=300, stale-while-revalidate=60"
+                .parse()
+                .unwrap(),
+        );
+        return (
+            StatusCode::OK,
+            headers,
+            Json(PortfolioResponse {
+                data: Some(cached),
+                error: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            // Fallback to static data when DB unavailable
+            let static_data = get_static_data("experience").unwrap_or(Value::Array(vec![]));
+            return (
+                StatusCode::OK,
+                axum::http::HeaderMap::new(),
+                Json(PortfolioResponse {
+                    data: Some(static_data),
+                    error: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match sqlx::query_as::<_, db::models::PortfolioExperience>(
+        "SELECT * FROM portfolio_experiences ORDER BY display_order ASC, created_at DESC",
+    )
+    .fetch_all(pool.as_ref())
+    .await
+    {
+        Ok(experiences) if !experiences.is_empty() => {
+            let resolved: Vec<Value> = experiences
+                .iter()
+                .map(|exp| resolve_experience_locale(exp, &locale))
+                .collect();
+            let data = Value::Array(resolved);
+
+            // Cache the result
+            EXPERIENCE_CACHE.insert(cache_key, data.clone()).await;
+
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=300, stale-while-revalidate=60"
+                    .parse()
+                    .unwrap(),
+            );
+            (
+                StatusCode::OK,
+                headers,
+                Json(PortfolioResponse {
+                    data: Some(data),
+                    error: None,
+                }),
+            )
+                .into_response()
+        }
+        Ok(_) => {
+            // Empty DB — return static fallback
+            let static_data = get_static_data("experience").unwrap_or(Value::Array(vec![]));
+            (
+                StatusCode::OK,
+                axum::http::HeaderMap::new(),
+                Json(PortfolioResponse {
+                    data: Some(static_data),
+                    error: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch experiences: {}", e);
+            let static_data = get_static_data("experience").unwrap_or(Value::Array(vec![]));
+            (
+                StatusCode::OK,
+                axum::http::HeaderMap::new(),
+                Json(PortfolioResponse {
+                    data: Some(static_data),
+                    error: None,
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Resolve JSONB locale fields to flat strings for the given locale, with fallback to en_US.
+fn resolve_experience_locale(exp: &db::models::PortfolioExperience, locale: &str) -> Value {
+    let position = resolve_locale_string(&exp.position, locale);
+    let duration = resolve_locale_string(&exp.duration, locale);
+    let description = resolve_locale_array(&exp.description, locale);
+
+    serde_json::json!({
+        "company": exp.company,
+        "position": position,
+        "duration": duration,
+        "description": description,
+        "technologies": exp.technologies,
+        "type": exp.experience_type,
+    })
+}
+
+fn resolve_locale_string(jsonb: &Value, locale: &str) -> String {
+    // Try exact locale
+    if let Some(s) = jsonb.get(locale).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    // Fallback to en_US
+    if let Some(s) = jsonb.get("en_US").and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    // Fallback to first available
+    if let Some(obj) = jsonb.as_object() {
+        if let Some((_, v)) = obj.iter().next() {
+            if let Some(s) = v.as_str() {
+                return s.to_string();
+            }
+        }
+    }
+    // If the value itself is a plain string (non-JSONB migrated data)
+    jsonb.as_str().unwrap_or_default().to_string()
+}
+
+fn resolve_locale_array(jsonb: &Value, locale: &str) -> Vec<String> {
+    // Try exact locale
+    if let Some(arr) = jsonb.get(locale).and_then(|v| v.as_array()) {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+    // Fallback to en_US
+    if let Some(arr) = jsonb.get("en_US").and_then(|v| v.as_array()) {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+    // Fallback to first available
+    if let Some(obj) = jsonb.as_object() {
+        if let Some((_, v)) = obj.iter().next() {
+            if let Some(arr) = v.as_array() {
+                return arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+        }
+    }
+    // If the value itself is an array (non-JSONB migrated data)
+    if let Some(arr) = jsonb.as_array() {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+    vec![]
+}
+
+/// POST /api/admin/portfolio/experience — create new experience with AI translation.
+pub async fn create_experience(
+    headers: HeaderMap,
+    Json(payload): Json<CreateExperienceRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    // Try AI translation if Gemini is available
+    let (position_jsonb, duration_jsonb, description_jsonb) = match std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+    {
+        Some(api_key) => {
+            let client = reqwest::Client::new();
+            match translation::translate_experience(
+                &client,
+                &api_key,
+                &payload.position,
+                &payload.duration,
+                &payload.description,
+            )
+            .await
+            {
+                Ok(translated) => (
+                    translated.position,
+                    translated.duration,
+                    translated.description,
+                ),
+                Err(e) => {
+                    tracing::warn!("AI translation failed, storing English only: {}", e);
+                    (
+                        serde_json::json!({ "en_US": payload.position }),
+                        serde_json::json!({ "en_US": payload.duration }),
+                        serde_json::json!({ "en_US": payload.description }),
+                    )
+                }
+            }
+        }
+        None => {
+            tracing::info!("GEMINI_API_KEY not set, storing English only");
+            (
+                serde_json::json!({ "en_US": payload.position }),
+                serde_json::json!({ "en_US": payload.duration }),
+                serde_json::json!({ "en_US": payload.description }),
+            )
+        }
+    };
+
+    let row = sqlx::query_as::<_, db::models::PortfolioExperience>(
+        r#"
+        INSERT INTO portfolio_experiences (company, position, duration, description, technologies, type, display_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        "#,
+    )
+    .bind(&payload.company)
+    .bind(&position_jsonb)
+    .bind(&duration_jsonb)
+    .bind(&description_jsonb)
+    .bind(&payload.technologies)
+    .bind(&payload.experience_type)
+    .bind(payload.display_order)
+    .fetch_one(pool.as_ref())
+    .await?;
+
+    invalidate_experience_cache();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "success": true,
+            "data": {
+                "id": row.id,
+                "company": row.company,
+                "position": row.position,
+                "duration": row.duration,
+                "description": row.description,
+                "technologies": row.technologies,
+                "type": row.experience_type,
+                "display_order": row.display_order,
+            }
+        })),
+    ))
+}
+
+/// PATCH /api/admin/portfolio/experience/:id — update experience & re-translate.
+pub async fn update_experience(
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateExperienceRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    // Fetch existing
+    let existing = sqlx::query_as::<_, db::models::PortfolioExperience>(
+        "SELECT * FROM portfolio_experiences WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool.as_ref())
+    .await?
+    .ok_or(crate::routes::AppError::NotFound)?;
+
+    let company = payload.company.unwrap_or(existing.company);
+    let technologies = payload.technologies.unwrap_or(existing.technologies);
+    let experience_type = payload.experience_type.unwrap_or(existing.experience_type);
+    let display_order = payload.display_order.unwrap_or(existing.display_order);
+
+    // If position/duration/description changed, re-translate
+    let needs_retranslation =
+        payload.position.is_some() || payload.duration.is_some() || payload.description.is_some();
+
+    let position_en = payload
+        .position
+        .unwrap_or_else(|| resolve_locale_string(&existing.position, "en_US"));
+    let duration_en = payload
+        .duration
+        .unwrap_or_else(|| resolve_locale_string(&existing.duration, "en_US"));
+    let description_en = payload
+        .description
+        .unwrap_or_else(|| resolve_locale_array(&existing.description, "en_US"));
+
+    let (position_jsonb, duration_jsonb, description_jsonb) = if needs_retranslation {
+        match std::env::var("GEMINI_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+        {
+            Some(api_key) => {
+                let client = reqwest::Client::new();
+                match translation::translate_experience(
+                    &client,
+                    &api_key,
+                    &position_en,
+                    &duration_en,
+                    &description_en,
+                )
+                .await
+                {
+                    Ok(translated) => (
+                        translated.position,
+                        translated.duration,
+                        translated.description,
+                    ),
+                    Err(e) => {
+                        tracing::warn!("AI re-translation failed: {}", e);
+                        (
+                            serde_json::json!({ "en_US": position_en }),
+                            serde_json::json!({ "en_US": duration_en }),
+                            serde_json::json!({ "en_US": description_en }),
+                        )
+                    }
+                }
+            }
+            None => (
+                serde_json::json!({ "en_US": position_en }),
+                serde_json::json!({ "en_US": duration_en }),
+                serde_json::json!({ "en_US": description_en }),
+            ),
+        }
+    } else {
+        (existing.position, existing.duration, existing.description)
+    };
+
+    let row = sqlx::query_as::<_, db::models::PortfolioExperience>(
+        r#"
+        UPDATE portfolio_experiences
+        SET company = $1, position = $2, duration = $3, description = $4,
+            technologies = $5, type = $6, display_order = $7, updated_at = NOW()
+        WHERE id = $8
+        RETURNING *
+        "#,
+    )
+    .bind(&company)
+    .bind(&position_jsonb)
+    .bind(&duration_jsonb)
+    .bind(&description_jsonb)
+    .bind(&technologies)
+    .bind(&experience_type)
+    .bind(display_order)
+    .bind(id)
+    .fetch_one(pool.as_ref())
+    .await?;
+
+    invalidate_experience_cache();
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "data": {
+                "id": row.id,
+                "company": row.company,
+                "position": row.position,
+                "duration": row.duration,
+                "description": row.description,
+                "technologies": row.technologies,
+                "type": row.experience_type,
+                "display_order": row.display_order,
+            }
+        })),
+    ))
+}
+
+/// DELETE /api/admin/portfolio/experience/:id
+pub async fn delete_experience(
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    let result = sqlx::query("DELETE FROM portfolio_experiences WHERE id = $1")
+        .bind(id)
+        .execute(pool.as_ref())
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(crate::routes::AppError::NotFound);
+    }
+
+    invalidate_experience_cache();
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "message": "Experience deleted"
+        })),
+    ))
+}
+
+/// PATCH /api/admin/portfolio/experience/:id/locale/:locale — manual override for a specific locale.
+pub async fn override_experience_locale(
+    headers: HeaderMap,
+    Path((id, locale)): Path<(Uuid, String)>,
+    Json(payload): Json<LocaleOverrideRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    let existing = sqlx::query_as::<_, db::models::PortfolioExperience>(
+        "SELECT * FROM portfolio_experiences WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool.as_ref())
+    .await?
+    .ok_or(crate::routes::AppError::NotFound)?;
+
+    let mut position = existing.position.clone();
+    let mut duration = existing.duration.clone();
+    let mut description = existing.description.clone();
+
+    if let Some(pos) = &payload.position {
+        if let Some(obj) = position.as_object_mut() {
+            obj.insert(locale.clone(), Value::String(pos.clone()));
+        }
+    }
+    if let Some(dur) = &payload.duration {
+        if let Some(obj) = duration.as_object_mut() {
+            obj.insert(locale.clone(), Value::String(dur.clone()));
+        }
+    }
+    if let Some(desc) = &payload.description {
+        if let Some(obj) = description.as_object_mut() {
+            let arr: Vec<Value> = desc.iter().map(|s| Value::String(s.clone())).collect();
+            obj.insert(locale.clone(), Value::Array(arr));
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE portfolio_experiences
+        SET position = $1, duration = $2, description = $3, updated_at = NOW()
+        WHERE id = $4
+        "#,
+    )
+    .bind(&position)
+    .bind(&duration)
+    .bind(&description)
+    .bind(id)
+    .execute(pool.as_ref())
+    .await?;
+
+    invalidate_experience_cache();
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "message": format!("Locale '{}' updated for experience", locale)
+        })),
+    ))
+}
+
+/// GET /api/admin/portfolio/experience — list all experiences with ALL locale data (admin view).
+pub async fn list_experiences_admin(
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    let experiences = sqlx::query_as::<_, db::models::PortfolioExperience>(
+        "SELECT * FROM portfolio_experiences ORDER BY display_order ASC, created_at DESC",
+    )
+    .fetch_all(pool.as_ref())
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "data": experiences
+        })),
+    ))
+}
+
+/// Seed static experience data into the database on first run (if table is empty).
+pub async fn seed_experience_data(pool: &sqlx::PgPool) {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_experiences")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+    if count > 0 {
+        tracing::info!(
+            "portfolio_experiences already has {} rows, skipping seed",
+            count
+        );
+        return;
+    }
+
+    tracing::info!("Seeding portfolio_experiences with static data...");
+
+    let static_entries = get_static_data("experience");
+    if let Some(Value::Array(entries)) = static_entries {
+        for (i, entry) in entries.iter().enumerate() {
+            let company = entry.get("company").and_then(|v| v.as_str()).unwrap_or("");
+            let position_en = entry.get("position").and_then(|v| v.as_str()).unwrap_or("");
+            let duration_en = entry.get("duration").and_then(|v| v.as_str()).unwrap_or("");
+            let description_en: Vec<String> = entry
+                .get("description")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let technologies: Vec<String> = entry
+                .get("technologies")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let exp_type = entry
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("full-time");
+
+            // Store with en_US locale only for seed data
+            let position_jsonb = serde_json::json!({ "en_US": position_en });
+            let duration_jsonb = serde_json::json!({ "en_US": duration_en });
+            let description_jsonb = serde_json::json!({ "en_US": description_en });
+
+            if let Err(e) = sqlx::query(
+                r#"
+                INSERT INTO portfolio_experiences (company, position, duration, description, technologies, type, display_order)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+            )
+            .bind(company)
+            .bind(&position_jsonb)
+            .bind(&duration_jsonb)
+            .bind(&description_jsonb)
+            .bind(&technologies)
+            .bind(exp_type)
+            .bind(i as i32)
+            .execute(pool)
+            .await
+            {
+                tracing::error!("Failed to seed experience entry: {}", e);
+            }
+        }
+
+        tracing::info!("Seeded {} experience entries", entries.len());
+    }
 }
 
 #[cfg(test)]

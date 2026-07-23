@@ -13,6 +13,7 @@ pub mod presence;
 pub mod roadmap;
 pub mod rss;
 pub mod series;
+pub mod translation;
 pub mod twofa;
 pub mod upload;
 
