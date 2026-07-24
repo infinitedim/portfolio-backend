@@ -67,7 +67,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 # HTML sanitization (blog)
-ammonia = "4"
+ammonia = "4.1.4"
 regex = "1"
 
 # HTTP client (roadmap.sh proxy, Resend mailer, Gemini SSE)

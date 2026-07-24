@@ -191,6 +191,9 @@ static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
 });
 
 pub fn get_static_data(section: &str) -> Option<Value> {
+    if std::env::var("ENVIRONMENT").as_deref() == Ok("production") {
+        return None;
+    }
     match section.to_lowercase().as_str() {
         "projects" => Some(STATIC_PROJECTS.clone()),
         "skills" => Some(STATIC_SKILLS.clone()),
@@ -1225,11 +1228,17 @@ mod tests {
 
     #[test]
     fn test_get_static_data() {
+        std::env::remove_var("ENVIRONMENT");
         assert!(get_static_data("skills").is_some());
         assert!(get_static_data("projects").is_some());
         assert!(get_static_data("experience").is_some());
         assert!(get_static_data("about").is_some());
         assert!(get_static_data("invalid").is_none());
+
+        std::env::set_var("ENVIRONMENT", "production");
+        assert!(get_static_data("projects").is_none());
+        assert!(get_static_data("skills").is_none());
+        std::env::remove_var("ENVIRONMENT");
     }
 
     #[tokio::test]
