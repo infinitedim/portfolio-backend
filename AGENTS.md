@@ -14,7 +14,7 @@ Rust/Axum API for [portfolio-frontend](https://github.com/infinitedim/portfolio-
 - User owns secrets in `.env.development` / GCP / Vercel; agents may scaffold `.env.example` only.
 - Gate = NATAS web puzzles (login, robots.txt → `/s3cr3t/`, Referer), not Bandit/Behemoth/SSH.
 - GCP docs should stay beginner-friendly.
-- Backend SLA: **all API routes P95 &lt; 50ms** (see `docs/performance/API_SLA.md`).
+- Backend SLA: **all API routes P95 < 50ms** (see `docs/performance/API_SLA.md`).
 - Roadmap.sh auth: **only** `POST https://roadmap.sh/api/v1-login` with `ROADMAP_EMAIL` / `ROADMAP_PASSWORD` — no GitHub OAuth, no manual bearer env.
 
 ---
@@ -37,8 +37,8 @@ Rust/Axum API for [portfolio-frontend](https://github.com/infinitedim/portfolio-
 - **Rust** (edition 2021), **Axum 0.8**, **SQLx 0.8** + PostgreSQL 16
 - **Redis 7** (optional): distributed rate limits + WS presence (`src/redis/`)
 - **tower_governor** fallback when `REDIS_URL` unset
-- **JWT** (admin), **bcrypt**, **TOTP** (admin 2FA)
-- **Prometheus** metrics, structured tracing → Loki (via Promtail)
+- **JWT** (admin auth & refresh tokens stored in PostgreSQL), **bcrypt**, **TOTP** (admin 2FA)
+- **Prometheus** metrics (`/metrics`), structured tracing $\rightarrow$ Loki (via Promtail)
 - **OpenAPI** (`utoipa`) — `/api/docs` when `ENABLE_SWAGGER_UI=true` (off in prod by default)
 - **Terraform** GCP: `terraform/environments/prod/` — runbook `terraform/docs/deploy-runbook.md`
 
@@ -50,14 +50,32 @@ Rust/Axum API for [portfolio-frontend](https://github.com/infinitedim/portfolio-
 src/
   lib.rs              # create_app(), CORS, rate-limit wiring, route merge
   main.rs             # tokio entry → run()
-  db/mod.rs           # pool, inline SQL migrations (no sqlx-cli folder)
-  db/models.rs
+  db/
+    mod.rs            # pool, inline SQL migrations (extensions, blog, auth, contact, newsletter, api_keys)
+    models.rs         # Database structs & models
   redis/              # pool, presence_store, rate_limit middleware
-  routes/             # one module per domain (see API map below)
+  routes/             # One module per domain:
+    ai.rs             # POST /api/ai/chat (Gemini SSE streaming)
+    auth.rs           # /api/auth/* (login, refresh, logout, password)
+    blog.rs           # /api/blog/* (HTML sanitized via ammonia)
+    cms.rs            # /api/v1/content/* (HEADLESS_CMS_ENABLED + X-Api-Key)
+    contact.rs        # POST /api/contact, /api/admin/messages/* (Resend optional)
+    gate.rs           # GET/POST /api/gate/* (L1-L3 NATAS challenges & unlock JWT)
+    github.rs         # /api/github/* (in-memory SWR cache + GH_TOKEN)
+    health.rs         # /health, /health/detailed, /health/database, /health/redis, /health/ready
+    logs.rs           # POST /api/logs (client log ingest → tracing)
+    newsletter.rs     # /api/newsletter/*, /api/admin/newsletter/* (double opt-in)
+    portfolio.rs      # GET/PATCH /api/portfolio (projects & experience)
+    presence.rs       # GET /ws/presence (WebSocket real-time presence)
+    roadmap.rs        # /api/roadmap/* (roadmap.sh proxy + upstream login)
+    rss.rs            # GET /api/rss (in-memory 60s cache)
+    series.rs         # /api/blog/series/* (blog series management)
+    twofa.rs          # /api/auth/2fa/* (TOTP 2FA setup & verify)
+    upload.rs         # /api/upload/* (admin image upload to uploads/)
   metrics.rs          # Prometheus + /api/analytics/pageview
   logging/            # request-id middleware, file logs (dev)
   email/              # Resend Mailer trait
-  openapi.rs          # ApiDoc for Swagger
+  openapi.rs          # ApiDoc for Swagger UI
 config/               # prometheus, loki, grafana, slo-rules
 terraform/            # GCP prod IaC
 docker-compose.yml    # local: postgres, redis, backend, observability
@@ -181,7 +199,7 @@ L2 discovery (frontend): `/robots.txt` → `Disallow: /s3cr3t/` → `/s3cr3t/use
 
 - Local/full stack: `docker-compose.yml` — Postgres, Redis, Loki, Promtail, Grafana, Prometheus.
 - SLO: `docs/performance/API_SLA.md`, alerts `config/slo-rules.yml`, CI `scripts/latency-smoke.sh`.
-- Tier C routes (roadmap, GitHub): in-memory stale-while-revalidate; target cache-hit P95 &lt; 50ms.
+- Tier C routes (roadmap, GitHub): in-memory stale-while-revalidate; target cache-hit P95 < 50ms.
 - `/metrics` scrape: optional bearer; prod Prometheus on ops VM.
 
 ---
