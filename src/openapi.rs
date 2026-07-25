@@ -126,6 +126,9 @@ impl Modify for SecurityAddon {
         routes::upload::upload_project_image,
         routes::upload::delete_image,
         routes::upload::list_images,
+        // Resume
+        routes::resume::get_raw_resume,
+        routes::resume::upload_resume,
         // Health
         routes::health::health_ping,
         routes::health::health_detailed,

@@ -10,6 +10,7 @@ pub mod logs;
 pub mod newsletter;
 pub mod portfolio;
 pub mod presence;
+pub mod resume;
 pub mod roadmap;
 pub mod rss;
 pub mod series;

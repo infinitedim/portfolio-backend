@@ -264,6 +264,8 @@ pub fn create_app(redis: RedisMode) -> Router {
             "/api/upload/project-image",
             post(routes::upload::upload_project_image),
         )
+        .route("/api/upload/resume", post(routes::resume::upload_resume))
+        .route("/api/resume/raw", get(routes::resume::get_raw_resume))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
     let auth_routes = with_rate_limit!(
