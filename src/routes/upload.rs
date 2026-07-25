@@ -4,7 +4,9 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use object_store::{gcp::GoogleCloudStorageBuilder, path::Path as GcsPath, ObjectStore, PutPayload};
+use object_store::{
+    gcp::GoogleCloudStorageBuilder, path::Path as GcsPath, ObjectStore, PutPayload,
+};
 use once_cell::sync::OnceCell;
 use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
@@ -53,10 +55,7 @@ fn gcs_client() -> Option<Arc<dyn ObjectStore>> {
                     Some(Arc::new(store) as Arc<dyn ObjectStore>)
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to build GCS client (falling back to disk): {}",
-                        e
-                    );
+                    tracing::warn!("Failed to build GCS client (falling back to disk): {}", e);
                     None
                 }
             }
@@ -208,26 +207,38 @@ struct ValidatedUpload {
     ext: &'static str,
 }
 
-async fn validate_multipart(mut multipart: Multipart) -> Result<ValidatedUpload, (StatusCode, Json<ErrorResponse>)> {
+async fn validate_multipart(
+    mut multipart: Multipart,
+) -> Result<ValidatedUpload, (StatusCode, Json<ErrorResponse>)> {
     let field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         Ok(None) => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse { error: "No file provided".to_string(), message: None }),
+                Json(ErrorResponse {
+                    error: "No file provided".to_string(),
+                    message: None,
+                }),
             ))
         }
         Err(e) => {
             tracing::error!("Multipart error: {}", e);
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse { error: "Invalid multipart data".to_string(), message: None }),
+                Json(ErrorResponse {
+                    error: "Invalid multipart data".to_string(),
+                    message: None,
+                }),
             ));
         }
     };
 
     let original_name = field.file_name().unwrap_or("unknown").to_string();
-    let original_ext = original_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let original_ext = original_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
 
     if !ALLOWED_EXTENSIONS.contains(&original_ext.as_str()) {
         return Err((
@@ -245,7 +256,10 @@ async fn validate_multipart(mut multipart: Multipart) -> Result<ValidatedUpload,
             tracing::error!("Failed to read upload bytes: {}", e);
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse { error: "Failed to read file data".to_string(), message: None }),
+                Json(ErrorResponse {
+                    error: "Failed to read file data".to_string(),
+                    message: None,
+                }),
             ));
         }
     };
@@ -253,7 +267,10 @@ async fn validate_multipart(mut multipart: Multipart) -> Result<ValidatedUpload,
     if bytes.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: "Empty file".to_string(), message: None }),
+            Json(ErrorResponse {
+                error: "Empty file".to_string(),
+                message: None,
+            }),
         ));
     }
 
@@ -281,7 +298,11 @@ async fn validate_multipart(mut multipart: Multipart) -> Result<ValidatedUpload,
     };
 
     let ext = get_extension_from_mime(mime_type);
-    Ok(ValidatedUpload { bytes, mime_type, ext })
+    Ok(ValidatedUpload {
+        bytes,
+        mime_type,
+        ext,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +313,7 @@ async fn store_image(
     bytes: axum::body::Bytes,
     mime_type: &str,
     ext: &str,
-    gcs_prefix: &str,         // e.g. "blog" or "projects"
+    gcs_prefix: &str, // e.g. "blog" or "projects"
     disk_fallback_dir: PathBuf,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     let filename = format!("{}.{}", Uuid::new_v4(), ext);
@@ -325,7 +346,11 @@ async fn store_image(
                     "https://storage.googleapis.com/{}/{}/{}",
                     bucket, gcs_prefix, filename
                 );
-                tracing::info!("Image uploaded to GCS: {} ({} bytes)", gcs_path, bytes.len());
+                tracing::info!(
+                    "Image uploaded to GCS: {} ({} bytes)",
+                    gcs_path,
+                    bytes.len()
+                );
                 return Ok(url);
             }
             Err(e) => {
@@ -358,7 +383,10 @@ async fn store_image(
         tracing::error!("Failed to write upload file: {}", e);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: "Failed to save file".to_string(), message: None }),
+            Json(ErrorResponse {
+                error: "Failed to save file".to_string(),
+                message: None,
+            }),
         ));
     }
 
@@ -367,7 +395,11 @@ async fn store_image(
         .and_then(|n| n.to_str())
         .unwrap_or("images");
     let url = format!("/uploads/{}/{}", dir_name, filename);
-    tracing::info!("Image saved to disk (fallback): {} ({} bytes)", file_path.display(), bytes.len());
+    tracing::info!(
+        "Image saved to disk (fallback): {} ({} bytes)",
+        file_path.display(),
+        bytes.len()
+    );
     Ok(url)
 }
 
@@ -443,7 +475,15 @@ pub async fn upload_project_image(headers: HeaderMap, multipart: Multipart) -> i
     let mime_type = validated.mime_type;
     let ext = validated.ext;
 
-    match store_image(validated.bytes, mime_type, ext, "projects", upload_projects_dir()).await {
+    match store_image(
+        validated.bytes,
+        mime_type,
+        ext,
+        "projects",
+        upload_projects_dir(),
+    )
+    .await
+    {
         Ok(url) => {
             let filename = url.rsplit('/').next().unwrap_or("").to_string();
             (

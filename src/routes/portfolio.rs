@@ -423,7 +423,11 @@ pub async fn update_portfolio(
                 val.as_array()
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|item| item.get("imageUrl").and_then(|u| u.as_str()).map(|s| s.to_string()))
+                            .filter_map(|item| {
+                                item.get("imageUrl")
+                                    .and_then(|u| u.as_str())
+                                    .map(|s| s.to_string())
+                            })
                             .collect()
                     })
                     .unwrap_or_default()

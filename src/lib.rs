@@ -266,7 +266,6 @@ pub fn create_app(redis: RedisMode) -> Router {
         )
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
-
     let auth_routes = with_rate_limit!(
         Router::new()
             .route("/api/auth/register", post(routes::auth::register))
