@@ -391,6 +391,10 @@ pub fn create_app(redis: RedisMode) -> Router {
         .route(
             "/api/admin/portfolio/experience/{id}/locale/{locale}",
             patch(routes::portfolio::override_experience_locale),
+        )
+        .route(
+            "/api/admin/portfolio/about",
+            get(routes::portfolio::get_portfolio).post(routes::portfolio::update_about_admin),
         );
 
     let newsletter_public = with_rate_limit!(
@@ -665,6 +669,7 @@ pub async fn run() {
                     }
                 } else {
                     routes::portfolio::seed_experience_data(pool.as_ref()).await;
+                    routes::portfolio::seed_about_data(pool.as_ref()).await;
                 }
             }
             Err(e) => {

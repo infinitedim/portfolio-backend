@@ -21,6 +21,8 @@ use crate::routes::ErrorResponse;
 pub struct PortfolioQuery {
     #[serde(default)]
     pub section: String,
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
@@ -276,6 +278,47 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
         .await
         {
             Ok(Some(section)) => {
+                if section_key == "about" {
+                    let req_locale = query.locale.as_deref().unwrap_or("en_US");
+                    if let Some(obj) = section.content.as_object() {
+                        let mut resolved_about = obj.clone();
+                        if let Some(t) = obj.get("title") {
+                            resolved_about.insert(
+                                "title".to_string(),
+                                Value::String(resolve_locale_string(t, req_locale)),
+                            );
+                        }
+                        if let Some(b) = obj.get("bio") {
+                            resolved_about.insert(
+                                "bio".to_string(),
+                                Value::String(resolve_locale_string(b, req_locale)),
+                            );
+                        }
+                        if let Some(l) = obj.get("location") {
+                            resolved_about.insert(
+                                "location".to_string(),
+                                Value::String(resolve_locale_string(l, req_locale)),
+                            );
+                        }
+                        let mut cache_headers = axum::http::HeaderMap::new();
+                        cache_headers.insert(
+                            axum::http::header::CACHE_CONTROL,
+                            "public, max-age=300, stale-while-revalidate=60"
+                                .parse()
+                                .unwrap(),
+                        );
+                        return (
+                            StatusCode::OK,
+                            cache_headers,
+                            Json(PortfolioResponse {
+                                data: Some(Value::Object(resolved_about)),
+                                error: None,
+                            }),
+                        )
+                            .into_response();
+                    }
+                }
+
                 let mut cache_headers = axum::http::HeaderMap::new();
                 cache_headers.insert(
                     axum::http::header::CACHE_CONTROL,
@@ -1197,6 +1240,155 @@ pub async fn seed_experience_data(pool: &sqlx::PgPool) {
 
         tracing::info!("Seeded {} experience entries", entries.len());
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutContactInput {
+    pub email: String,
+    pub github: String,
+    pub linkedin: String,
+    #[serde(default)]
+    pub twitter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAboutRequest {
+    pub name: String,
+    pub title: String,
+    pub bio: String,
+    pub location: String,
+    pub contact: AboutContactInput,
+}
+
+pub async fn update_about_admin(
+    headers: HeaderMap,
+    Json(payload): Json<UpdateAboutRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+
+    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+
+    let (title_jsonb, bio_jsonb, location_jsonb) = match std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+    {
+        Some(api_key) => {
+            let client = reqwest::Client::new();
+            match translation::translate_about(
+                &client,
+                &api_key,
+                &payload.title,
+                &payload.bio,
+                &payload.location,
+            )
+            .await
+            {
+                Ok(translated) => (translated.title, translated.bio, translated.location),
+                Err(e) => {
+                    tracing::warn!("AI About translation failed: {}", e);
+                    (
+                        serde_json::json!({ "en_US": payload.title }),
+                        serde_json::json!({ "en_US": payload.bio }),
+                        serde_json::json!({ "en_US": payload.location }),
+                    )
+                }
+            }
+        }
+        None => (
+            serde_json::json!({ "en_US": payload.title }),
+            serde_json::json!({ "en_US": payload.bio }),
+            serde_json::json!({ "en_US": payload.location }),
+        ),
+    };
+
+    let content = serde_json::json!({
+        "name": payload.name,
+        "title": title_jsonb,
+        "bio": bio_jsonb,
+        "location": location_jsonb,
+        "contact": {
+            "email": payload.contact.email,
+            "github": payload.contact.github,
+            "linkedin": payload.contact.linkedin,
+            "twitter": payload.contact.twitter.unwrap_or_default(),
+        }
+    });
+
+    // Snapshot current content before updating
+    if let Ok(Some(existing)) = sqlx::query_as::<_, PortfolioSection>(
+        "SELECT key, content, updated_at FROM portfolio_sections WHERE key = 'about'",
+    )
+    .fetch_optional(pool.as_ref())
+    .await
+    {
+        let _ = sqlx::query(
+            "INSERT INTO portfolio_versions (section_key, content, created_at) VALUES ('about', $1, now())",
+        )
+        .bind(&existing.content)
+        .execute(pool.as_ref())
+        .await;
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO portfolio_sections (key, content, updated_at)
+        VALUES ('about', $1, now())
+        ON CONFLICT (key) DO UPDATE SET
+            content = EXCLUDED.content,
+            updated_at = now()
+        "#,
+    )
+    .bind(&content)
+    .execute(pool.as_ref())
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "message": "About section updated and translated successfully",
+            "data": content
+        })),
+    ))
+}
+
+pub async fn seed_about_data(pool: &sqlx::PgPool) {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_sections WHERE key = 'about'")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+    if count > 0 {
+        return;
+    }
+
+    tracing::info!("Seeding portfolio_sections key 'about' with initial data...");
+
+    let initial_about = serde_json::json!({
+        "name": "Dimas Saputra",
+        "title": { "en_US": "Full Stack Developer", "id_ID": "Pengembang Full Stack" },
+        "bio": {
+            "en_US": "A software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International.",
+            "id_ID": "Pengembang perangkat lunak dengan pengalaman profesional hampir tiga tahun, mengespesialisasi pada pengembangan aplikasi mobile lintas platform dengan Flutter."
+        },
+        "location": { "en_US": "Indonesia", "id_ID": "Indonesia" },
+        "contact": {
+            "email": "dragdimas9@gmail.com",
+            "github": "https://github.com/infinitedim",
+            "linkedin": "https://linkedin.com/in/infinitedim",
+            "twitter": ""
+        }
+    });
+
+    let _ = sqlx::query(
+        "INSERT INTO portfolio_sections (key, content, updated_at) VALUES ('about', $1, now()) ON CONFLICT DO NOTHING",
+    )
+    .bind(&initial_about)
+    .execute(pool)
+    .await;
 }
 
 #[cfg(test)]

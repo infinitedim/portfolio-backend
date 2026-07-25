@@ -234,3 +234,109 @@ fn apply_literal_fixes(value: &mut Value) {
         _ => {}
     }
 }
+
+/// Result of translating About section entry.
+#[derive(Debug)]
+pub struct TranslatedAbout {
+    pub title: Value,
+    pub bio: Value,
+    pub location: Value,
+}
+
+/// Translate title, bio, and location into all 17 locales.
+pub async fn translate_about(
+    client: &Client,
+    api_key: &str,
+    title_en: &str,
+    bio_en: &str,
+    location_en: &str,
+) -> Result<TranslatedAbout, String> {
+    let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
+    let locales_list = TARGET_LOCALES.join(", ");
+
+    let prompt = format!(
+        r#"You are a Senior Software Engineer and Localization Specialist translating developer profile details.
+
+Translate the following developer profile fields into these locales: {locales_list}
+
+Source (English):
+- title: "{title_en}"
+- bio: "{bio_en}"
+- location: "{location_en}"
+
+CRITICAL RULES:
+1. Translate for clarity, natural professional flow, and native software engineering context. Do NOT perform literal word-for-word translations.
+2. Keep the following technical terms untranslated (use them as-is in all languages): {dnt_list}
+3. Return ONLY a valid JSON object with this exact structure (no markdown, no code fences, no explanation):
+{{
+  "title": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
+  "bio": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
+  "location": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }}
+}}
+
+IMPORTANT: Each locale key must be present for title, bio, and location."#
+    );
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        GEMINI_MODEL, api_key
+    );
+
+    let body = serde_json::json!({
+        "contents": [{
+            "role": "user",
+            "parts": [{ "text": prompt }]
+        }],
+        "generationConfig": {
+            "temperature": 0.3,
+            "responseMimeType": "application/json"
+        }
+    });
+
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini API returned {}: {}", status, text));
+    }
+
+    let gemini_resp: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+    let text = gemini_resp
+        .pointer("/candidates/0/content/parts/0/text")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "No text in Gemini response".to_string())?;
+
+    let mut translated: Value = serde_json::from_str(text)
+        .map_err(|e| format!("Failed to parse translation JSON: {} — raw: {}", e, text))?;
+
+    apply_literal_fixes(&mut translated);
+
+    let title = translated
+        .get("title")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "en_US": title_en }));
+    let bio = translated
+        .get("bio")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "en_US": bio_en }));
+    let location = translated
+        .get("location")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "en_US": location_en }));
+
+    Ok(TranslatedAbout {
+        title,
+        bio,
+        location,
+    })
+}
