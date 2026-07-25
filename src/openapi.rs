@@ -123,6 +123,7 @@ impl Modify for SecurityAddon {
         routes::contact::bulk_delete_messages,
         // Upload
         routes::upload::upload_image,
+        routes::upload::upload_project_image,
         routes::upload::delete_image,
         routes::upload::list_images,
         // Health

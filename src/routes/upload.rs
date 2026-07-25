@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use object_store::{
-    gcp::GoogleCloudStorageBuilder, path::Path as GcsPath, ObjectStore, PutPayload,
+    gcp::GoogleCloudStorageBuilder, path::Path as GcsPath, ObjectStore, ObjectStoreExt, PutPayload,
 };
 use once_cell::sync::OnceCell;
 use serde::Serialize;

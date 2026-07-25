@@ -315,17 +315,17 @@ mod tests {
         {
             let mut cache = CACHE.lock().unwrap();
             cache.insert(
-                "/users/infinitedim".to_string(),
+                "/users/user-cached-test".to_string(),
                 CacheEntry {
                     body: serde_json::json!({
-                        "login": "infinitedim",
+                        "login": "user-cached-test",
                         "name": "Dimas Saputra",
                         "avatar_url": "https://avatar.url",
                         "bio": "Developer",
                         "public_repos": 10,
                         "followers": 5,
                         "following": 5,
-                        "html_url": "https://github.com/infinitedim",
+                        "html_url": "https://github.com/user-cached-test",
                         "created_at": "2024-01-01T00:00:00Z"
                     }),
                     fetched_at: Instant::now(),
@@ -333,13 +333,15 @@ mod tests {
             );
         }
 
-        let response = get_user(Path("infinitedim".into())).await.into_response();
+        let response = get_user(Path("user-cached-test".into()))
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(val["login"], "infinitedim");
+        assert_eq!(val["login"], "user-cached-test");
         assert_eq!(val["name"], "Dimas Saputra");
     }
 
@@ -348,7 +350,7 @@ mod tests {
         {
             let mut cache = CACHE.lock().unwrap();
             cache.insert(
-                "/users/infinitedim".to_string(),
+                "/users/stats-cached-test".to_string(),
                 CacheEntry {
                     body: serde_json::json!({
                         "followers": 5,
@@ -359,7 +361,7 @@ mod tests {
                 },
             );
             cache.insert(
-                "/users/infinitedim/repos?sort=updated&per_page=100".to_string(),
+                "/users/stats-cached-test/repos?sort=updated&per_page=100".to_string(),
                 CacheEntry {
                     body: serde_json::json!([
                         {
@@ -369,7 +371,7 @@ mod tests {
                             "forks_count": 1,
                             "language": "Rust",
                             "updated_at": "2024-01-02T00:00:00Z",
-                            "html_url": "https://github.com/infinitedim/repo1"
+                            "html_url": "https://github.com/stats-cached-test/repo1"
                         }
                     ]),
                     fetched_at: Instant::now(),
@@ -377,7 +379,9 @@ mod tests {
             );
         }
 
-        let response = get_stats(Path("infinitedim".into())).await.into_response();
+        let response = get_stats(Path("stats-cached-test".into()))
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -391,19 +395,18 @@ mod tests {
     async fn test_github_stale_cache_hit() {
         {
             let mut cache = CACHE.lock().unwrap();
-            cache.clear();
             cache.insert(
-                "/users/infinitedim".to_string(),
+                "/users/stale-cached-test".to_string(),
                 CacheEntry {
                     body: serde_json::json!({
-                        "login": "infinitedim",
+                        "login": "stale-cached-test",
                         "name": "Dimas Saputra",
                         "avatar_url": "https://avatar.url",
                         "bio": "Developer",
                         "public_repos": 10,
                         "followers": 5,
                         "following": 5,
-                        "html_url": "https://github.com/infinitedim",
+                        "html_url": "https://github.com/stale-cached-test",
                         "created_at": "2024-01-01T00:00:00Z"
                     }),
                     fetched_at: Instant::now() - Duration::from_secs(30 * 60),
@@ -411,7 +414,9 @@ mod tests {
             );
         }
 
-        let response = get_user(Path("infinitedim".into())).await.into_response();
+        let response = get_user(Path("stale-cached-test".into()))
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -419,7 +424,7 @@ mod tests {
     async fn test_github_cache_miss_failure() {
         {
             let mut cache = CACHE.lock().unwrap();
-            cache.clear();
+            cache.remove("/users/some-non-existent-user-xyz-123456789");
         }
 
         let response = get_user(Path("some-non-existent-user-xyz-123456789".into()))
