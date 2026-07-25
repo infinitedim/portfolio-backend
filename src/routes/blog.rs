@@ -14,6 +14,7 @@ use crate::db::{
     models::{BlogPost, BlogStatus},
 };
 use crate::routes::auth::require_admin;
+use crate::routes::upload;
 use crate::routes::AppError;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -971,6 +972,28 @@ pub async fn delete_post(
         }
     };
 
+    // Fetch post content before deletion to extract GCS image URLs for cleanup
+    let old_images: Vec<String> = if let Ok(Some((content_md, content_html))) =
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT content_md, content_html FROM blog_posts WHERE slug = $1 AND locale = $2",
+        )
+        .bind(&slug)
+        .bind(&locale)
+        .fetch_optional(pool.as_ref())
+        .await
+    {
+        let url_regex = Regex::new(r#"https://storage\.googleapis\.com/[^\s)"'>]+"#).ok();
+        let mut urls = Vec::new();
+        if let Some(ref re) = url_regex {
+            for cap in re.find_iter(&content_md).chain(re.find_iter(&content_html)) {
+                urls.push(cap.as_str().to_string());
+            }
+        }
+        urls
+    } else {
+        Vec::new()
+    };
+
     match sqlx::query("DELETE FROM blog_posts WHERE slug = $1 AND locale = $2")
         .bind(&slug)
         .bind(&locale)
@@ -988,6 +1011,13 @@ pub async fn delete_post(
                 )
                     .into_response();
             }
+
+            for url in old_images {
+                tokio::spawn(async move {
+                    upload::delete_gcs_object(&url).await;
+                });
+            }
+
             (StatusCode::OK, Json(SuccessResponse { success: true })).into_response()
         }
         Err(e) => {

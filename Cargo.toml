@@ -110,5 +110,9 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 url = "2"
 tracing-loki = { version = "0.2.2", default-features = false, features = ["rustls", "compat-0-2-1"] }
 
+# Google Cloud Storage — project & blog image upload/delete.
+# Uses rustls (no native-tls) consistent with reqwest config above.
+object_store = { version = "0.11", features = ["gcp"] }
+
 [dev-dependencies]
 tokio-tungstenite = "0.26"

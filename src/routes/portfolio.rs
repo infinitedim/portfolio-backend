@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::db::{self, models::PortfolioSection};
 use crate::routes::auth::require_admin;
 use crate::routes::translation;
+use crate::routes::upload;
 use crate::routes::ErrorResponse;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -414,6 +415,30 @@ pub async fn update_portfolio(
         .await
         {
             tracing::warn!("Failed to snapshot portfolio section before update: {}", e);
+        }
+
+        // If updating projects, check for deleted image URLs to clean up from GCS
+        if section_key == "projects" {
+            let get_image_urls = |val: &Value| -> Vec<String> {
+                val.as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| item.get("imageUrl").and_then(|u| u.as_str()).map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+
+            let old_urls = get_image_urls(&existing.content);
+            let new_urls = get_image_urls(&payload.data);
+
+            for old_url in old_urls {
+                if !new_urls.contains(&old_url) {
+                    tokio::spawn(async move {
+                        upload::delete_gcs_object(&old_url).await;
+                    });
+                }
+            }
         }
     }
 

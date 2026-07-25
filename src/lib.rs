@@ -260,7 +260,12 @@ pub fn create_app(redis: RedisMode) -> Router {
             delete(routes::upload::delete_image),
         )
         .route("/api/upload/images", get(routes::upload::list_images))
+        .route(
+            "/api/upload/project-image",
+            post(routes::upload::upload_project_image),
+        )
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
+
 
     let auth_routes = with_rate_limit!(
         Router::new()

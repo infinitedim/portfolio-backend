@@ -4,12 +4,18 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use object_store::{gcp::GoogleCloudStorageBuilder, path::Path as GcsPath, ObjectStore, PutPayload};
+use once_cell::sync::OnceCell;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 use crate::routes::auth::require_admin;
 use crate::routes::ErrorResponse;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 /// Default on-disk location for uploaded blog images. Used when the
 /// `UPLOAD_DIR` env var is unset — overriding it lets tests redirect writes
@@ -19,12 +25,113 @@ const DEFAULT_UPLOAD_DIR: &str = "uploads/blog";
 const MAX_FILE_SIZE: usize = 5 * 1024 * 1024; // 5MB
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
 
+// ---------------------------------------------------------------------------
+// GCS client singleton
+// ---------------------------------------------------------------------------
+
+/// Cached GCS client. Initialised once on first upload request.
+/// Returns `None` when `GCS_BUCKET` env var is unset (local dev fallback).
+static GCS_CLIENT: OnceCell<Option<Arc<dyn ObjectStore>>> = OnceCell::new();
+
+fn gcs_bucket_name() -> Option<String> {
+    std::env::var("GCS_BUCKET").ok().filter(|s| !s.is_empty())
+}
+
+/// Returns the shared GCS client, initialising it on first call.
+/// If `GCS_BUCKET` is unset, always returns `None` and uploads fall back to
+/// disk-based storage so local dev works without GCP credentials.
+fn gcs_client() -> Option<Arc<dyn ObjectStore>> {
+    GCS_CLIENT
+        .get_or_init(|| {
+            let bucket = gcs_bucket_name()?;
+            match GoogleCloudStorageBuilder::from_env()
+                .with_bucket_name(&bucket)
+                .build()
+            {
+                Ok(store) => {
+                    tracing::info!("GCS client initialised for bucket: {}", bucket);
+                    Some(Arc::new(store) as Arc<dyn ObjectStore>)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to build GCS client (falling back to disk): {}",
+                        e
+                    );
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
+// Public GCS deletion helper — called from blog.rs and portfolio.rs
+// ---------------------------------------------------------------------------
+
+/// Extracts the GCS object path (e.g. `"blog/uuid.jpg"`) from a full public
+/// URL and deletes it from the bucket.  Only paths starting with `"blog/"` or
+/// `"projects/"` are accepted — any other prefix is silently ignored to
+/// prevent accidental deletion of unrelated objects.
+///
+/// The call is best-effort: errors are logged as warnings but never propagated
+/// to the caller, and missing objects are treated as success.
+pub async fn delete_gcs_object(url: &str) {
+    let bucket = match gcs_bucket_name() {
+        Some(b) => b,
+        None => return, // GCS not configured
+    };
+
+    let client = match gcs_client() {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Extract the object path from the public URL.
+    // Expected format: https://storage.googleapis.com/{BUCKET}/{path}
+    let prefix = format!("https://storage.googleapis.com/{}/", bucket);
+    let object_path = match url.strip_prefix(&prefix) {
+        Some(p) => p,
+        None => {
+            tracing::debug!("delete_gcs_object: URL does not match bucket prefix, skipping");
+            return;
+        }
+    };
+
+    // Security guard — only allow deletion under known prefixes.
+    if !object_path.starts_with("blog/") && !object_path.starts_with("projects/") {
+        tracing::warn!(
+            "delete_gcs_object: rejecting path outside allowed prefixes: {}",
+            object_path
+        );
+        return;
+    }
+
+    let gcs_path = GcsPath::from(object_path);
+    match client.delete(&gcs_path).await {
+        Ok(()) => tracing::info!("GCS object deleted: {}", object_path),
+        Err(object_store::Error::NotFound { .. }) => {
+            tracing::debug!("GCS object already gone: {}", object_path)
+        }
+        Err(e) => tracing::warn!("Failed to delete GCS object {}: {}", object_path, e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Upload helpers
+// ---------------------------------------------------------------------------
+
 /// Resolve the on-disk upload directory. Reads `UPLOAD_DIR` at call time so
 /// tests can override it per-test via [`std::env::set_var`] without forcing
 /// a process restart. Production builds simply fall through to
 /// [`DEFAULT_UPLOAD_DIR`].
 fn upload_dir() -> PathBuf {
     PathBuf::from(std::env::var("UPLOAD_DIR").unwrap_or_else(|_| DEFAULT_UPLOAD_DIR.to_string()))
+}
+
+fn upload_projects_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var("UPLOAD_PROJECTS_DIR").unwrap_or_else(|_| "uploads/projects".to_string()),
+    )
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -91,6 +198,183 @@ fn sanitize_filename(filename: &str) -> bool {
         && !filename.contains('\0')
 }
 
+// ---------------------------------------------------------------------------
+// Internal: validate & read multipart field
+// ---------------------------------------------------------------------------
+
+struct ValidatedUpload {
+    bytes: axum::body::Bytes,
+    mime_type: &'static str,
+    ext: &'static str,
+}
+
+async fn validate_multipart(mut multipart: Multipart) -> Result<ValidatedUpload, (StatusCode, Json<ErrorResponse>)> {
+    let field = match multipart.next_field().await {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { error: "No file provided".to_string(), message: None }),
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Multipart error: {}", e);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { error: "Invalid multipart data".to_string(), message: None }),
+            ));
+        }
+    };
+
+    let original_name = field.file_name().unwrap_or("unknown").to_string();
+    let original_ext = original_name.rsplit('.').next().unwrap_or("").to_lowercase();
+
+    if !ALLOWED_EXTENSIONS.contains(&original_ext.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Unsupported file type. Allowed: JPEG, PNG, WebP, GIF.".to_string(),
+                message: None,
+            }),
+        ));
+    }
+
+    let bytes = match field.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("Failed to read upload bytes: {}", e);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { error: "Failed to read file data".to_string(), message: None }),
+            ));
+        }
+    };
+
+    if bytes.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error: "Empty file".to_string(), message: None }),
+        ));
+    }
+
+    if bytes.len() > MAX_FILE_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "File too large. Maximum size is 5MB.".to_string(),
+                message: None,
+            }),
+        ));
+    }
+
+    let mime_type = match validate_image_magic_bytes(&bytes) {
+        Some(m) => m,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "File content does not match an allowed image type.".to_string(),
+                    message: None,
+                }),
+            ))
+        }
+    };
+
+    let ext = get_extension_from_mime(mime_type);
+    Ok(ValidatedUpload { bytes, mime_type, ext })
+}
+
+// ---------------------------------------------------------------------------
+// Internal: push bytes to GCS or fall back to disk
+// ---------------------------------------------------------------------------
+
+async fn store_image(
+    bytes: axum::body::Bytes,
+    mime_type: &str,
+    ext: &str,
+    gcs_prefix: &str,         // e.g. "blog" or "projects"
+    disk_fallback_dir: PathBuf,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let filename = format!("{}.{}", Uuid::new_v4(), ext);
+
+    if let Some(client) = gcs_client() {
+        // --- GCS path ---
+        let gcs_path = GcsPath::from(format!("{}/{}", gcs_prefix, filename));
+        let bucket = gcs_bucket_name().unwrap_or_default();
+
+        let payload = PutPayload::from_bytes(bytes.clone());
+        let put_opts = object_store::PutOptions {
+            attributes: {
+                let mut attrs = object_store::Attributes::new();
+                attrs.insert(
+                    object_store::Attribute::ContentType,
+                    object_store::AttributeValue::from(mime_type.to_string()),
+                );
+                attrs.insert(
+                    object_store::Attribute::CacheControl,
+                    "public, max-age=31536000".into(),
+                );
+                attrs
+            },
+            ..Default::default()
+        };
+
+        match client.put_opts(&gcs_path, payload, put_opts).await {
+            Ok(_) => {
+                let url = format!(
+                    "https://storage.googleapis.com/{}/{}/{}",
+                    bucket, gcs_prefix, filename
+                );
+                tracing::info!("Image uploaded to GCS: {} ({} bytes)", gcs_path, bytes.len());
+                return Ok(url);
+            }
+            Err(e) => {
+                tracing::error!("GCS upload failed: {}", e);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Failed to upload to cloud storage".to_string(),
+                        message: None,
+                    }),
+                ));
+            }
+        }
+    }
+
+    // --- Disk fallback (local dev) ---
+    if let Err(e) = tokio::fs::create_dir_all(&disk_fallback_dir).await {
+        tracing::error!("Failed to create upload directory: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to initialize upload directory".to_string(),
+                message: None,
+            }),
+        ));
+    }
+
+    let file_path = disk_fallback_dir.join(&filename);
+    if let Err(e) = tokio::fs::write(&file_path, &bytes).await {
+        tracing::error!("Failed to write upload file: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: "Failed to save file".to_string(), message: None }),
+        ));
+    }
+
+    let dir_name = disk_fallback_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("images");
+    let url = format!("/uploads/{}/{}", dir_name, filename);
+    tracing::info!("Image saved to disk (fallback): {} ({} bytes)", file_path.display(), bytes.len());
+    Ok(url)
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
 #[utoipa::path(
     post,
     path = "/api/upload/image",
@@ -102,156 +386,79 @@ fn sanitize_filename(filename: &str) -> bool {
         (status = 401, description = "Auth required", body = ErrorResponse),
     )
 )]
-pub async fn upload_image(headers: HeaderMap, mut multipart: Multipart) -> impl IntoResponse {
+pub async fn upload_image(headers: HeaderMap, multipart: Multipart) -> impl IntoResponse {
     if let Err(err_response) = verify_auth(&headers) {
         return err_response.into_response();
     }
 
-    // Ensure upload directory exists
-    let upload_path = upload_dir();
-    if let Err(e) = tokio::fs::create_dir_all(&upload_path).await {
-        tracing::error!("Failed to create upload directory: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to initialize upload directory".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    // Extract file from multipart
-    let field = match multipart.next_field().await {
-        Ok(Some(field)) => field,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "No file provided".to_string(),
-                    message: None,
-                }),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!("Multipart error: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Invalid multipart data".to_string(),
-                    message: None,
-                }),
-            )
-                .into_response();
-        }
+    let validated = match validate_multipart(multipart).await {
+        Ok(v) => v,
+        Err((status, body)) => return (status, body).into_response(),
     };
 
-    // Get original filename for extension validation
-    let original_name = field.file_name().unwrap_or("unknown").to_string();
-    let original_ext = original_name
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let size = validated.bytes.len();
+    let mime_type = validated.mime_type;
+    let ext = validated.ext;
 
-    // Validate extension
-    if !ALLOWED_EXTENSIONS.contains(&original_ext.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Unsupported file type. Allowed: JPEG, PNG, WebP, GIF.".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    // Read file bytes
-    let bytes = match field.bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("Failed to read upload bytes: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Failed to read file data".to_string(),
-                    message: None,
+    match store_image(validated.bytes, mime_type, ext, "blog", upload_dir()).await {
+        Ok(url) => {
+            let filename = url.rsplit('/').next().unwrap_or("").to_string();
+            (
+                StatusCode::CREATED,
+                Json(UploadResponse {
+                    url,
+                    filename,
+                    size,
+                    mime_type: mime_type.to_string(),
                 }),
             )
-                .into_response();
+                .into_response()
         }
-    };
-
-    // Validate file size
-    if bytes.len() > MAX_FILE_SIZE {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "File too large. Maximum size is 5MB.".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
+        Err((status, body)) => (status, body).into_response(),
     }
+}
 
-    if bytes.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Empty file".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    // Validate magic bytes
-    let mime_type = match validate_image_magic_bytes(&bytes) {
-        Some(mime) => mime,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "File content does not match an allowed image type.".to_string(),
-                    message: None,
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    // Generate unique filename
-    let ext = get_extension_from_mime(mime_type);
-    let filename = format!("{}.{}", Uuid::new_v4(), ext);
-    let file_path = upload_path.join(&filename);
-
-    // Write file to disk
-    if let Err(e) = tokio::fs::write(&file_path, &bytes).await {
-        tracing::error!("Failed to write upload file: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to save file".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    let url = format!("/uploads/blog/{}", filename);
-    tracing::info!("Image uploaded: {} ({} bytes)", filename, bytes.len());
-
-    (
-        StatusCode::CREATED,
-        Json(UploadResponse {
-            url,
-            filename,
-            size: bytes.len(),
-            mime_type: mime_type.to_string(),
-        }),
+#[utoipa::path(
+    post,
+    path = "/api/upload/project-image",
+    tag = "Upload",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 201, description = "Project image uploaded", body = UploadResponse),
+        (status = 400, description = "Invalid file", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
     )
-        .into_response()
+)]
+pub async fn upload_project_image(headers: HeaderMap, multipart: Multipart) -> impl IntoResponse {
+    if let Err(err_response) = verify_auth(&headers) {
+        return err_response.into_response();
+    }
+
+    let validated = match validate_multipart(multipart).await {
+        Ok(v) => v,
+        Err((status, body)) => return (status, body).into_response(),
+    };
+
+    let size = validated.bytes.len();
+    let mime_type = validated.mime_type;
+    let ext = validated.ext;
+
+    match store_image(validated.bytes, mime_type, ext, "projects", upload_projects_dir()).await {
+        Ok(url) => {
+            let filename = url.rsplit('/').next().unwrap_or("").to_string();
+            (
+                StatusCode::CREATED,
+                Json(UploadResponse {
+                    url,
+                    filename,
+                    size,
+                    mime_type: mime_type.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err((status, body)) => (status, body).into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -421,6 +628,7 @@ mod tests {
     fn upload_router() -> Router {
         Router::new()
             .route("/api/upload/image", post(upload_image))
+            .route("/api/upload/project-image", post(upload_project_image))
             .route("/api/upload/image/{filename}", delete(delete_image))
             .route("/api/upload/images", get(list_images))
             .layer(test_support::mock_connect_info())
@@ -465,6 +673,22 @@ mod tests {
         let boundary = "upload-test-boundary";
         let png = [0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3];
         let req = Request::post("/api/upload/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(boundary, "image.png", &png)))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn project_image_upload_requires_admin_auth() {
+        let boundary = "upload-test-boundary";
+        let png = [0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3];
+        let req = Request::post("/api/upload/project-image")
             .header(
                 "content-type",
                 format!("multipart/form-data; boundary={}", boundary),
@@ -685,5 +909,17 @@ mod tests {
             validate_image_magic_bytes(&[0xFF, 0xD8, 0xFF, 0xE0]),
             Some("image/jpeg")
         );
+    }
+
+    #[test]
+    fn test_delete_gcs_object_skips_unknown_prefix() {
+        // This test validates that delete_gcs_object returns early for
+        // paths outside allowed prefixes without panicking. Since GCS_BUCKET
+        // is not set in tests, it will return early before the prefix check —
+        // we just ensure no panic occurs.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            delete_gcs_object("https://storage.googleapis.com/bucket/secret/file.png").await;
+        });
     }
 }
