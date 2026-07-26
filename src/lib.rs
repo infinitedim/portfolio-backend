@@ -102,11 +102,22 @@ pub fn configure_cors() -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(allowed_origins)
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::PUT,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+            axum::http::header::ORIGIN,
             axum::http::HeaderName::from_static("x-api-key"),
+            axum::http::HeaderName::from_static("x-requested-with"),
+            axum::http::HeaderName::from_static("x-gate-bypass"),
         ])
         .allow_credentials(true)
 }
@@ -394,7 +405,7 @@ pub fn create_app(redis: RedisMode) -> Router {
         )
         .route(
             "/api/admin/portfolio/about",
-            get(routes::portfolio::get_portfolio).post(routes::portfolio::update_about_admin),
+            get(routes::portfolio::get_about_admin).post(routes::portfolio::update_about_admin),
         );
 
     let newsletter_public = with_rate_limit!(

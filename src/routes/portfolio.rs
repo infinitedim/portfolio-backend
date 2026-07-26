@@ -1151,20 +1151,73 @@ pub async fn list_experiences_admin(
 ) -> Result<impl IntoResponse, crate::routes::AppError> {
     require_admin(&headers)?;
 
-    let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
+    if let Some(pool) = db::get_pool() {
+        if let Ok(experiences) = sqlx::query_as::<_, db::models::PortfolioExperience>(
+            "SELECT * FROM portfolio_experiences ORDER BY display_order ASC, created_at DESC",
+        )
+        .fetch_all(pool.as_ref())
+        .await
+        {
+            return Ok((
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "data": experiences
+                })),
+            )
+                .into_response());
+        }
+    }
 
-    let experiences = sqlx::query_as::<_, db::models::PortfolioExperience>(
-        "SELECT * FROM portfolio_experiences ORDER BY display_order ASC, created_at DESC",
-    )
-    .fetch_all(pool.as_ref())
-    .await?;
+    if let Some(Value::Array(entries)) = get_static_data("experience") {
+        let fallback_experiences: Vec<Value> = entries
+            .into_iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let company = entry.get("company").and_then(|v| v.as_str()).unwrap_or("");
+                let position = entry.get("position").and_then(|v| v.as_str()).unwrap_or("");
+                let duration = entry.get("duration").and_then(|v| v.as_str()).unwrap_or("");
+                let description = entry
+                    .get("description")
+                    .cloned()
+                    .unwrap_or(Value::Array(vec![]));
+                let technologies = entry
+                    .get("technologies")
+                    .cloned()
+                    .unwrap_or(Value::Array(vec![]));
+                let exp_type = entry
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("full-time");
+
+                serde_json::json!({
+                    "id": format!("static-{}", i),
+                    "company": company,
+                    "position": { "en_US": position },
+                    "duration": { "en_US": duration },
+                    "description": { "en_US": description },
+                    "technologies": technologies,
+                    "type": exp_type,
+                    "display_order": i
+                })
+            })
+            .collect();
+
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "data": fallback_experiences
+            })),
+        )
+            .into_response());
+    }
 
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
-            "data": experiences
+            "data": []
         })),
-    ))
+    )
+        .into_response())
 }
 
 /// Seed static experience data into the database on first run (if table is empty).
@@ -1261,7 +1314,71 @@ pub struct UpdateAboutRequest {
     pub location: String,
     pub contact: AboutContactInput,
 }
+#[utoipa::path(
+    get,
+    path = "/api/admin/portfolio/about",
+    tag = "Portfolio",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "About section content", body = PortfolioResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "About section not found", body = ErrorResponse),
+    )
+)]
+pub async fn get_about_admin(
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
 
+    if let Some(pool) = db::get_pool() {
+        if let Ok(Some(section)) = sqlx::query_as::<_, PortfolioSection>(
+            "SELECT key, content, updated_at FROM portfolio_sections WHERE key = 'about'",
+        )
+        .fetch_optional(pool.as_ref())
+        .await
+        {
+            return Ok((
+                StatusCode::OK,
+                Json(PortfolioResponse {
+                    data: Some(section.content),
+                    error: None,
+                }),
+            )
+                .into_response());
+        }
+    }
+
+    if let Some(static_data) = get_static_data("about") {
+        return Ok((
+            StatusCode::OK,
+            Json(PortfolioResponse {
+                data: Some(static_data),
+                error: None,
+            }),
+        )
+            .into_response());
+    }
+
+    Ok((
+        StatusCode::NOT_FOUND,
+        Json(PortfolioResponse {
+            data: None,
+            error: Some("About section data not found".to_string()),
+        }),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/portfolio/about",
+    tag = "Portfolio",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "About section updated", body = PortfolioResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+    )
+)]
 pub async fn update_about_admin(
     headers: HeaderMap,
     Json(payload): Json<UpdateAboutRequest>,
@@ -1405,6 +1522,10 @@ mod tests {
         Router::new()
             .route("/api/portfolio", get(get_portfolio).patch(update_portfolio))
             .route(
+                "/api/admin/portfolio/about",
+                get(get_about_admin).post(update_about_admin),
+            )
+            .route(
                 "/api/admin/portfolio/versions",
                 get(list_portfolio_versions),
             )
@@ -1413,6 +1534,15 @@ mod tests {
                 post(restore_portfolio_version),
             )
             .layer(crate::test_support::mock_connect_info())
+    }
+
+    #[tokio::test]
+    async fn get_about_admin_requires_auth() {
+        let req = Request::get("/api/admin/portfolio/about")
+            .body(Body::empty())
+            .unwrap();
+        let res = portfolio_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(app: Router, uri: &str) -> (StatusCode, T) {
