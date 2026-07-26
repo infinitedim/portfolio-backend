@@ -15,8 +15,7 @@ use crate::routes::upload::UploadResponse;
 use crate::routes::ErrorResponse;
 
 const MAX_RESUME_SIZE: usize = 10 * 1024 * 1024; // 10MB
-const GCS_RESUME_PATH: &str = "resume/dimas_saputra_resume.pdf";
-const DISK_FALLBACK_PATH: &str = "uploads/resume/resume.pdf";
+const GCS_RESUME_PATH: &str = "resume/resume.pdf";
 
 static GCS_CLIENT: OnceCell<Option<Arc<dyn ObjectStore>>> = OnceCell::new();
 
@@ -46,9 +45,7 @@ fn gcs_client() -> Option<Arc<dyn ObjectStore>> {
 }
 
 /// GET /api/resume/raw
-/// Returns the raw PDF bytes of the resume.
-/// Fetches from GCS (`resume/dimas_saputra_resume.pdf`) if `GCS_BUCKET` is configured,
-/// or falls back to local disk (`uploads/resume/resume.pdf`) in local dev mode.
+/// Returns the raw PDF bytes of the resume from GCS (`resume/resume.pdf`).
 #[utoipa::path(
     get,
     path = "/api/resume/raw",
@@ -59,60 +56,54 @@ fn gcs_client() -> Option<Arc<dyn ObjectStore>> {
     )
 )]
 pub async fn get_raw_resume() -> impl IntoResponse {
-    if let Some(client) = gcs_client() {
-        let gcs_path = GcsPath::from(GCS_RESUME_PATH);
-        match client.get(&gcs_path).await {
-            Ok(result) => match result.bytes().await {
-                Ok(bytes) => {
-                    tracing::info!("Resume PDF served from GCS ({} bytes)", bytes.len());
-                    return (
-                        StatusCode::OK,
-                        [
-                            ("content-type", "application/pdf"),
-                            (
-                                "content-disposition",
-                                "attachment; filename=\"Dimas_Saputra_Resume.pdf\"",
-                            ),
-                            ("cache-control", "private, no-store, max-age=0"),
-                        ],
-                        bytes,
-                    )
-                        .into_response();
-                }
-                Err(e) => {
-                    tracing::error!("Failed to read GCS resume bytes: {}", e);
-                }
-            },
-            Err(e) => {
-                tracing::warn!("GCS resume object not found: {}", e);
-            }
-        }
-    }
-
-    // Disk fallback (local dev)
-    let fallback_path = std::path::PathBuf::from(DISK_FALLBACK_PATH);
-    match tokio::fs::read(&fallback_path).await {
-        Ok(bytes) => {
-            tracing::info!(
-                "Resume PDF served from local disk fallback ({} bytes)",
-                bytes.len()
-            );
-            (
-                StatusCode::OK,
-                [
-                    ("content-type", "application/pdf"),
-                    (
-                        "content-disposition",
-                        "attachment; filename=\"Dimas_Saputra_Resume.pdf\"",
-                    ),
-                    ("cache-control", "private, no-store, max-age=0"),
-                ],
-                bytes,
+    let client = match gcs_client() {
+        Some(client) => client,
+        None => {
+            tracing::warn!("GCS client not configured for resume");
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Resume PDF not found".to_string(),
+                    message: Some("Cloud storage not configured".to_string()),
+                }),
             )
-                .into_response()
+                .into_response();
         }
+    };
+
+    let gcs_path = GcsPath::from(GCS_RESUME_PATH);
+    match client.get(&gcs_path).await {
+        Ok(result) => match result.bytes().await {
+            Ok(bytes) => {
+                tracing::info!("Resume PDF served from GCS ({} bytes)", bytes.len());
+                (
+                    StatusCode::OK,
+                    [
+                        ("content-type", "application/pdf"),
+                        (
+                            "content-disposition",
+                            "attachment; filename=\"Dimas_Saputra_Resume.pdf\"",
+                        ),
+                        ("cache-control", "private, no-store, max-age=0"),
+                    ],
+                    bytes,
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!("Failed to read GCS resume bytes: {}", e);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "Resume PDF not found".to_string(),
+                        message: None,
+                    }),
+                )
+                    .into_response()
+            }
+        },
         Err(e) => {
-            tracing::warn!("Resume file not found on disk fallback: {}", e);
+            tracing::warn!("GCS resume object not found: {}", e);
             (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
@@ -126,7 +117,7 @@ pub async fn get_raw_resume() -> impl IntoResponse {
 }
 
 /// POST /api/upload/resume (Admin only)
-/// Uploads a new resume PDF to GCS or disk fallback.
+/// Uploads a new resume PDF to GCS (`resume/resume.pdf`).
 #[utoipa::path(
     post,
     path = "/api/upload/resume",
@@ -136,6 +127,7 @@ pub async fn get_raw_resume() -> impl IntoResponse {
         (status = 201, description = "Resume PDF uploaded", body = UploadResponse),
         (status = 400, description = "Invalid file", body = ErrorResponse),
         (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 503, description = "Storage not configured", body = ErrorResponse),
     )
 )]
 pub async fn upload_resume(headers: HeaderMap, mut multipart: Multipart) -> impl IntoResponse {
@@ -217,95 +209,64 @@ pub async fn upload_resume(headers: HeaderMap, mut multipart: Multipart) -> impl
             .into_response();
     }
 
-    let size = bytes.len();
-
-    if let Some(client) = gcs_client() {
-        let gcs_path = GcsPath::from(GCS_RESUME_PATH);
-        let payload = PutPayload::from_bytes(bytes.clone());
-        let put_opts = object_store::PutOptions {
-            attributes: {
-                let mut attrs = object_store::Attributes::new();
-                attrs.insert(
-                    object_store::Attribute::ContentType,
-                    object_store::AttributeValue::from("application/pdf"),
-                );
-                attrs.insert(
-                    object_store::Attribute::CacheControl,
-                    "private, no-store, max-age=0".into(),
-                );
-                attrs
-            },
-            ..Default::default()
-        };
-
-        if let Err(e) = client.put_opts(&gcs_path, payload, put_opts).await {
-            tracing::error!("Failed to upload resume to GCS: {}", e);
+    let client = match gcs_client() {
+        Some(c) => c,
+        None => {
+            tracing::error!("GCS client not configured for resume upload");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Failed to upload resume to cloud storage".to_string(),
+                    error: "Cloud storage not configured".to_string(),
                     message: None,
                 }),
             )
                 .into_response();
         }
+    };
 
-        let bucket = gcs_bucket_name().unwrap_or_default();
-        let url = format!(
-            "https://storage.googleapis.com/{}/{}",
-            bucket, GCS_RESUME_PATH
-        );
-        tracing::info!("Resume uploaded to GCS: {} ({} bytes)", url, size);
+    let size = bytes.len();
 
-        return (
-            StatusCode::CREATED,
-            Json(UploadResponse {
-                url,
-                filename: "Dimas_Saputra_Resume.pdf".to_string(),
-                size,
-                mime_type: "application/pdf".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let gcs_path = GcsPath::from(GCS_RESUME_PATH);
+    let payload = PutPayload::from_bytes(bytes);
+    let put_opts = object_store::PutOptions {
+        attributes: {
+            let mut attrs = object_store::Attributes::new();
+            attrs.insert(
+                object_store::Attribute::ContentType,
+                object_store::AttributeValue::from("application/pdf"),
+            );
+            attrs.insert(
+                object_store::Attribute::CacheControl,
+                "private, no-store, max-age=0".into(),
+            );
+            attrs
+        },
+        ..Default::default()
+    };
 
-    // Disk fallback
-    let fallback_dir = std::path::PathBuf::from("uploads/resume");
-    if let Err(e) = tokio::fs::create_dir_all(&fallback_dir).await {
-        tracing::error!("Failed to create resume directory: {}", e);
+    if let Err(e) = client.put_opts(&gcs_path, payload, put_opts).await {
+        tracing::error!("Failed to upload resume to GCS: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "Failed to initialize upload directory".to_string(),
+                error: "Failed to upload resume to cloud storage".to_string(),
                 message: None,
             }),
         )
             .into_response();
     }
 
-    let file_path = fallback_dir.join("resume.pdf");
-    if let Err(e) = tokio::fs::write(&file_path, &bytes).await {
-        tracing::error!("Failed to write resume file: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to save file".to_string(),
-                message: None,
-            }),
-        )
-            .into_response();
-    }
-
-    tracing::info!(
-        "Resume saved to disk fallback: {} ({} bytes)",
-        file_path.display(),
-        size
+    let bucket = gcs_bucket_name().unwrap_or_default();
+    let url = format!(
+        "https://storage.googleapis.com/{}/{}",
+        bucket, GCS_RESUME_PATH
     );
+    tracing::info!("Resume uploaded to GCS: {} ({} bytes)", url, size);
 
     (
         StatusCode::CREATED,
         Json(UploadResponse {
-            url: "/uploads/resume/resume.pdf".to_string(),
+            url,
             filename: "Dimas_Saputra_Resume.pdf".to_string(),
             size,
             mime_type: "application/pdf".to_string(),
@@ -379,30 +340,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_and_get_resume_roundtrip() {
-        let boundary = "resume-boundary";
-        let pdf = b"%PDF-1.4 sample resume content for testing";
-        let upload_req = Request::post("/api/upload/resume")
-            .header("authorization", test_support::admin_bearer())
-            .header(
-                "content-type",
-                format!("multipart/form-data; boundary={}", boundary),
-            )
-            .body(Body::from(multipart_pdf_body(boundary, pdf)))
-            .expect("request should build");
-
-        let app = resume_router();
-        let upload_res = app.clone().oneshot(upload_req).await.unwrap();
-        assert_eq!(upload_res.status(), StatusCode::CREATED);
-
-        let get_req = Request::get("/api/resume/raw")
+    async fn get_resume_without_gcs_returns_not_found() {
+        let req = Request::get("/api/resume/raw")
             .body(Body::empty())
             .expect("request should build");
-        let get_res = app.oneshot(get_req).await.unwrap();
-        assert_eq!(get_res.status(), StatusCode::OK);
-        assert_eq!(
-            get_res.headers().get("content-type").unwrap(),
-            "application/pdf"
-        );
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 }
