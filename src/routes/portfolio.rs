@@ -885,21 +885,21 @@ pub async fn create_experience(
                     translated.description,
                 ),
                 Err(e) => {
-                    tracing::warn!("AI translation failed, storing English only: {}", e);
+                    tracing::warn!("AI translation failed, storing default locales: {}", e);
                     (
-                        serde_json::json!({ "en_US": payload.position }),
-                        serde_json::json!({ "en_US": payload.duration }),
-                        serde_json::json!({ "en_US": payload.description }),
+                        serde_json::json!({ "en_US": payload.position, "id_ID": payload.position }),
+                        serde_json::json!({ "en_US": payload.duration, "id_ID": payload.duration }),
+                        serde_json::json!({ "en_US": payload.description, "id_ID": payload.description }),
                     )
                 }
             }
         }
         None => {
-            tracing::info!("GEMINI_API_KEY not set, storing English only");
+            tracing::info!("GEMINI_API_KEY not set, storing default locales");
             (
-                serde_json::json!({ "en_US": payload.position }),
-                serde_json::json!({ "en_US": payload.duration }),
-                serde_json::json!({ "en_US": payload.description }),
+                serde_json::json!({ "en_US": payload.position, "id_ID": payload.position }),
+                serde_json::json!({ "en_US": payload.duration, "id_ID": payload.duration }),
+                serde_json::json!({ "en_US": payload.description, "id_ID": payload.description }),
             )
         }
     };
@@ -1003,17 +1003,17 @@ pub async fn update_experience(
                     Err(e) => {
                         tracing::warn!("AI re-translation failed: {}", e);
                         (
-                            serde_json::json!({ "en_US": position_en }),
-                            serde_json::json!({ "en_US": duration_en }),
-                            serde_json::json!({ "en_US": description_en }),
+                            serde_json::json!({ "en_US": position_en, "id_ID": position_en }),
+                            serde_json::json!({ "en_US": duration_en, "id_ID": duration_en }),
+                            serde_json::json!({ "en_US": description_en, "id_ID": description_en }),
                         )
                     }
                 }
             }
             None => (
-                serde_json::json!({ "en_US": position_en }),
-                serde_json::json!({ "en_US": duration_en }),
-                serde_json::json!({ "en_US": description_en }),
+                serde_json::json!({ "en_US": position_en, "id_ID": position_en }),
+                serde_json::json!({ "en_US": duration_en, "id_ID": duration_en }),
+                serde_json::json!({ "en_US": description_en, "id_ID": description_en }),
             ),
         }
     } else {

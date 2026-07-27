@@ -106,28 +106,28 @@ pub struct TranslatedExperience {
 pub async fn translate_experience(
     client: &Client,
     api_key: &str,
-    position_en: &str,
-    duration_en: &str,
-    description_en: &[String],
+    position_input: &str,
+    duration_input: &str,
+    description_input: &[String],
 ) -> Result<TranslatedExperience, String> {
     let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
     let locales_list = TARGET_LOCALES.join(", ");
-    let desc_json = serde_json::to_string(description_en).unwrap_or_default();
+    let desc_json = serde_json::to_string(description_input).unwrap_or_default();
 
     let prompt = format!(
         r#"You are a Senior Software Engineer and Localization Specialist translating developer CV/resume entries.
 
-Translate the following work experience entry into these locales: {locales_list}
+Translate the following work experience entry into all of these locales: {locales_list}
 
-Source (English):
-- position: "{position_en}"
-- duration: "{duration_en}"
+Source Input (Auto-detect language, e.g. Indonesian, English, etc.):
+- position: "{position_input}"
+- duration: "{duration_input}"
 - description: {desc_json}
 
 CRITICAL RULES:
-1. Translate for clarity, natural professional flow, and native software engineering context. Do NOT perform literal word-for-word translations.
+1. Auto-detect the source language of the input text. Translate for clarity, natural professional flow, and native software engineering context into ALL 17 locales ({locales_list}).
 2. Keep the following technical terms untranslated (use them as-is in all languages): {dnt_list}
-3. For duration strings, translate month names naturally (e.g., "June" -> "Juni" in Indonesian, "6月" in Japanese) but keep "Present" translated naturally too (e.g., "Sekarang" in Indonesian, "現在" in Japanese).
+3. For duration strings, translate month names and terms like "Present" / "Sekarang" / "現在" naturally into each target language.
 4. Return ONLY a valid JSON object with this exact structure (no markdown, no code fences, no explanation):
 {{
   "position": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
@@ -188,15 +188,15 @@ IMPORTANT: Each locale key must be present for position, duration, and descripti
     let position = translated
         .get("position")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": position_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": position_input, "id_ID": position_input }));
     let duration = translated
         .get("duration")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": duration_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": duration_input, "id_ID": duration_input }));
     let description = translated
         .get("description")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": description_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": description_input, "id_ID": description_input }));
 
     Ok(TranslatedExperience {
         position,
@@ -247,9 +247,9 @@ pub struct TranslatedAbout {
 pub async fn translate_about(
     client: &Client,
     api_key: &str,
-    title_en: &str,
-    bio_en: &str,
-    location_en: &str,
+    title_input: &str,
+    bio_input: &str,
+    location_input: &str,
 ) -> Result<TranslatedAbout, String> {
     let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
     let locales_list = TARGET_LOCALES.join(", ");
@@ -257,15 +257,15 @@ pub async fn translate_about(
     let prompt = format!(
         r#"You are a Senior Software Engineer and Localization Specialist translating developer profile details.
 
-Translate the following developer profile fields into these locales: {locales_list}
+Translate the following developer profile fields into all of these locales: {locales_list}
 
-Source (English):
-- title: "{title_en}"
-- bio: "{bio_en}"
-- location: "{location_en}"
+Source Input (Auto-detect language, e.g. Indonesian, English, etc.):
+- title: "{title_input}"
+- bio: "{bio_input}"
+- location: "{location_input}"
 
 CRITICAL RULES:
-1. Translate for clarity, natural professional flow, and native software engineering context. Do NOT perform literal word-for-word translations.
+1. Auto-detect the source language of the input text. Translate for clarity, natural professional flow, and native software engineering context into ALL 17 locales ({locales_list}).
 2. Keep the following technical terms untranslated (use them as-is in all languages): {dnt_list}
 3. Return ONLY a valid JSON object with this exact structure (no markdown, no code fences, no explanation):
 {{
@@ -324,15 +324,15 @@ IMPORTANT: Each locale key must be present for title, bio, and location."#
     let title = translated
         .get("title")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": title_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": title_input, "id_ID": title_input }));
     let bio = translated
         .get("bio")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": bio_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": bio_input, "id_ID": bio_input }));
     let location = translated
         .get("location")
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": location_en }));
+        .unwrap_or_else(|| serde_json::json!({ "en_US": location_input, "id_ID": location_input }));
 
     Ok(TranslatedAbout {
         title,
