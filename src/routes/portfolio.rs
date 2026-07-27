@@ -183,9 +183,19 @@ static STATIC_SKILLS: Lazy<Value> = Lazy::new(|| {
 
 static STATIC_ABOUT: Lazy<Value> = Lazy::new(|| {
     serde_json::json!({
-        "name": "Developer",
-        "title": "Full Stack Developer",
-        "bio": "A software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International, with hands-on experience across the full development lifecycle — from mobile UI to API integration and production deployment. Outside of work, actively developing personal projects using Rust/Axum and Next.js to broaden backend and web expertise.",
+        "name": "Dimas Saputra",
+        "title": {
+            "en_US": "Full Stack Developer",
+            "id_ID": "Pengembang Full Stack"
+        },
+        "bio": {
+            "en_US": "A software developer with nearly three years of professional experience, specializing in cross-platform mobile development with Flutter. Currently building and maintaining a B2B travel agent platform at PT Voltras International, with hands-on experience across the full development lifecycle — from mobile UI to API integration and production deployment. Outside of work, actively developing personal projects using Rust/Axum and Next.js to broaden backend and web expertise.",
+            "id_ID": "Pengembang perangkat lunak dengan pengalaman profesional hampir tiga tahun, mengspesialisasi pada pengembangan aplikasi mobile lintas platform dengan Flutter. Saat ini membangun dan memelihara platform travel agent B2B di PT Voltras International."
+        },
+        "location": {
+            "en_US": "Indonesia",
+            "id_ID": "Indonesia"
+        },
         "contact": {
             "email": "dragdimas9@gmail.com",
             "github": "https://github.com/infinitedim"
@@ -268,6 +278,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
     }
 
     let section_key = query.section.to_lowercase();
+    let req_locale = query.locale.as_deref().unwrap_or("en_US");
 
     if let Some(pool) = db::get_pool() {
         match sqlx::query_as::<_, PortfolioSection>(
@@ -278,46 +289,11 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
         .await
         {
             Ok(Some(section)) => {
-                if section_key == "about" {
-                    let req_locale = query.locale.as_deref().unwrap_or("en_US");
-                    if let Some(obj) = section.content.as_object() {
-                        let mut resolved_about = obj.clone();
-                        if let Some(t) = obj.get("title") {
-                            resolved_about.insert(
-                                "title".to_string(),
-                                Value::String(resolve_locale_string(t, req_locale)),
-                            );
-                        }
-                        if let Some(b) = obj.get("bio") {
-                            resolved_about.insert(
-                                "bio".to_string(),
-                                Value::String(resolve_locale_string(b, req_locale)),
-                            );
-                        }
-                        if let Some(l) = obj.get("location") {
-                            resolved_about.insert(
-                                "location".to_string(),
-                                Value::String(resolve_locale_string(l, req_locale)),
-                            );
-                        }
-                        let mut cache_headers = axum::http::HeaderMap::new();
-                        cache_headers.insert(
-                            axum::http::header::CACHE_CONTROL,
-                            "public, max-age=300, stale-while-revalidate=60"
-                                .parse()
-                                .unwrap(),
-                        );
-                        return (
-                            StatusCode::OK,
-                            cache_headers,
-                            Json(PortfolioResponse {
-                                data: Some(Value::Object(resolved_about)),
-                                error: None,
-                            }),
-                        )
-                            .into_response();
-                    }
-                }
+                let final_data = if section_key == "about" {
+                    resolve_about_locale(&section.content, req_locale)
+                } else {
+                    section.content
+                };
 
                 let mut cache_headers = axum::http::HeaderMap::new();
                 cache_headers.insert(
@@ -330,7 +306,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                     StatusCode::OK,
                     cache_headers,
                     Json(PortfolioResponse {
-                        data: Some(section.content),
+                        data: Some(final_data),
                         error: None,
                     }),
                 )
@@ -350,6 +326,11 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
 
     match get_static_data(&section_key) {
         Some(data) => {
+            let final_data = if section_key == "about" {
+                resolve_about_locale(&data, req_locale)
+            } else {
+                data
+            };
             let mut cache_headers = axum::http::HeaderMap::new();
             cache_headers.insert(
                 axum::http::header::CACHE_CONTROL,
@@ -361,7 +342,7 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
                 StatusCode::OK,
                 cache_headers,
                 Json(PortfolioResponse {
-                    data: Some(data),
+                    data: Some(final_data),
                     error: None,
                 }),
             )
@@ -808,6 +789,33 @@ fn resolve_locale_string(jsonb: &Value, locale: &str) -> String {
     }
     // If the value itself is a plain string (non-JSONB migrated data)
     jsonb.as_str().unwrap_or_default().to_string()
+}
+
+pub fn resolve_about_locale(content: &Value, locale: &str) -> Value {
+    if let Some(obj) = content.as_object() {
+        let mut resolved_about = obj.clone();
+        if let Some(t) = obj.get("title") {
+            resolved_about.insert(
+                "title".to_string(),
+                Value::String(resolve_locale_string(t, locale)),
+            );
+        }
+        if let Some(b) = obj.get("bio") {
+            resolved_about.insert(
+                "bio".to_string(),
+                Value::String(resolve_locale_string(b, locale)),
+            );
+        }
+        if let Some(l) = obj.get("location") {
+            resolved_about.insert(
+                "location".to_string(),
+                Value::String(resolve_locale_string(l, locale)),
+            );
+        }
+        Value::Object(resolved_about)
+    } else {
+        content.clone()
+    }
 }
 
 fn resolve_locale_array(jsonb: &Value, locale: &str) -> Vec<String> {
@@ -1406,17 +1414,17 @@ pub async fn update_about_admin(
                 Err(e) => {
                     tracing::warn!("AI About translation failed: {}", e);
                     (
-                        serde_json::json!({ "en_US": payload.title }),
-                        serde_json::json!({ "en_US": payload.bio }),
-                        serde_json::json!({ "en_US": payload.location }),
+                        serde_json::json!({ "en_US": payload.title, "id_ID": payload.title }),
+                        serde_json::json!({ "en_US": payload.bio, "id_ID": payload.bio }),
+                        serde_json::json!({ "en_US": payload.location, "id_ID": payload.location }),
                     )
                 }
             }
         }
         None => (
-            serde_json::json!({ "en_US": payload.title }),
-            serde_json::json!({ "en_US": payload.bio }),
-            serde_json::json!({ "en_US": payload.location }),
+            serde_json::json!({ "en_US": payload.title, "id_ID": payload.title }),
+            serde_json::json!({ "en_US": payload.bio, "id_ID": payload.bio }),
+            serde_json::json!({ "en_US": payload.location, "id_ID": payload.location }),
         ),
     };
 
