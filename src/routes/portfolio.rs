@@ -1278,15 +1278,15 @@ pub async fn translate_about_admin(
     require_admin(&headers)?;
     let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
-        return Err(crate::routes::AppError::InternalError("GEMINI_API_KEY not configured".to_string()));
+        return Err(crate::routes::AppError::Internal("GEMINI_API_KEY not configured".to_string()));
     }
     let client = reqwest::Client::new();
     let title = format!("[{}] {}", payload.source_locale, payload.title);
     let bio = format!("[{}] {}", payload.source_locale, payload.bio);
     let location = format!("[{}] {}", payload.source_locale, payload.location);
-    let translated = crate::routes::translation::translate_about(&client, &api_key, &title, &bio, &location)
+    let translated = translation::translate_about(&client, &api_key, &title, &bio, &location)
         .await
-        .map_err(|e| crate::routes::AppError::InternalError(e.to_string()))?;
+        .map_err(|e| crate::routes::AppError::Internal(e.to_string()))?;
     Ok((StatusCode::OK, Json(serde_json::json!({
         "title": translated.title,
         "bio": translated.bio,
@@ -1310,15 +1310,15 @@ pub async fn translate_experience_admin(
     require_admin(&headers)?;
     let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
-        return Err(crate::routes::AppError::InternalError("GEMINI_API_KEY not configured".to_string()));
+        return Err(crate::routes::AppError::Internal("GEMINI_API_KEY not configured".to_string()));
     }
     let client = reqwest::Client::new();
     let position = format!("[{}] {}", payload.source_locale, payload.position);
     let duration = format!("[{}] {}", payload.source_locale, payload.duration);
     let desc = payload.description.iter().map(|s| format!("[{}] {}", payload.source_locale, s)).collect::<Vec<_>>();
-    let translated = crate::routes::translation::translate_experience(&client, &api_key, &position, &duration, &desc)
+    let translated = translation::translate_experience(&client, &api_key, &position, &duration, &desc)
         .await
-        .map_err(|e| crate::routes::AppError::InternalError(e.to_string()))?;
+        .map_err(|e| crate::routes::AppError::Internal(e.to_string()))?;
     Ok((StatusCode::OK, Json(serde_json::json!({
         "position": translated.position,
         "duration": translated.duration,
