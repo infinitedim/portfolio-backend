@@ -97,7 +97,7 @@ metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 
 # Redis (health, rate limiting, presence)
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1.4", features = ["tokio-comp", "connection-manager"] }
 
 # In-memory cache (experience translations)
 moka = { version = "0.12", features = ["future"] }
