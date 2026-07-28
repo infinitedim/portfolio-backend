@@ -406,6 +406,14 @@ pub fn create_app(redis: RedisMode) -> Router {
         .route(
             "/api/admin/portfolio/about",
             get(routes::portfolio::get_about_admin).post(routes::portfolio::update_about_admin),
+        )
+        .route(
+            "/api/admin/portfolio/about/translate",
+            post(routes::portfolio::translate_about_admin),
+        )
+        .route(
+            "/api/admin/portfolio/experience/translate",
+            post(routes::portfolio::translate_experience_admin),
         );
 
     let newsletter_public = with_rate_limit!(

@@ -87,10 +87,11 @@ fn default_locale() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct CreateExperienceRequest {
     pub company: String,
-    pub position: String,
-    pub duration: String,
-    pub description: Vec<String>,
+    pub position: std::collections::HashMap<String, String>,
+    pub duration: std::collections::HashMap<String, String>,
+    pub description: std::collections::HashMap<String, Vec<String>>,
     pub technologies: Vec<String>,
+
     #[serde(default = "default_type")]
     #[serde(rename = "type")]
     pub experience_type: String,
@@ -106,9 +107,9 @@ fn default_type() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateExperienceRequest {
     pub company: Option<String>,
-    pub position: Option<String>,
-    pub duration: Option<String>,
-    pub description: Option<Vec<String>>,
+    pub position: Option<std::collections::HashMap<String, String>>,
+    pub duration: Option<std::collections::HashMap<String, String>>,
+    pub description: Option<std::collections::HashMap<String, Vec<String>>>,
     pub technologies: Option<Vec<String>>,
     #[serde(rename = "type")]
     pub experience_type: Option<String>,
@@ -863,46 +864,9 @@ pub async fn create_experience(
 
     let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
 
-    // Try AI translation if Gemini is available
-    let (position_jsonb, duration_jsonb, description_jsonb) = match std::env::var("GEMINI_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-    {
-        Some(api_key) => {
-            let client = reqwest::Client::new();
-            match translation::translate_experience(
-                &client,
-                &api_key,
-                &payload.position,
-                &payload.duration,
-                &payload.description,
-            )
-            .await
-            {
-                Ok(translated) => (
-                    translated.position,
-                    translated.duration,
-                    translated.description,
-                ),
-                Err(e) => {
-                    tracing::warn!("AI translation failed, storing default locales: {}", e);
-                    (
-                        serde_json::json!({ "en_US": payload.position, "id_ID": payload.position }),
-                        serde_json::json!({ "en_US": payload.duration, "id_ID": payload.duration }),
-                        serde_json::json!({ "en_US": payload.description, "id_ID": payload.description }),
-                    )
-                }
-            }
-        }
-        None => {
-            tracing::info!("GEMINI_API_KEY not set, storing default locales");
-            (
-                serde_json::json!({ "en_US": payload.position, "id_ID": payload.position }),
-                serde_json::json!({ "en_US": payload.duration, "id_ID": payload.duration }),
-                serde_json::json!({ "en_US": payload.description, "id_ID": payload.description }),
-            )
-        }
-    };
+    let position_jsonb = serde_json::to_value(&payload.position).unwrap_or_else(|_| serde_json::json!({}));
+    let duration_jsonb = serde_json::to_value(&payload.duration).unwrap_or_else(|_| serde_json::json!({}));
+    let description_jsonb = serde_json::to_value(&payload.description).unwrap_or_else(|_| serde_json::json!({}));
 
     let row = sqlx::query_as::<_, db::models::PortfolioExperience>(
         r#"
@@ -965,59 +929,17 @@ pub async fn update_experience(
     let experience_type = payload.experience_type.unwrap_or(existing.experience_type);
     let display_order = payload.display_order.unwrap_or(existing.display_order);
 
-    // If position/duration/description changed, re-translate
-    let needs_retranslation =
-        payload.position.is_some() || payload.duration.is_some() || payload.description.is_some();
-
-    let position_en = payload
-        .position
-        .unwrap_or_else(|| resolve_locale_string(&existing.position, "en_US"));
-    let duration_en = payload
-        .duration
-        .unwrap_or_else(|| resolve_locale_string(&existing.duration, "en_US"));
-    let description_en = payload
-        .description
-        .unwrap_or_else(|| resolve_locale_array(&existing.description, "en_US"));
-
-    let (position_jsonb, duration_jsonb, description_jsonb) = if needs_retranslation {
-        match std::env::var("GEMINI_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-        {
-            Some(api_key) => {
-                let client = reqwest::Client::new();
-                match translation::translate_experience(
-                    &client,
-                    &api_key,
-                    &position_en,
-                    &duration_en,
-                    &description_en,
-                )
-                .await
-                {
-                    Ok(translated) => (
-                        translated.position,
-                        translated.duration,
-                        translated.description,
-                    ),
-                    Err(e) => {
-                        tracing::warn!("AI re-translation failed: {}", e);
-                        (
-                            serde_json::json!({ "en_US": position_en, "id_ID": position_en }),
-                            serde_json::json!({ "en_US": duration_en, "id_ID": duration_en }),
-                            serde_json::json!({ "en_US": description_en, "id_ID": description_en }),
-                        )
-                    }
-                }
-            }
-            None => (
-                serde_json::json!({ "en_US": position_en, "id_ID": position_en }),
-                serde_json::json!({ "en_US": duration_en, "id_ID": duration_en }),
-                serde_json::json!({ "en_US": description_en, "id_ID": description_en }),
-            ),
-        }
-    } else {
-        (existing.position, existing.duration, existing.description)
+    let position_jsonb = match payload.position {
+        Some(pos) => serde_json::to_value(pos).unwrap_or(existing.position),
+        None => existing.position,
+    };
+    let duration_jsonb = match payload.duration {
+        Some(dur) => serde_json::to_value(dur).unwrap_or(existing.duration),
+        None => existing.duration,
+    };
+    let description_jsonb = match payload.description {
+        Some(desc) => serde_json::to_value(desc).unwrap_or(existing.description),
+        None => existing.description,
     };
 
     let row = sqlx::query_as::<_, db::models::PortfolioExperience>(
@@ -1317,11 +1239,93 @@ pub struct AboutContactInput {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAboutRequest {
     pub name: String,
+    pub title: std::collections::HashMap<String, String>,
+    pub bio: std::collections::HashMap<String, String>,
+    pub location: std::collections::HashMap<String, String>,
+    pub contact: AboutContactInput,
+}
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateAboutRequest {
+    pub source_locale: String,
     pub title: String,
     pub bio: String,
     pub location: String,
-    pub contact: AboutContactInput,
 }
+
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateExperienceRequest {
+    pub source_locale: String,
+    pub position: String,
+    pub duration: String,
+    pub description: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/portfolio/about/translate",
+    tag = "Portfolio",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Translated", body = serde_json::Value),
+    )
+)]
+pub async fn translate_about_admin(
+    headers: HeaderMap,
+    Json(payload): Json<TranslateAboutRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        return Err(crate::routes::AppError::InternalError("GEMINI_API_KEY not configured".to_string()));
+    }
+    let client = reqwest::Client::new();
+    let title = format!("[{}] {}", payload.source_locale, payload.title);
+    let bio = format!("[{}] {}", payload.source_locale, payload.bio);
+    let location = format!("[{}] {}", payload.source_locale, payload.location);
+    let translated = crate::routes::translation::translate_about(&client, &api_key, &title, &bio, &location)
+        .await
+        .map_err(|e| crate::routes::AppError::InternalError(e.to_string()))?;
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "title": translated.title,
+        "bio": translated.bio,
+        "location": translated.location
+    }))).into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/portfolio/experience/translate",
+    tag = "Portfolio",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Translated", body = serde_json::Value),
+    )
+)]
+pub async fn translate_experience_admin(
+    headers: HeaderMap,
+    Json(payload): Json<TranslateExperienceRequest>,
+) -> Result<impl IntoResponse, crate::routes::AppError> {
+    require_admin(&headers)?;
+    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        return Err(crate::routes::AppError::InternalError("GEMINI_API_KEY not configured".to_string()));
+    }
+    let client = reqwest::Client::new();
+    let position = format!("[{}] {}", payload.source_locale, payload.position);
+    let duration = format!("[{}] {}", payload.source_locale, payload.duration);
+    let desc = payload.description.iter().map(|s| format!("[{}] {}", payload.source_locale, s)).collect::<Vec<_>>();
+    let translated = crate::routes::translation::translate_experience(&client, &api_key, &position, &duration, &desc)
+        .await
+        .map_err(|e| crate::routes::AppError::InternalError(e.to_string()))?;
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "position": translated.position,
+        "duration": translated.duration,
+        "description": translated.description
+    }))).into_response())
+}
+
 #[utoipa::path(
     get,
     path = "/api/admin/portfolio/about",
@@ -1395,38 +1399,9 @@ pub async fn update_about_admin(
 
     let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
 
-    let (title_jsonb, bio_jsonb, location_jsonb) = match std::env::var("GEMINI_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-    {
-        Some(api_key) => {
-            let client = reqwest::Client::new();
-            match translation::translate_about(
-                &client,
-                &api_key,
-                &payload.title,
-                &payload.bio,
-                &payload.location,
-            )
-            .await
-            {
-                Ok(translated) => (translated.title, translated.bio, translated.location),
-                Err(e) => {
-                    tracing::warn!("AI About translation failed: {}", e);
-                    (
-                        serde_json::json!({ "en_US": payload.title, "id_ID": payload.title }),
-                        serde_json::json!({ "en_US": payload.bio, "id_ID": payload.bio }),
-                        serde_json::json!({ "en_US": payload.location, "id_ID": payload.location }),
-                    )
-                }
-            }
-        }
-        None => (
-            serde_json::json!({ "en_US": payload.title, "id_ID": payload.title }),
-            serde_json::json!({ "en_US": payload.bio, "id_ID": payload.bio }),
-            serde_json::json!({ "en_US": payload.location, "id_ID": payload.location }),
-        ),
-    };
+    let title_jsonb = serde_json::to_value(&payload.title).unwrap_or_else(|_| serde_json::json!({}));
+    let bio_jsonb = serde_json::to_value(&payload.bio).unwrap_or_else(|_| serde_json::json!({}));
+    let location_jsonb = serde_json::to_value(&payload.location).unwrap_or_else(|_| serde_json::json!({}));
 
     let content = serde_json::json!({
         "name": payload.name,
