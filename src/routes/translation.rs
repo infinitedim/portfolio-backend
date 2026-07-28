@@ -193,10 +193,9 @@ IMPORTANT: Each locale key must be present for position, duration, and descripti
         .get("duration")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({ "en_US": duration_input, "id_ID": duration_input }));
-    let description = translated
-        .get("description")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": description_input, "id_ID": description_input }));
+    let description = translated.get("description").cloned().unwrap_or_else(
+        || serde_json::json!({ "en_US": description_input, "id_ID": description_input }),
+    );
 
     Ok(TranslatedExperience {
         position,

@@ -864,9 +864,12 @@ pub async fn create_experience(
 
     let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
 
-    let position_jsonb = serde_json::to_value(&payload.position).unwrap_or_else(|_| serde_json::json!({}));
-    let duration_jsonb = serde_json::to_value(&payload.duration).unwrap_or_else(|_| serde_json::json!({}));
-    let description_jsonb = serde_json::to_value(&payload.description).unwrap_or_else(|_| serde_json::json!({}));
+    let position_jsonb =
+        serde_json::to_value(&payload.position).unwrap_or_else(|_| serde_json::json!({}));
+    let duration_jsonb =
+        serde_json::to_value(&payload.duration).unwrap_or_else(|_| serde_json::json!({}));
+    let description_jsonb =
+        serde_json::to_value(&payload.description).unwrap_or_else(|_| serde_json::json!({}));
 
     let row = sqlx::query_as::<_, db::models::PortfolioExperience>(
         r#"
@@ -1278,7 +1281,9 @@ pub async fn translate_about_admin(
     require_admin(&headers)?;
     let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
-        return Err(crate::routes::AppError::Internal("GEMINI_API_KEY not configured".to_string()));
+        return Err(crate::routes::AppError::Internal(
+            "GEMINI_API_KEY not configured".to_string(),
+        ));
     }
     let client = reqwest::Client::new();
     let title = format!("[{}] {}", payload.source_locale, payload.title);
@@ -1287,11 +1292,15 @@ pub async fn translate_about_admin(
     let translated = translation::translate_about(&client, &api_key, &title, &bio, &location)
         .await
         .map_err(|e| crate::routes::AppError::Internal(e.to_string()))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({
-        "title": translated.title,
-        "bio": translated.bio,
-        "location": translated.location
-    }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "title": translated.title,
+            "bio": translated.bio,
+            "location": translated.location
+        })),
+    )
+        .into_response())
 }
 
 #[utoipa::path(
@@ -1310,20 +1319,31 @@ pub async fn translate_experience_admin(
     require_admin(&headers)?;
     let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
-        return Err(crate::routes::AppError::Internal("GEMINI_API_KEY not configured".to_string()));
+        return Err(crate::routes::AppError::Internal(
+            "GEMINI_API_KEY not configured".to_string(),
+        ));
     }
     let client = reqwest::Client::new();
     let position = format!("[{}] {}", payload.source_locale, payload.position);
     let duration = format!("[{}] {}", payload.source_locale, payload.duration);
-    let desc = payload.description.iter().map(|s| format!("[{}] {}", payload.source_locale, s)).collect::<Vec<_>>();
-    let translated = translation::translate_experience(&client, &api_key, &position, &duration, &desc)
-        .await
-        .map_err(|e| crate::routes::AppError::Internal(e.to_string()))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({
-        "position": translated.position,
-        "duration": translated.duration,
-        "description": translated.description
-    }))).into_response())
+    let desc = payload
+        .description
+        .iter()
+        .map(|s| format!("[{}] {}", payload.source_locale, s))
+        .collect::<Vec<_>>();
+    let translated =
+        translation::translate_experience(&client, &api_key, &position, &duration, &desc)
+            .await
+            .map_err(|e| crate::routes::AppError::Internal(e.to_string()))?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "position": translated.position,
+            "duration": translated.duration,
+            "description": translated.description
+        })),
+    )
+        .into_response())
 }
 
 #[utoipa::path(
@@ -1399,9 +1419,11 @@ pub async fn update_about_admin(
 
     let pool = db::get_pool().ok_or(crate::routes::AppError::DbUnavailable)?;
 
-    let title_jsonb = serde_json::to_value(&payload.title).unwrap_or_else(|_| serde_json::json!({}));
+    let title_jsonb =
+        serde_json::to_value(&payload.title).unwrap_or_else(|_| serde_json::json!({}));
     let bio_jsonb = serde_json::to_value(&payload.bio).unwrap_or_else(|_| serde_json::json!({}));
-    let location_jsonb = serde_json::to_value(&payload.location).unwrap_or_else(|_| serde_json::json!({}));
+    let location_jsonb =
+        serde_json::to_value(&payload.location).unwrap_or_else(|_| serde_json::json!({}));
 
     let content = serde_json::json!({
         "name": payload.name,
