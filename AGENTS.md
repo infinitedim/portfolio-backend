@@ -16,6 +16,8 @@ Rust/Axum API for [portfolio-frontend](https://github.com/infinitedim/portfolio-
 - GCP docs should stay beginner-friendly.
 - Backend SLA: **all API routes P95 < 50ms** (see `docs/performance/API_SLA.md`).
 - Roadmap.sh auth: **only** `POST https://roadmap.sh/api/v1-login` with `ROADMAP_EMAIL` / `ROADMAP_PASSWORD` — no GitHub OAuth, no manual bearer env.
+- GitHub Actions artifact upgrades (`actions/upload-artifact` v4+): **always** set `overwrite: true` on coverage reports (e.g., `backend-lcov`) to prevent immutability errors on re-runs/PR updates.
+
 
 ---
 

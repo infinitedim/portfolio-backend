@@ -2,16 +2,16 @@
 
 High-performance Rust backend with Axum web framework and SQLx/PostgreSQL, featuring comprehensive file-based logging with Loki + Grafana for log aggregation, visualization, and monitoring.
 
-## 🚀 Features
+## Features
 
-- **⚡ High Performance**: Built with Rust and Axum for blazing-fast request handling
-- **📊 Comprehensive Logging**: Structured JSON logging with multiple log levels
-- **📈 Log Aggregation**: Loki + Promtail for centralized log collection
-- **📉 Beautiful Dashboards**: Pre-configured Grafana dashboards for monitoring
-- **🔔 Smart Alerting**: Automated alerts for errors, performance issues, and security events
-- **🔄 Log Rotation**: Automatic daily rotation with 30-day retention
-- **📝 Multiple Log Sources**: Backend logs, frontend server logs, and client logs
-- **🎯 Trace Context**: Request tracking across the stack
+- ** High Performance**: Built with Rust and Axum for blazing-fast request handling
+- ** Comprehensive Logging**: Structured JSON logging with multiple log levels
+- ** Log Aggregation**: Loki + Promtail for centralized log collection
+- ** Beautiful Dashboards**: Pre-configured Grafana dashboards for monitoring
+- ** Smart Alerting**: Automated alerts for errors, performance issues, and security events
+- ** Log Rotation**: Automatic daily rotation with 30-day retention
+- ** Multiple Log Sources**: Backend logs, frontend server logs, and client logs
+- ** Trace Context**: Request tracking across the stack
 
 ## Quick Start
 
@@ -83,7 +83,7 @@ After starting the logging stack, you can access:
   - Health check: `curl http://localhost:8080/health`
   - API docs: `/api/docs` when `ENABLE_SWAGGER_UI=true`
 
-## 📚 API Endpoints
+## API Endpoints
 
 ### Health Check
 
@@ -125,7 +125,7 @@ GET /api/blog          # Get blog posts
 GET /api/blog/:slug    # Get specific blog post
 ```
 
-## 🛠️ Development
+## Development
 
 ### Project Structure
 
@@ -249,7 +249,7 @@ let _enter = span.enter();
 // Query code here
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ┌─────────────────┐
 │ Frontend │
@@ -305,7 +305,7 @@ let _enter = span.enter();
 - **Format**: JSON
 - **Rotation**: 50MB files, keeps 10 files
 
-## 📊 Grafana Dashboards
+## Grafana Dashboards
 
 Access Grafana at <http://localhost:3001> to view pre-configured dashboards:
 
@@ -357,48 +357,48 @@ Monitor security events and threats:
 - **IP Analysis**: Top IPs with security events
 - **User Agent Analysis**: Suspicious bot patterns
 
-## 🔔 Alerting
+## Alerting
 
 Alerts are configured in `config/grafana/alerts/rules.yml` and will notify you of critical issues.
 
 ### Critical Alerts (Immediate Action Required)
 
-- ⚠️ **High Error Rate**
+- **High Error Rate**
   - Trigger: >5 errors/second for 5 minutes
   - Action: Check application logs, investigate root cause
 
-- ⚠️ **Service Down**
+- **Service Down**
   - Trigger: No logs received for 5 minutes
   - Action: Check if backend is running, verify Promtail connection
 
-- ⚠️ **Out of Memory**
+- **Out of Memory**
   - Trigger: Memory-related errors detected in logs
   - Action: Restart service, investigate memory leaks
 
 ### Warning Alerts (Monitor Closely)
 
-- ⚡ **Slow Response Time**
+- **Slow Response Time**
   - Trigger: P95 response time >2s for 10 minutes
   - Action: Check database queries, optimize slow endpoints
 
-- 📊 **Poor Web Vitals**
+- **Poor Web Vitals**
   - Trigger: LCP >4s for 10 minutes
   - Action: Optimize frontend performance, reduce bundle size
 
 ### Security Alerts
 
-- 🔐 **Failed Login Attempts**
+- **Failed Login Attempts**
   - Trigger: >10 failed attempts in 5 minutes
   - Action: Potential bruteforce attack, consider IP blocking
 
-- 🚨 **Rate Limit Abuse**
+- **Rate Limit Abuse**
   - Trigger: >100 rate limit violations in 5 minutes
   - Action: Review rate limit policies, block abusive IPs
 
 - **Failed Logins**: >10 failed attempts in 5 minutes
 - **Rate Limit Abuse**: >100 violations in 5 minutes
 
-## ⚙️ Configuration
+## Configuration
 
 ### Log Levels
 
@@ -613,18 +613,18 @@ try {
 3. Use label filters before JSON parsing
 4. Check Loki performance in container logs
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **🦀 Rust** - Systems programming language (1.75+)
-- **🚀 Axum** - Ergonomic and modular web framework
-- **📝 Tracing** - Structured logging and distributed tracing
-- **📊 Loki** - Scalable log aggregation system by Grafana Labs
-- **📤 Promtail** - Log shipping agent that tails log files
-- **📈 Grafana** - Observability and visualization platform
-- **🐳 Docker** - Containerization for logging infrastructure
-- **📦 Cargo** - Rust package manager and build system
+- ** Rust** - Systems programming language (1.75+)
+- ** Axum** - Ergonomic and modular web framework
+- ** Tracing** - Structured logging and distributed tracing
+- ** Loki** - Scalable log aggregation system by Grafana Labs
+- ** Promtail** - Log shipping agent that tails log files
+- ** Grafana** - Observability and visualization platform
+- ** Docker** - Containerization for logging infrastructure
+- ** Cargo** - Rust package manager and build system
 
-## 🧪 Testing & Development
+## Testing & Development
 
 ### Running Tests
 
@@ -684,7 +684,7 @@ cargo tarpaulin --out Html
 cargo tarpaulin --out Xml
 ```
 
-## 🚀 Production Deployment
+## Production Deployment
 
 ### Security Checklist
 
@@ -715,7 +715,7 @@ cargo tarpaulin --out Xml
 - [ ] Monitor Promtail lag
 - [ ] Set up dashboards for logging infrastructure itself
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Here's how you can help:
 
@@ -733,7 +733,7 @@ Contributions are welcome! Here's how you can help:
 - Update documentation as needed
 - Keep commits atomic and well-described
 
-## 📚 Additional Resources
+## Additional Resources
 
 - [Rust Book](https://doc.rust-lang.org/book/)
 - [Axum Documentation](https://docs.rs/axum/)
@@ -742,16 +742,16 @@ Contributions are welcome! Here's how you can help:
 - [LogQL Guide](https://grafana.com/docs/loki/latest/logql/)
 - [Grafana Dashboards](https://grafana.com/docs/grafana/latest/dashboards/)
 
-## 📄 License
+## License
 
 MIT License - see the [LICENSE](LICENSE) file for details
 
-## 💬 Support
+## Support
 
-- 📖 Check the [Frontend README](../portfolio-frontend/README.md) for full-stack setup
-- 🐛 Found a bug? [Open an issue](https://github.com/infinitedim/portfolio-frontend/issues)
-- 💡 Have a suggestion? [Start a discussion](https://github.com/infinitedim/portfolio-frontend/discussions)
+- Check the [Frontend README](../portfolio-frontend/README.md) for full-stack setup
+- Found a bug? [Open an issue](https://github.com/infinitedim/portfolio-frontend/issues)
+- Have a suggestion? [Start a discussion](https://github.com/infinitedim/portfolio-frontend/discussions)
 
 ---
 
-**Built with 🦀 Rust and ❤️ by [Dimas Saputra](https://github.com/infinitedim)**
+**Built with Rust by [Dimas Saputra](https://github.com/infinitedim)**
