@@ -289,8 +289,8 @@ async fn fetch_blog_list(
     let count_sql = format!("SELECT COUNT(*) FROM blog_posts {}", where_sql);
 
     // Build the two queries with the same dynamic binds.
-    let mut select_q = sqlx::query_as::<_, BlogPost>(&select_sql);
-    let mut count_q = sqlx::query_as::<_, (i64,)>(&count_sql);
+    let mut select_q = sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&select_sql[..]));
+    let mut count_q = sqlx::query_as::<_, (i64,)>(sqlx::AssertSqlSafe(&count_sql[..]));
 
     // The `published` filter is rendered inline (no bind) above, so we
     // skip binding it here.
@@ -534,7 +534,7 @@ pub async fn get_post(
         )
     };
 
-    match sqlx::query_as::<_, BlogPost>(&sql)
+    match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&sql[..]))
         .bind(&slug)
         .bind(&locale)
         .fetch_optional(pool.as_ref())
@@ -694,7 +694,7 @@ pub async fn create_post(
         "#
     );
 
-    match sqlx::query_as::<_, BlogPost>(&insert_sql)
+    match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&insert_sql[..]))
         .bind(&payload.title)
         .bind(&payload.slug)
         .bind(&payload.summary)
@@ -868,7 +868,7 @@ pub async fn update_post(
         "#
     );
 
-    match sqlx::query_as::<_, BlogPost>(&update_sql)
+    match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&update_sql[..]))
         .bind(&payload.title)
         .bind(&payload.summary)
         .bind(&payload.content_md)
@@ -1090,23 +1090,29 @@ pub async fn link_translations(
 
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
-    let post_a = sqlx::query_as::<_, BlogPost>(&format!(
-        "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
-    ))
-    .bind(&payload.slug_a)
-    .bind(&locale_a)
-    .fetch_optional(pool.as_ref())
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let post_a =
+        sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(
+            &format!(
+                "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
+            )[..],
+        ))
+        .bind(&payload.slug_a)
+        .bind(&locale_a)
+        .fetch_optional(pool.as_ref())
+        .await?
+        .ok_or(AppError::NotFound)?;
 
-    let post_b = sqlx::query_as::<_, BlogPost>(&format!(
-        "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
-    ))
-    .bind(&payload.slug_b)
-    .bind(&locale_b)
-    .fetch_optional(pool.as_ref())
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let post_b =
+        sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(
+            &format!(
+                "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2"
+            )[..],
+        ))
+        .bind(&payload.slug_b)
+        .bind(&locale_b)
+        .fetch_optional(pool.as_ref())
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let group_id = post_a
         .translation_group_id

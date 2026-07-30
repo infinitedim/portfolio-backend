@@ -162,9 +162,11 @@ pub async fn acquire_test_pool() -> Option<TestDb> {
         }
     };
 
-    if let Err(e) = sqlx::query(&format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema))
-        .execute(&admin_pool)
-        .await
+    if let Err(e) = sqlx::query(sqlx::AssertSqlSafe(
+        &format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema)[..],
+    ))
+    .execute(&admin_pool)
+    .await
     {
         tracing::warn!("test_support: failed to create schema {}: {}", schema, e);
         return None;
@@ -184,7 +186,7 @@ pub async fn acquire_test_pool() -> Option<TestDb> {
             let s = schema_for_hook.clone();
             Box::pin(async move {
                 let stmt = format!(r#"SET search_path TO "{}", public"#, s);
-                conn.execute(stmt.as_str()).await?;
+                conn.execute(sqlx::AssertSqlSafe(stmt)).await?;
                 Ok(())
             })
         })

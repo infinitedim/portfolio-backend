@@ -377,6 +377,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_database_returns_503_when_no_pool() {
+        let _guard = if std::env::var("TEST_DATABASE_URL").is_ok() {
+            let db = crate::test_support::acquire_test_pool().await;
+            crate::db::clear_test_pool();
+            db
+        } else {
+            None
+        };
         let (status, body) = get_json::<ServiceCheck>(test_router(), "/health/database").await;
         // 503 is the contract: orchestrators rely on this to drain traffic.
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

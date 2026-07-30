@@ -365,13 +365,14 @@ pub async fn list_messages(
 
     let count_sql = format!("SELECT COUNT(*) FROM contact_messages {}", where_clause);
 
-    let items: Vec<ContactMessage> = sqlx::query_as::<_, ContactMessage>(&select_sql)
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(pool.as_ref())
-        .await?;
+    let items: Vec<ContactMessage> =
+        sqlx::query_as::<_, ContactMessage>(sqlx::AssertSqlSafe(&select_sql[..]))
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(pool.as_ref())
+            .await?;
 
-    let total: i64 = sqlx::query_scalar(&count_sql)
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(&count_sql[..]))
         .fetch_one(pool.as_ref())
         .await?;
 
