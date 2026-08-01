@@ -43,6 +43,7 @@ serde_json = "1.0"
 uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 lazy_static = "1.4"
+base64 = "0.22"
 
 # Environment
 dotenvy = "0.15"

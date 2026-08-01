@@ -23,10 +23,22 @@ const L2_USERNAME: &str = "yourblooo1";
 const GATE_TOKEN_ISSUER: &str = "portfolio-gate";
 const GATE_TOKEN_AUDIENCE: &str = "terminal";
 
+const ENCODE_ALGORITHM_JS: &str = r#"// Encoding algorithm used to generate the secret:
+function encodeSecret(secret) {
+  const base64 = btoa(secret);
+  const reversed = base64.split('').reverse().join('');
+  const hex = Array.from(reversed)
+    .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
+    .join('');
+  return hex;
+}"#;
+
 #[derive(Clone)]
 pub struct GateConfig {
     pub l1_answer: String,
     pub l2_answer: String,
+    pub l3_answer: String,
+    pub l3_encoded: String,
     pub token_secret: String,
     #[allow(dead_code)]
     // Frontend-only bypass consumed by Next.js proxy.ts (X-Gate-Bypass).
@@ -43,9 +55,14 @@ impl GateConfig {
             .or_else(|_| std::env::var("FRONTEND_ORIGIN"))
             .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
+        let l3_answer = std::env::var("GATE_L3_ANSWER").unwrap_or_default();
+        let l3_encoded = encode_secret(&l3_answer);
+
         Self {
             l1_answer: std::env::var("GATE_L1_ANSWER").unwrap_or_default(),
             l2_answer: std::env::var("GATE_L2_ANSWER").unwrap_or_default(),
+            l3_answer,
+            l3_encoded,
             token_secret: std::env::var("GATE_TOKEN_SECRET").unwrap_or_default(),
             bypass_secret: std::env::var("GATE_BYPASS_SECRET")
                 .ok()
@@ -123,10 +140,33 @@ pub struct LoginResponse {
     pub hint: Option<String>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct Level3SecretPayload {
+    pub secret: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteLevel3Response {
     pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Level3ChallengeResponse {
+    pub encoded_secret: String,
+    pub algorithm: String,
+}
+
+fn encode_secret(secret: &str) -> String {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(secret);
+    let reversed: String = b64.chars().rev().collect();
+    reversed.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -223,8 +263,11 @@ fn hint_for_level(level: u8, attempts: u32) -> Option<String> {
         (2, a) if a >= 10 => Some("https://overthewire.org/wargames/natas/natas3.html".into()),
         (2, a) if a >= 6 => Some("Try exploring hidden directories on this site.".into()),
         (2, a) if a >= 3 => Some("What lives under /s3cr3t/ ?".into()),
-        (3, a) if a >= 6 => Some("Visit /terminal first, then follow the link.".into()),
-        (3, a) if a >= 3 => Some("This page checks the Referer HTTP header.".into()),
+        (3, a) if a >= 10 => Some("Use browser DevTools Console. Try: atob(...)".into()),
+        (3, a) if a >= 6 => Some("Hex decode -> reverse the string -> Base64 decode.".into()),
+        (3, a) if a >= 3 => {
+            Some("The source code shows the encoding algorithm. Reverse each step.".into())
+        }
         _ => None,
     }
 }
@@ -243,36 +286,6 @@ fn expected_password(config: &GateConfig, level: u8) -> &str {
         2 => &config.l2_answer,
         _ => "",
     }
-}
-
-pub fn is_valid_terminal_referer(referer: &str, site_url: &str) -> bool {
-    let base = site_url.trim_end_matches('/');
-    let expected = format!("{base}/terminal");
-    let referer_trimmed = referer.trim();
-
-    if referer_trimmed == expected
-        || referer_trimmed.starts_with(&format!("{expected}/"))
-        || referer_trimmed.starts_with(&format!("{expected}?"))
-    {
-        return true;
-    }
-
-    // Fallback for local development
-    if !matches!(std::env::var("ENVIRONMENT").as_deref(), Ok("production")) {
-        let local_expected_1 = "http://localhost:3000/terminal";
-        let local_expected_2 = "http://127.0.0.1:3000/terminal";
-        if referer_trimmed == local_expected_1
-            || referer_trimmed.starts_with(&format!("{local_expected_1}/"))
-            || referer_trimmed.starts_with(&format!("{local_expected_1}?"))
-            || referer_trimmed == local_expected_2
-            || referer_trimmed.starts_with(&format!("{local_expected_2}/"))
-            || referer_trimmed.starts_with(&format!("{local_expected_2}?"))
-        {
-            return true;
-        }
-    }
-
-    false
 }
 
 fn attach_progress_cookie(response: &mut Response, session_id: &str, config: &GateConfig) {
@@ -409,6 +422,7 @@ pub async fn login(
     post,
     path = "/api/gate/complete/3",
     tag = "Gate",
+    request_body = Level3SecretPayload,
     responses(
         (status = 200, description = "Level 3 completed", body = CompleteLevel3Response),
         (status = 403, description = "Level 2 not completed"),
@@ -417,6 +431,7 @@ pub async fn login(
 pub async fn complete_level_3(
     State(state): State<GateState>,
     headers: HeaderMap,
+    Json(body): Json<Level3SecretPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     let session_id = session_id_from_headers(&headers);
     let mut session = get_or_create_session(&state, &session_id);
@@ -425,18 +440,53 @@ pub async fn complete_level_3(
         return Err(AppError::Forbidden);
     }
 
-    let referer = headers
-        .get(header::REFERER)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AppError::Forbidden)?;
-    if !is_valid_terminal_referer(referer, &state.config.site_url) {
+    let passed = constant_time_eq(body.secret.trim(), &state.config.l3_answer);
+    let attempts = record_login_attempt(&mut session, 3, passed);
+    let hint = if passed {
+        None
+    } else {
+        hint_for_level(3, attempts)
+    };
+
+    if passed {
+        session.completed_levels.insert(3);
+    }
+    save_session(&state, &session_id, session);
+
+    let mut response = Json(CompleteLevel3Response {
+        passed,
+        attempts: if passed { None } else { Some(attempts) },
+        hint,
+    })
+    .into_response();
+    attach_progress_cookie(&mut response, &session_id, &state.config);
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/gate/challenge/3/encoded",
+    tag = "Gate",
+    responses(
+        (status = 200, description = "Level 3 encoded challenge", body = Level3ChallengeResponse),
+        (status = 403, description = "Level 2 not completed"),
+    )
+)]
+pub async fn challenge_3_encoded(
+    State(state): State<GateState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let session_id = session_id_from_headers(&headers);
+    let session = get_or_create_session(&state, &session_id);
+    if !session.completed_levels.contains(&2) {
         return Err(AppError::Forbidden);
     }
 
-    session.completed_levels.insert(3);
-    save_session(&state, &session_id, session);
-
-    let mut response = Json(CompleteLevel3Response { passed: true }).into_response();
+    let mut response = Json(Level3ChallengeResponse {
+        encoded_secret: state.config.l3_encoded.clone(),
+        algorithm: ENCODE_ALGORITHM_JS.to_string(),
+    })
+    .into_response();
     attach_progress_cookie(&mut response, &session_id, &state.config);
     Ok(response)
 }
@@ -538,9 +588,13 @@ mod integration_tests {
     use super::*;
 
     fn config() -> GateConfig {
+        let l3_answer = "l3-secret-answer".to_string();
+        let l3_encoded = encode_secret(&l3_answer);
         GateConfig {
             l1_answer: "yourblooo0".into(),
             l2_answer: "secret-l2".into(),
+            l3_answer,
+            l3_encoded,
             token_secret: "this_is_a_very_long_gate_token_secret_123456".into(),
             bypass_secret: None,
             cookie_max_age_days: 7,
@@ -582,7 +636,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn complete_level_3_requires_valid_referer() {
+    async fn complete_level_3_requires_correct_secret() {
         let state = GateState::new(config());
         let cookie = "session-1";
 
@@ -591,22 +645,74 @@ mod integration_tests {
 
         let valid = complete_level_3(
             State(state.clone()),
-            headers(cookie, Some("https://example.com/terminal")),
+            headers(cookie, None),
+            Json(Level3SecretPayload {
+                secret: "l3-secret-answer".into(),
+            }),
         )
         .await
-        .expect("valid referer should pass")
+        .expect("valid secret should pass")
         .into_response();
         assert_eq!(valid.status(), StatusCode::OK);
 
+        let body_bytes = axum::body::to_bytes(valid.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: CompleteLevel3Response = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(resp.passed);
+
         let invalid = complete_level_3(
             State(state.clone()),
-            headers(cookie, Some("https://example.com/gate/3")),
+            headers(cookie, None),
+            Json(Level3SecretPayload {
+                secret: "wrong".into(),
+            }),
+        )
+        .await
+        .expect("wrong secret should not error out but return passed=false")
+        .into_response();
+
+        let body_bytes = axum::body::to_bytes(invalid.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: CompleteLevel3Response = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(!resp.passed);
+
+        // Test missing level 2
+        let state_no_l2 = GateState::new(config());
+        let missing = complete_level_3(
+            State(state_no_l2),
+            headers("session-no-l2", None),
+            Json(Level3SecretPayload {
+                secret: "l3-secret-answer".into(),
+            }),
         )
         .await;
-        assert!(matches!(invalid, Err(AppError::Forbidden)));
-
-        let missing = complete_level_3(State(state), headers(cookie, None)).await;
         assert!(matches!(missing, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_challenge_3_encoded() {
+        let state = GateState::new(config());
+        let cookie = "session-l3-challenge";
+
+        let forbid = challenge_3_encoded(State(state.clone()), headers(cookie, None)).await;
+        assert!(matches!(forbid, Err(AppError::Forbidden)));
+
+        login_level(state.clone(), cookie, 1, "yourblooo0", "yourblooo0").await;
+        login_level(state.clone(), cookie, 2, "yourblooo1", "secret-l2").await;
+
+        let res = challenge_3_encoded(State(state.clone()), headers(cookie, None))
+            .await
+            .expect("should get challenge")
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let chal: Level3ChallengeResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(chal.encoded_secret, config().l3_encoded);
     }
 
     #[tokio::test]
@@ -644,7 +750,10 @@ mod integration_tests {
         login_level(state.clone(), cookie, 2, "yourblooo1", "secret-l2").await;
         let _ = complete_level_3(
             State(state.clone()),
-            headers(cookie, Some("https://example.com/terminal")),
+            headers(cookie, None),
+            Json(Level3SecretPayload {
+                secret: "l3-secret-answer".into(),
+            }),
         )
         .await
         .unwrap();
@@ -747,25 +856,16 @@ mod tests {
     }
 
     #[test]
+    fn encode_secret_works() {
+        let secret = "natas8";
+        // natas8 -> bmF0YXM4 (base64) -> 8M0Y0FmB (rev) -> hex
+        assert_eq!(encode_secret(secret), "344d585930466d62");
+    }
+
+    #[test]
     fn hint_escalates_with_attempts() {
         assert!(hint_for_level(1, 2).is_none());
         assert!(hint_for_level(1, 3).is_some());
         assert!(hint_for_level(2, 3).is_some());
-    }
-
-    #[test]
-    fn referer_validation_accepts_terminal_url() {
-        assert!(is_valid_terminal_referer(
-            "https://infinitedim.dev/terminal",
-            "https://infinitedim.dev"
-        ));
-        assert!(is_valid_terminal_referer(
-            "https://infinitedim.dev/terminal/",
-            "https://infinitedim.dev/"
-        ));
-        assert!(!is_valid_terminal_referer(
-            "https://infinitedim.dev/gate/3",
-            "https://infinitedim.dev"
-        ));
     }
 }

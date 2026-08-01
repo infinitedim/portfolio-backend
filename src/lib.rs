@@ -252,6 +252,10 @@ pub fn create_app(redis: RedisMode) -> Router {
             .route("/api/gate/status", get(routes::gate::status))
             .route("/api/gate/login", post(routes::gate::login))
             .route("/api/gate/complete/3", post(routes::gate::complete_level_3))
+            .route(
+                "/api/gate/challenge/3/encoded",
+                get(routes::gate::challenge_3_encoded)
+            )
             .route("/api/gate/unlock", post(routes::gate::unlock))
             .route(
                 "/api/gate/challenge/2/users.txt",
@@ -623,6 +627,13 @@ pub(crate) fn assert_production_environment_or_panic() {
         .unwrap_or(true)
     {
         panic!("FATAL: GATE_L2_ANSWER must be set in production.");
+    }
+
+    if std::env::var("GATE_L3_ANSWER")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        panic!("FATAL: GATE_L3_ANSWER must be set in production.");
     }
 }
 
@@ -1055,6 +1066,13 @@ mod tests {
         assert!(res.is_err());
 
         std::env::set_var("GATE_L2_ANSWER", "l2answer");
+        std::env::remove_var("GATE_L3_ANSWER");
+        let res = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(res.is_err());
+
+        std::env::set_var("GATE_L3_ANSWER", "l3answer");
         let res = std::panic::catch_unwind(|| {
             assert_production_environment_or_panic();
         });
@@ -1066,6 +1084,7 @@ mod tests {
         std::env::remove_var("ALLOWED_ORIGINS");
         std::env::remove_var("GATE_TOKEN_SECRET");
         std::env::remove_var("GATE_L2_ANSWER");
+        std::env::remove_var("GATE_L3_ANSWER");
     }
 
     #[test]

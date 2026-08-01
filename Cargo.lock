@@ -2246,6 +2246,7 @@ dependencies = [
  "ammonia",
  "async-trait",
  "axum",
+ "base64",
  "bcrypt",
  "chrono",
  "dotenvy",

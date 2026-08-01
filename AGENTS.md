@@ -146,7 +146,7 @@ Puzzle layer only — **not** API auth. Admin uses separate JWT.
 | ------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | L1     | `POST /api/gate/login` level 1 — user `yourblooo0`, pass `GATE_L1_ANSWER` (default `yourblooo0`)    | `GATE_L1_ANSWER`                                        |
 | L2     | L1 in session; `GET /api/gate/challenge/2/users.txt` → `yourblooo1:{GATE_L2_ANSWER}`; login level 2 | `GATE_L2_ANSWER`                                        |
-| L3     | L2 done; `POST /api/gate/complete/3` — `Referer` must be `{SITE_URL}/terminal`                      | `SITE_URL` / `FRONTEND_ORIGIN`                          |
+| L3     | L2 in session; `GET /api/gate/challenge/3/encoded` → encoded secret; `POST /api/gate/complete/3` with `{ "secret": "..." }` | `GATE_L3_ANSWER` (default `yourblooo_n4t4s8_s3cr3t`)   |
 | Unlock | All 1–3; `POST /api/gate/unlock` → `portfolio_gate` JWT cookie                                      | `GATE_TOKEN_SECRET` (≥32 chars prod), HS256 `iss`/`aud` |
 
 - Session cookie: `gate_progress` (in-memory `GateState` per Cloud Run instance — **`max_instances=1`** in prod for consistency).

@@ -141,6 +141,7 @@ impl Modify for SecurityAddon {
         routes::gate::status,
         routes::gate::login,
         routes::gate::complete_level_3,
+        routes::gate::challenge_3_encoded,
         routes::gate::unlock,
         routes::gate::challenge_2_users_txt,
         // Logs
@@ -173,6 +174,8 @@ impl Modify for SecurityAddon {
         routes::gate::LoginRequest,
         routes::gate::LoginResponse,
         routes::gate::CompleteLevel3Response,
+        routes::gate::Level3SecretPayload,
+        routes::gate::Level3ChallengeResponse,
         routes::gate::GateStatusResponse,
         crate::logging::config::ClientLogBatch,
         crate::logging::config::LogResponse,
