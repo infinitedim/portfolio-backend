@@ -1,4 +1,4 @@
-FROM rust:1.88-slim-bookworm AS chef
+FROM rust:1.95-slim-bookworm AS chef
 
 # `curl` and `ca-certificates` are required by `utoipa-swagger-ui`'s build
 # script — it shells out to `curl` to download the Swagger UI distribution
