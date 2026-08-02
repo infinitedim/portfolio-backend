@@ -78,10 +78,9 @@ pub const TECHNICAL_GLOSSARY_DNT: &[&str] = &[
     "Clean Architecture",
 ];
 
-/// All 17 target locales.
+/// All 10 active target locales.
 const TARGET_LOCALES: &[&str] = &[
-    "en_US", "id_ID", "es_ES", "fr_FR", "de_DE", "ja_JP", "ko_KR", "zh_CN", "ar_SA", "pt_BR",
-    "ru_RU", "it_IT", "nl_NL", "tr_TR", "hi_IN", "th_TH", "vi_VN",
+    "en_US", "id_ID", "zh_CN", "ja_JP", "ko_KR", "es_ES", "fr_FR", "de_DE", "pt_BR", "ru_RU",
 ];
 
 /// Fallback regex replacements for common mistranslations.
