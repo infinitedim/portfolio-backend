@@ -386,6 +386,14 @@ pub fn create_app(redis: RedisMode) -> Router {
         .route(
             "/api/admin/blog/{id}/approve-translation",
             post(routes::blog::approve_translation),
+        )
+        .route(
+            "/api/admin/blog/{id}/translate",
+            post(routes::blog::translate_post),
+        )
+        .route(
+            "/api/admin/blog/pending-translations",
+            get(routes::blog::list_pending_translations),
         );
 
     let admin_portfolio_routes = Router::new()

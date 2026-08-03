@@ -14,6 +14,7 @@ use crate::db::{
     models::{BlogPost, BlogStatus},
 };
 use crate::routes::auth::require_admin;
+use crate::routes::translation;
 use crate::routes::upload;
 use crate::routes::AppError;
 
@@ -62,7 +63,7 @@ pub fn is_valid_locale(locale: &str) -> bool {
         && locale.len() <= 10
         && locale
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -180,6 +181,20 @@ where
 }
 
 pub use crate::routes::ErrorResponse;
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTranslationItem {
+    pub translated: BlogPostResponse,
+    pub source: Option<BlogPostResponse>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTranslationsResponse {
+    pub items: Vec<PendingTranslationItem>,
+    pub total: i64,
+}
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SuccessResponse {
@@ -1509,6 +1524,322 @@ pub async fn list_tags() -> impl IntoResponse {
                 .into_response()
         }
     }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/blog/{id}/translate",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Blog post ID to translate"),
+        ("target" = String, Query, description = "Target locale (e.g. ja_JP)")
+    ),
+    responses(
+        (status = 200, description = "Translated post created or updated", body = BlogPostResponse),
+        (status = 400, description = "Invalid target locale", body = ErrorResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Source post not found", body = ErrorResponse),
+        (status = 503, description = "Database or translation API unavailable", body = ErrorResponse),
+    ),
+)]
+pub async fn translate_post(
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    if let Err(err_response) = verify_auth(&headers) {
+        return err_response.into_response();
+    }
+
+    let target_locale = match query.get("target") {
+        Some(t) => t.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Missing target param".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if !is_valid_locale(&target_locale) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid target locale".to_string(),
+                message: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Database not available".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let sql = format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE id = $1");
+    let source_post = match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&sql[..]))
+        .bind(id)
+        .fetch_optional(pool.as_ref())
+        .await
+    {
+        Ok(Some(post)) => post,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Source post not found".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Database error".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let content_md = match &source_post.content_md {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Source post has no content_md".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let api_key = match std::env::var("GEMINI_API_KEY") {
+        Ok(k) => k,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Gemini API key not configured".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let translated = match translation::translate_blog_post(
+        &client,
+        &api_key,
+        &source_post.title,
+        source_post.summary.as_deref(),
+        content_md,
+        &target_locale,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Translation failed: {}", e);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Translation API error".to_string(),
+                    message: Some(e),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let translation_group_id = source_post
+        .translation_group_id
+        .unwrap_or_else(Uuid::new_v4);
+
+    if source_post.translation_group_id.is_none() {
+        let _ = sqlx::query("UPDATE blog_posts SET translation_group_id = $1 WHERE id = $2")
+            .bind(translation_group_id)
+            .bind(id)
+            .execute(pool.as_ref())
+            .await;
+    }
+
+    let existing_sql =
+        format!("SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE slug = $1 AND locale = $2");
+    let existing_post = sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&existing_sql[..]))
+        .bind(&source_post.slug)
+        .bind(&target_locale)
+        .fetch_optional(pool.as_ref())
+        .await
+        .unwrap_or(None);
+
+    let translated_reading_time = calculate_reading_time(Some(&translated.content_md));
+
+    let final_post = if let Some(existing) = existing_post {
+        let update_sql = format!(
+            r#"
+            UPDATE blog_posts SET
+                title = $1, summary = $2, content_md = $3,
+                reading_time_minutes = $4, translation_status = 'pending_review',
+                reviewed_at = NULL, reviewed_by = NULL, updated_at = now()
+            WHERE id = $5
+            RETURNING {BLOG_POST_RETURNING}
+            "#
+        );
+        sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&update_sql[..]))
+            .bind(&translated.title)
+            .bind(&translated.summary)
+            .bind(&translated.content_md)
+            .bind(translated_reading_time)
+            .bind(existing.id)
+            .fetch_one(pool.as_ref())
+            .await
+    } else {
+        let insert_sql = format!(
+            r#"
+            INSERT INTO blog_posts (
+                title, slug, summary, content_md, content_html, published, tags,
+                reading_time_minutes, publish_at, locale, series_id, series_order,
+                translation_group_id, translation_status, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending_review', now(), now())
+            RETURNING {BLOG_POST_RETURNING}
+            "#
+        );
+        sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&insert_sql[..]))
+            .bind(&translated.title)
+            .bind(&source_post.slug)
+            .bind(&translated.summary)
+            .bind(&translated.content_md)
+            .bind(None::<String>) // content_html is None initially
+            .bind(source_post.published)
+            .bind(&source_post.tags)
+            .bind(translated_reading_time)
+            .bind(source_post.publish_at)
+            .bind(&target_locale)
+            .bind(source_post.series_id)
+            .bind(source_post.series_order)
+            .bind(translation_group_id)
+            .fetch_one(pool.as_ref())
+            .await
+    };
+
+    match final_post {
+        Ok(post) => (StatusCode::OK, Json(post_to_response(post))).into_response(),
+        Err(e) => {
+            tracing::error!("Database error saving translated post: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Database error".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/blog/pending-translations",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List of pending translations", body = PendingTranslationsResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 503, description = "Database unavailable", body = ErrorResponse),
+    ),
+)]
+pub async fn list_pending_translations(headers: HeaderMap) -> impl IntoResponse {
+    if let Err(err_response) = verify_auth(&headers) {
+        return err_response.into_response();
+    }
+
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Database not available".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let sql = format!(
+        "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE translation_status = 'pending_review' ORDER BY created_at DESC"
+    );
+    let pending_posts = match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&sql[..]))
+        .fetch_all(pool.as_ref())
+        .await
+    {
+        Ok(posts) => posts,
+        Err(e) => {
+            tracing::error!("Database error fetching pending translations: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Database error".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let mut items = Vec::new();
+    for pending in pending_posts {
+        let mut source = None;
+        if let Some(group_id) = pending.translation_group_id {
+            let source_sql = format!(
+                "SELECT {BLOG_POST_RETURNING} FROM blog_posts WHERE translation_group_id = $1 AND locale = 'en' LIMIT 1"
+            );
+            if let Ok(Some(sp)) =
+                sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&source_sql[..]))
+                    .bind(group_id)
+                    .fetch_optional(pool.as_ref())
+                    .await
+            {
+                source = Some(post_to_response(sp));
+            }
+        }
+        items.push(PendingTranslationItem {
+            translated: post_to_response(pending),
+            source,
+        });
+    }
+
+    let total = items.len() as i64;
+    (
+        StatusCode::OK,
+        Json(PendingTranslationsResponse { items, total }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

@@ -338,3 +338,116 @@ IMPORTANT: Each locale key must be present for title, bio, and location."#
         location,
     })
 }
+
+/// Result of translating a single blog post.
+#[derive(Debug)]
+pub struct TranslatedBlogPost {
+    pub title: String,
+    pub summary: Option<String>,
+    pub content_md: String,
+}
+
+/// Translate blog post title, summary, and content_md into a single target locale.
+pub async fn translate_blog_post(
+    client: &Client,
+    api_key: &str,
+    title: &str,
+    summary: Option<&str>,
+    content_md: &str,
+    target_locale: &str,
+) -> Result<TranslatedBlogPost, String> {
+    let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
+    let summary_json = serde_json::to_string(&summary).unwrap_or_else(|_| "null".to_string());
+    let content_json = serde_json::to_string(&content_md).unwrap_or_else(|_| "\"\"".to_string());
+
+    let prompt = format!(
+        r#"You are a Senior Software Engineer and Localization Specialist translating a tech blog post.
+
+Translate the following blog post fields into the target locale: {target_locale}
+
+Source Input (Auto-detect language):
+- title: "{title}"
+- summary: {summary_json}
+- content_md: {content_json}
+
+CRITICAL RULES:
+1. Translate for clarity, natural professional flow, and native software engineering context into {target_locale}.
+2. Keep the following technical terms untranslated (use them as-is): {dnt_list}
+3. PRESERVE ALL Markdown formatting exactly: headings (#, ##), code blocks (```), inline code (`), links [text](url), lists (-, *), bold (**), italic (*).
+4. DO NOT translate any content inside code blocks or inline code.
+5. Return ONLY a valid JSON object with this exact structure (no markdown fences around it, no explanation):
+{{
+  "title": "...",
+  "summary": "...",
+  "content_md": "..."
+}}
+Note: summary should be a string or null if the source is null."#
+    );
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        GEMINI_MODEL, api_key
+    );
+
+    let body = serde_json::json!({
+        "contents": [{
+            "role": "user",
+            "parts": [{ "text": prompt }]
+        }],
+        "generationConfig": {
+            "temperature": 0.3,
+            "responseMimeType": "application/json"
+        }
+    });
+
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini API returned {}: {}", status, text));
+    }
+
+    let gemini_resp: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+    let text = gemini_resp
+        .pointer("/candidates/0/content/parts/0/text")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "No text in Gemini response".to_string())?;
+
+    let mut translated: Value = serde_json::from_str(text)
+        .map_err(|e| format!("Failed to parse translation JSON: {} — raw: {}", e, text))?;
+
+    apply_literal_fixes(&mut translated);
+
+    let res_title = translated
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or(title)
+        .to_string();
+
+    let res_summary = translated
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let res_content_md = translated
+        .get("content_md")
+        .and_then(|v| v.as_str())
+        .unwrap_or(content_md)
+        .to_string();
+
+    Ok(TranslatedBlogPost {
+        title: res_title,
+        summary: res_summary,
+        content_md: res_content_md,
+    })
+}
