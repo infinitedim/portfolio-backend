@@ -95,7 +95,7 @@ totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 
 # Prometheus metrics
 metrics = "0.24"
-metrics-exporter-prometheus = "0.16"
+metrics-exporter-prometheus = "0.18"
 
 # Redis (health, rate limiting, presence)
 redis = { version = "1.4", features = ["tokio-comp", "connection-manager"] }
