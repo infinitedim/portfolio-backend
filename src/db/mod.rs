@@ -477,6 +477,27 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // Multi-locale safety net migration: translation_status, reviewed_at, reviewed_by.
+    sqlx::query(
+        r#"
+        ALTER TABLE blog_posts
+            ADD COLUMN IF NOT EXISTS translation_status TEXT NOT NULL DEFAULT 'published',
+            ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS reviewed_by TEXT
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::raw_sql(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_blog_posts_translation_status
+            ON blog_posts(translation_status, locale);
+        "#,
+    )
+    .execute(pool)
+    .await?;
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS newsletter_subscribers (

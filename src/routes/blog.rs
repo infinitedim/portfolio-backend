@@ -33,6 +33,8 @@ pub struct BlogListQuery {
     pub series: Option<String>,
     /// BCP-47-ish locale code (defaults to `en` when omitted).
     pub locale: Option<String>,
+    /// Filter by translation status ('published', 'pending_review', 'rejected').
+    pub translation_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -85,6 +87,10 @@ pub struct BlogPostSummary {
     pub publish_at: Option<DateTime<Utc>>,
     pub status: BlogStatus,
     pub locale: String,
+    pub translation_group_id: Option<Uuid>,
+    pub translation_status: String,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<String>,
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub created_at: DateTime<Utc>,
@@ -110,6 +116,9 @@ pub struct BlogPostResponse {
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub translation_group_id: Option<Uuid>,
+    pub translation_status: String,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -133,6 +142,7 @@ pub struct CreateBlogRequest {
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub translation_group_id: Option<Uuid>,
+    pub translation_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -155,6 +165,7 @@ pub struct UpdateBlogRequest {
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub translation_group_id: Option<Uuid>,
+    pub translation_status: Option<String>,
 }
 
 /// Distinguish "key absent" (`None`) from "key present but null" (`Some(None)`)
@@ -216,6 +227,8 @@ async fn fetch_blog_list(
     tag: Option<&str>,
     series_slug: Option<&str>,
     locale: Option<&str>,
+    translation_status: Option<&str>,
+    is_admin: bool,
     order_clause: &str,
 ) -> Result<(Vec<BlogPost>, i64), sqlx::Error> {
     // Build WHERE clause + bindings dynamically. Bind indices below match
@@ -266,6 +279,15 @@ async fn fetch_blog_list(
         idx += 1;
     }
 
+    if is_admin {
+        if translation_status.is_some() {
+            where_clauses.push(format!("translation_status = ${idx}", idx = idx));
+            idx += 1;
+        }
+    } else {
+        where_clauses.push("translation_status = 'published'".to_string());
+    }
+
     let where_sql = if where_clauses.is_empty() {
         String::new()
     } else {
@@ -278,7 +300,8 @@ async fn fetch_blog_list(
     let select_sql = format!(
         r#"SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
                   published, tags, reading_time_minutes, view_count, publish_at,
-                  series_id, series_order, locale, translation_group_id, created_at, updated_at
+                  series_id, series_order, locale, translation_group_id,
+                  translation_status, reviewed_at, reviewed_by, created_at, updated_at
            FROM blog_posts {where} {order} LIMIT ${limit} OFFSET ${offset}"#,
         where = where_sql,
         order = order_clause,
@@ -310,6 +333,12 @@ async fn fetch_blog_list(
         select_q = select_q.bind(l.to_string());
         count_q = count_q.bind(l.to_string());
     }
+    if is_admin {
+        if let Some(ts) = translation_status {
+            select_q = select_q.bind(ts.to_string());
+            count_q = count_q.bind(ts.to_string());
+        }
+    }
     select_q = select_q.bind(page_size).bind(offset);
 
     let _ = page;
@@ -329,9 +358,13 @@ async fn fetch_blog_list(
         (status = 503, description = "Database unavailable", body = ErrorResponse),
     ),
 )]
-pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoResponse, AppError> {
+pub async fn list_posts(
+    headers: HeaderMap,
+    Query(query): Query<BlogListQuery>,
+) -> Result<impl IntoResponse, AppError> {
     let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
 
+    let is_admin = require_admin(&headers).is_ok();
     let page_size = query.page_size.clamp(1, 100);
     let page = query.page.max(1);
     let offset = (page - 1) * page_size;
@@ -360,6 +393,12 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         .filter(|s| !s.is_empty())
         .map(|s| s.to_lowercase());
 
+    let translation_status_filter = query
+        .translation_status
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     let order_clause = match query.sort.as_deref() {
         Some("updated") => "ORDER BY updated_at DESC",
         Some("views") => "ORDER BY view_count DESC",
@@ -376,6 +415,8 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
         tag_filter.as_deref(),
         series_filter.as_deref(),
         locale_filter.as_deref(),
+        translation_status_filter.as_deref(),
+        is_admin,
         order_clause,
     )
     .await?;
@@ -395,6 +436,10 @@ pub async fn list_posts(Query(query): Query<BlogListQuery>) -> Result<impl IntoR
                 publish_at: p.publish_at,
                 status,
                 locale: p.locale,
+                translation_group_id: p.translation_group_id,
+                translation_status: p.translation_status,
+                reviewed_at: p.reviewed_at,
+                reviewed_by: p.reviewed_by,
                 series_id: p.series_id,
                 series_order: p.series_order,
                 created_at: p.created_at,
@@ -443,6 +488,9 @@ fn post_to_response(post: BlogPost) -> BlogPostResponse {
         series_id: post.series_id,
         series_order: post.series_order,
         translation_group_id: post.translation_group_id,
+        translation_status: post.translation_status,
+        reviewed_at: post.reviewed_at,
+        reviewed_by: post.reviewed_by,
         created_at: post.created_at,
         updated_at: post.updated_at,
     }
@@ -451,7 +499,8 @@ fn post_to_response(post: BlogPost) -> BlogPostResponse {
 const BLOG_POST_RETURNING: &str = r#"
         id, title, slug, summary, content_md, content_html, published, tags,
         reading_time_minutes, view_count, publish_at, series_id, series_order,
-        locale, translation_group_id, created_at, updated_at
+        locale, translation_group_id, translation_status, reviewed_at, reviewed_by,
+        created_at, updated_at
 "#;
 
 #[utoipa::path(
@@ -529,6 +578,7 @@ pub async fn get_post(
         WHERE slug = $1 AND locale = $2
           AND ((publish_at IS NOT NULL AND publish_at <= now())
                OR (publish_at IS NULL AND published = true))
+          AND translation_status = 'published'
         RETURNING {BLOG_POST_RETURNING}
         "#
         )
@@ -541,14 +591,54 @@ pub async fn get_post(
         .await
     {
         Ok(Some(post)) => {
-            let mut headers = axum::http::HeaderMap::new();
-            headers.insert(
+            let mut res_headers = axum::http::HeaderMap::new();
+            res_headers.insert(
                 axum::http::header::CACHE_CONTROL,
                 "public, max-age=300, stale-while-revalidate=60"
                     .parse()
                     .unwrap(),
             );
-            (StatusCode::OK, headers, Json(post_to_response(post))).into_response()
+            (StatusCode::OK, res_headers, Json(post_to_response(post))).into_response()
+        }
+        Ok(None) if !is_admin && locale != "en" => {
+            // Graceful fallback to 'en' locale post if requested locale is missing or pending_review
+            let fallback_sql = format!(
+                r#"
+            UPDATE blog_posts SET view_count = view_count + 1, updated_at = updated_at
+            WHERE (slug = $1 OR translation_group_id = (SELECT translation_group_id FROM blog_posts WHERE slug = $1 LIMIT 1))
+              AND locale = 'en'
+              AND ((publish_at IS NOT NULL AND publish_at <= now())
+                   OR (publish_at IS NULL AND published = true))
+              AND translation_status = 'published'
+            RETURNING {BLOG_POST_RETURNING}
+            "#
+            );
+
+            match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&fallback_sql[..]))
+                .bind(&slug)
+                .fetch_optional(pool.as_ref())
+                .await
+            {
+                Ok(Some(post)) => {
+                    let mut res_headers = axum::http::HeaderMap::new();
+                    res_headers.insert(
+                        axum::http::header::CACHE_CONTROL,
+                        "public, max-age=60, stale-while-revalidate=30"
+                            .parse()
+                            .unwrap(),
+                    );
+                    res_headers.insert("X-Translation-Fallback", "en".parse().unwrap());
+                    (StatusCode::OK, res_headers, Json(post_to_response(post))).into_response()
+                }
+                _ => (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "Not found".to_string(),
+                        message: None,
+                    }),
+                )
+                    .into_response(),
+            }
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -681,15 +771,18 @@ pub async fn create_post(
         .into_iter()
         .collect();
     let reading_time = calculate_reading_time(payload.content_md.as_deref());
+    let translation_status = payload
+        .translation_status
+        .unwrap_or_else(|| "published".to_string());
 
     let insert_sql = format!(
         r#"
         INSERT INTO blog_posts (
             title, slug, summary, content_md, content_html, published, tags,
             reading_time_minutes, publish_at, locale, series_id, series_order,
-            translation_group_id, created_at, updated_at
+            translation_group_id, translation_status, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now(), now())
         RETURNING {BLOG_POST_RETURNING}
         "#
     );
@@ -708,6 +801,7 @@ pub async fn create_post(
         .bind(payload.series_id)
         .bind(payload.series_order)
         .bind(payload.translation_group_id)
+        .bind(&translation_status)
         .fetch_one(pool.as_ref())
         .await
     {
@@ -836,11 +930,6 @@ pub async fn update_post(
         .as_deref()
         .map(|md| calculate_reading_time(Some(md)));
 
-    // Tri-state mapping for `publish_at` so the client can leave the field
-    // alone, set a new schedule, or clear an existing one:
-    //   - None              → leave column unchanged via $9::BOOLEAN = false
-    //   - Some(None)        → clear column (NULL)
-    //   - Some(Some(ts))    → set to `ts`
     let (publish_at_value, publish_at_present): (Option<DateTime<Utc>>, bool) =
         match payload.publish_at {
             None => (None, false),
@@ -862,8 +951,9 @@ pub async fn update_post(
             series_id            = COALESCE($10, series_id),
             series_order         = COALESCE($11, series_order),
             translation_group_id = COALESCE($12, translation_group_id),
+            translation_status   = COALESCE($13, translation_status),
             updated_at           = now()
-        WHERE slug = $13 AND locale = $14
+        WHERE slug = $14 AND locale = $15
         RETURNING {BLOG_POST_RETURNING}
         "#
     );
@@ -881,6 +971,7 @@ pub async fn update_post(
         .bind(payload.series_id)
         .bind(payload.series_order)
         .bind(payload.translation_group_id)
+        .bind(payload.translation_status)
         .bind(&slug)
         .bind(&locale)
         .fetch_optional(pool.as_ref())
@@ -900,7 +991,82 @@ pub async fn update_post(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: "Failed to update post".to_string(),
+                    error: "Database error".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/blog/{id}/approve-translation",
+    tag = "Blog",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Blog post ID"),
+    ),
+    responses(
+        (status = 200, description = "Translation approved and published", body = BlogPostResponse),
+        (status = 401, description = "Auth required", body = ErrorResponse),
+        (status = 404, description = "Post not found", body = ErrorResponse),
+    ),
+)]
+pub async fn approve_translation(headers: HeaderMap, Path(id): Path<Uuid>) -> impl IntoResponse {
+    let admin_user = match require_admin(&headers) {
+        Ok(admin) => admin,
+        Err(err_response) => return err_response.into_response(),
+    };
+
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Database not available".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let sql = format!(
+        r#"
+        UPDATE blog_posts
+        SET translation_status = 'published',
+            reviewed_at = now(),
+            reviewed_by = $1,
+            updated_at = now()
+        WHERE id = $2
+        RETURNING {BLOG_POST_RETURNING}
+        "#
+    );
+
+    match sqlx::query_as::<_, BlogPost>(sqlx::AssertSqlSafe(&sql[..]))
+        .bind(&admin_user.sub)
+        .bind(id)
+        .fetch_optional(pool.as_ref())
+        .await
+    {
+        Ok(Some(post)) => (StatusCode::OK, Json(post_to_response(post))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Post not found".to_string(),
+                message: None,
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Database error approving translation: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Database error".to_string(),
                     message: None,
                 }),
             )
@@ -1131,7 +1297,8 @@ pub async fn link_translations(
         r#"
             SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
                    published, tags, reading_time_minutes, view_count, publish_at,
-                   series_id, series_order, locale, translation_group_id, created_at, updated_at
+                   series_id, series_order, locale, translation_group_id,
+                   translation_status, reviewed_at, reviewed_by, created_at, updated_at
             FROM blog_posts
             WHERE translation_group_id = $1
             ORDER BY locale ASC
@@ -1156,6 +1323,10 @@ pub async fn link_translations(
                 publish_at: p.publish_at,
                 status,
                 locale: p.locale,
+                translation_group_id: p.translation_group_id,
+                translation_status: p.translation_status,
+                reviewed_at: p.reviewed_at,
+                reviewed_by: p.reviewed_by,
                 series_id: p.series_id,
                 series_order: p.series_order,
                 created_at: p.created_at,
@@ -1197,7 +1368,8 @@ pub async fn get_translation_group(
         r#"
         SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
                published, tags, reading_time_minutes, view_count, publish_at,
-               series_id, series_order, locale, translation_group_id, created_at, updated_at
+               series_id, series_order, locale, translation_group_id,
+               translation_status, reviewed_at, reviewed_by, created_at, updated_at
         FROM blog_posts
         WHERE translation_group_id = $1
         ORDER BY locale ASC
@@ -1226,6 +1398,10 @@ pub async fn get_translation_group(
                 publish_at: p.publish_at,
                 status,
                 locale: p.locale,
+                translation_group_id: p.translation_group_id,
+                translation_status: p.translation_status,
+                reviewed_at: p.reviewed_at,
+                reviewed_by: p.reviewed_by,
                 series_id: p.series_id,
                 series_order: p.series_order,
                 created_at: p.created_at,
@@ -1426,6 +1602,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1451,6 +1628,9 @@ mod tests {
             series_order: None,
             locale: "en".into(),
             translation_group_id: None,
+            translation_status: "published".into(),
+            reviewed_at: None,
+            reviewed_by: None,
             created_at: now,
             updated_at: now,
         };
@@ -1569,6 +1749,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1624,6 +1805,7 @@ mod tests {
             series_id: None,
             series_order: None,
             translation_group_id: None,
+            translation_status: None,
         };
         let (st1, _) = post_json_auth(app.clone(), "/api/blog", Some(&bearer), &body).await;
         assert_eq!(st1, StatusCode::CREATED);
@@ -1655,6 +1837,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1685,6 +1868,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1724,6 +1908,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1760,6 +1945,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1802,6 +1988,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1847,6 +2034,7 @@ mod tests {
                 series_id: None,
                 series_order: None,
                 translation_group_id: None,
+                translation_status: None,
             },
         )
         .await;
@@ -1885,6 +2073,7 @@ mod tests {
                     series_id: None,
                     series_order: None,
                     translation_group_id: None,
+                    translation_status: None,
                 },
             )
             .await;
@@ -1935,6 +2124,7 @@ mod tests {
                     series_id: None,
                     series_order: None,
                     translation_group_id: None,
+                    translation_status: None,
                 },
             )
             .await;
@@ -2029,6 +2219,7 @@ mod tests {
                     series_id: None,
                     series_order: None,
                     translation_group_id: None,
+                    translation_status: None,
                 },
             )
             .await;

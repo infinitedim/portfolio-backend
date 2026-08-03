@@ -103,6 +103,9 @@ pub struct BlogPost {
     pub series_order: Option<i32>,
     pub locale: String,
     pub translation_group_id: Option<Uuid>,
+    pub translation_status: String,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

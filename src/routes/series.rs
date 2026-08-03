@@ -147,11 +147,13 @@ pub async fn get_series_public(Path(slug): Path<String>) -> Result<impl IntoResp
         r#"
         SELECT id, title, slug, summary, NULL::TEXT AS content_md, NULL::TEXT AS content_html,
                published, tags, reading_time_minutes, view_count, publish_at,
-               series_id, series_order, locale, translation_group_id, created_at, updated_at
+               series_id, series_order, locale, translation_group_id,
+               translation_status, reviewed_at, reviewed_by, created_at, updated_at
         FROM blog_posts
         WHERE series_id = $1
           AND ((publish_at IS NOT NULL AND publish_at <= now())
                OR (publish_at IS NULL AND published = true))
+          AND translation_status = 'published'
         ORDER BY series_order ASC NULLS LAST, created_at ASC
         "#,
     )
@@ -174,6 +176,10 @@ pub async fn get_series_public(Path(slug): Path<String>) -> Result<impl IntoResp
                 publish_at: p.publish_at,
                 status,
                 locale: p.locale,
+                translation_group_id: p.translation_group_id,
+                translation_status: p.translation_status,
+                reviewed_at: p.reviewed_at,
+                reviewed_by: p.reviewed_by,
                 series_id: p.series_id,
                 series_order: p.series_order,
                 created_at: p.created_at,
