@@ -205,6 +205,7 @@ pub async fn list_blog(Query(query): Query<CmsBlogQuery>) -> Result<impl IntoRes
         SELECT id, title, slug, summary, content_md, content_html, published,
                tags, reading_time_minutes, view_count, publish_at,
                series_id, series_order, locale, translation_group_id,
+               translation_status, reviewed_at, reviewed_by,
                created_at, updated_at
         FROM blog_posts
         WHERE locale = $1 AND published = true
@@ -257,6 +258,7 @@ pub async fn get_blog_post(
         SELECT id, title, slug, summary, content_md, content_html, published,
                tags, reading_time_minutes, view_count, publish_at,
                series_id, series_order, locale, translation_group_id,
+               translation_status, reviewed_at, reviewed_by,
                created_at, updated_at
         FROM blog_posts
         WHERE slug = $1 AND locale = $2 AND published = true
@@ -305,6 +307,7 @@ pub async fn update_blog_post(
         SELECT id, title, slug, summary, content_md, content_html, published,
                tags, reading_time_minutes, view_count, publish_at,
                series_id, series_order, locale, translation_group_id,
+               translation_status, reviewed_at, reviewed_by,
                created_at, updated_at
         FROM blog_posts
         WHERE slug = $1 AND locale = $2
