@@ -1634,13 +1634,14 @@ pub async fn translate_post(
         }
     };
 
-    let api_key = match std::env::var("GEMINI_API_KEY") {
+    let api_key = match std::env::var("DEEPL_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY"))
+    {
         Ok(k) => k,
         Err(_) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Gemini API key not configured".to_string(),
+                    error: "DeepL API key not configured (DEEPL_API_KEY)".to_string(),
                     message: None,
                 }),
             )

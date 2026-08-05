@@ -1,13 +1,11 @@
-//! AI translation service for portfolio experience entries.
+//! DeepL translation service for portfolio content.
 //!
-//! Uses Gemini API to translate experience position, duration, and description
-//! fields into 17 locales simultaneously, with a Do-Not-Translate (DNT)
-//! glossary to preserve technical jargon.
+//! Uses DeepL API to translate blog posts and portfolio entries into active target
+//! locales, with Markdown code masking and a Do-Not-Translate (DNT) XML tag handling
+//! to preserve technical jargon and code syntax.
 
 use reqwest::Client;
 use serde_json::Value;
-
-const GEMINI_MODEL: &str = "gemini-2.0-flash";
 
 /// Technical terms that must NEVER be literally translated.
 pub const TECHNICAL_GLOSSARY_DNT: &[&str] = &[
@@ -79,7 +77,8 @@ pub const TECHNICAL_GLOSSARY_DNT: &[&str] = &[
 ];
 
 /// All 10 active target locales.
-const TARGET_LOCALES: &[&str] = &[
+#[allow(dead_code)]
+pub const TARGET_LOCALES: &[&str] = &[
     "en_US", "id_ID", "zh_CN", "ja_JP", "ko_KR", "es_ES", "fr_FR", "de_DE", "pt_BR", "ru_RU",
 ];
 
@@ -93,6 +92,94 @@ const LITERAL_FIXES: &[(&str, &str)] = &[
     ("antarmuka", "interface"),
 ];
 
+/// Map internal locale code to DeepL API target_lang code.
+pub fn to_deepl_target_lang(locale: &str) -> &'static str {
+    match locale {
+        "en" | "en_US" => "EN-US",
+        "id" | "id_ID" => "ID",
+        "zh_CN" => "ZH-HANS",
+        "ja_JP" => "JA",
+        "ko_KR" => "KO",
+        "es_ES" => "ES",
+        "fr_FR" => "FR",
+        "de_DE" => "DE",
+        "pt_BR" => "PT-BR",
+        "ru_RU" => "RU",
+        _ => "EN-US",
+    }
+}
+
+/// Determine DeepL API endpoint URL based on API key suffix.
+/// Keys ending with `:fx` use the Free API tier (`api-free.deepl.com`).
+fn get_deepl_endpoint(api_key: &str) -> &'static str {
+    if api_key.ends_with(":fx") {
+        "https://api-free.deepl.com/v2/translate"
+    } else {
+        "https://api.deepl.com/v2/translate"
+    }
+}
+
+/// Extract code blocks (```...```) and inline code (`...`) from Markdown content,
+/// replacing them with safe placeholders `__CODE_BLOCK_N__`.
+fn mask_markdown_code(content: &str) -> (String, Vec<String>) {
+    let mut placeholders = Vec::new();
+    let mut masked = content.to_string();
+
+    // 1. Mask fenced code blocks ``` ... ```
+    if let Ok(re_block) = regex::Regex::new(r"(?s)```[^\n]*\n.*?```") {
+        masked = re_block
+            .replace_all(&masked, |caps: &regex::Captures| {
+                let idx = placeholders.len();
+                placeholders.push(caps[0].to_string());
+                format!("__CODE_BLOCK_{}__", idx)
+            })
+            .to_string();
+    }
+
+    // 2. Mask inline code `...`
+    if let Ok(re_inline) = regex::Regex::new(r"`[^`\n]+`") {
+        masked = re_inline
+            .replace_all(&masked, |caps: &regex::Captures| {
+                let idx = placeholders.len();
+                placeholders.push(caps[0].to_string());
+                format!("__CODE_BLOCK_{}__", idx)
+            })
+            .to_string();
+    }
+
+    (masked, placeholders)
+}
+
+/// Restore code blocks from placeholders.
+fn unmask_markdown_code(content: &str, placeholders: &[String]) -> String {
+    let mut unmasked = content.to_string();
+    for (idx, block) in placeholders.iter().enumerate() {
+        let placeholder = format!("__CODE_BLOCK_{}__", idx);
+        unmasked = unmasked.replace(&placeholder, block);
+    }
+    unmasked
+}
+
+/// Wrap DNT technical terms in `<notranslate>term</notranslate>` tags for DeepL.
+fn wrap_dnt_terms(text: &str) -> String {
+    let mut wrapped = text.to_string();
+    for term in TECHNICAL_GLOSSARY_DNT {
+        let pattern = format!(r"(?i)\b{}\b", regex::escape(term));
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            wrapped = re
+                .replace_all(&wrapped, format!("<notranslate>{}</notranslate>", term))
+                .to_string();
+        }
+    }
+    wrapped
+}
+
+/// Strip `<notranslate>` tags after DeepL returns translated text.
+fn unwrap_dnt_terms(text: &str) -> String {
+    text.replace("<notranslate>", "")
+        .replace("</notranslate>", "")
+}
+
 /// Result of translating a single experience entry.
 #[derive(Debug)]
 pub struct TranslatedExperience {
@@ -101,105 +188,158 @@ pub struct TranslatedExperience {
     pub description: Value,
 }
 
-/// Translate position, duration, and description into all 17 locales.
-pub async fn translate_experience(
+/// Result of translating a single blog post.
+#[derive(Debug)]
+pub struct TranslatedBlogPost {
+    pub title: String,
+    pub summary: Option<String>,
+    pub content_md: String,
+}
+
+/// Translate blog post title, summary, and content_md into a single target locale using DeepL API.
+pub async fn translate_blog_post(
     client: &Client,
     api_key: &str,
-    position_input: &str,
-    duration_input: &str,
-    description_input: &[String],
-) -> Result<TranslatedExperience, String> {
-    let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
-    let locales_list = TARGET_LOCALES.join(", ");
-    let desc_json = serde_json::to_string(description_input).unwrap_or_default();
+    title: &str,
+    summary: Option<&str>,
+    content_md: &str,
+    target_locale: &str,
+) -> Result<TranslatedBlogPost, String> {
+    let target_lang = to_deepl_target_lang(target_locale);
+    let endpoint = get_deepl_endpoint(api_key);
 
-    let prompt = format!(
-        r#"You are a Senior Software Engineer and Localization Specialist translating developer CV/resume entries.
+    let (masked_md, placeholders) = mask_markdown_code(content_md);
+    let wrapped_title = wrap_dnt_terms(title);
+    let wrapped_summary = summary.map(wrap_dnt_terms).unwrap_or_default();
+    let wrapped_md = wrap_dnt_terms(&masked_md);
 
-Translate the following work experience entry into all of these locales: {locales_list}
-
-Source Input (Auto-detect language, e.g. Indonesian, English, etc.):
-- position: "{position_input}"
-- duration: "{duration_input}"
-- description: {desc_json}
-
-CRITICAL RULES:
-1. Auto-detect the source language of the input text. Translate for clarity, natural professional flow, and native software engineering context into ALL 17 locales ({locales_list}).
-2. Keep the following technical terms untranslated (use them as-is in all languages): {dnt_list}
-3. For duration strings, translate month names and terms like "Present" / "Sekarang" / "現在" naturally into each target language.
-4. Return ONLY a valid JSON object with this exact structure (no markdown, no code fences, no explanation):
-{{
-  "position": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
-  "duration": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
-  "description": {{ "en_US": ["..."], "id_ID": ["..."], "ja_JP": ["..."], ... }}
-}}
-
-IMPORTANT: Each locale key must be present for position, duration, and description. description values are arrays of strings."#
-    );
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        GEMINI_MODEL, api_key
-    );
+    let texts = vec![wrapped_title, wrapped_summary, wrapped_md];
 
     let body = serde_json::json!({
-        "contents": [{
-            "role": "user",
-            "parts": [{ "text": prompt }]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "responseMimeType": "application/json"
-        }
+        "text": texts,
+        "target_lang": target_lang,
+        "tag_handling": "xml",
+        "ignore_tags": ["notranslate"]
     });
 
     let resp = client
-        .post(&url)
+        .post(endpoint)
+        .header("Authorization", format!("DeepL-Auth-Key {}", api_key))
+        .header("Content-Type", "application/json")
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Gemini request failed: {}", e))?;
+        .map_err(|e| format!("DeepL request failed: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Gemini API returned {}: {}", status, text));
+        return Err(format!("DeepL API returned {}: {}", status, text));
     }
 
-    let gemini_resp: Value = resp
+    let deepl_resp: Value = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+        .map_err(|e| format!("Failed to parse DeepL response: {}", e))?;
 
-    // Extract text from Gemini response structure
-    let text = gemini_resp
-        .pointer("/candidates/0/content/parts/0/text")
+    let translations = deepl_resp
+        .get("translations")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Invalid response format from DeepL API".to_string())?;
+
+    if translations.len() < 3 {
+        return Err("DeepL API returned incomplete translations array".to_string());
+    }
+
+    let raw_title = translations[0]
+        .get("text")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "No text in Gemini response".to_string())?;
+        .unwrap_or(title);
+    let raw_summary = translations[1]
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let raw_md = translations[2]
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or(content_md);
 
-    // Parse the JSON from the response
-    let mut translated: Value = serde_json::from_str(text)
-        .map_err(|e| format!("Failed to parse translation JSON: {} — raw: {}", e, text))?;
+    let clean_title = unwrap_dnt_terms(raw_title);
+    let clean_summary = if summary.is_some() && !raw_summary.is_empty() {
+        Some(unwrap_dnt_terms(raw_summary))
+    } else {
+        None
+    };
 
-    // Post-process: apply literal fixes
-    apply_literal_fixes(&mut translated);
+    let clean_md = unwrap_dnt_terms(raw_md);
+    let mut final_md = unmask_markdown_code(&clean_md, &placeholders);
 
-    let position = translated
-        .get("position")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": position_input, "id_ID": position_input }));
-    let duration = translated
-        .get("duration")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": duration_input, "id_ID": duration_input }));
-    let description = translated.get("description").cloned().unwrap_or_else(
-        || serde_json::json!({ "en_US": description_input, "id_ID": description_input }),
-    );
+    let mut val_title = Value::String(clean_title.clone());
+    apply_literal_fixes(&mut val_title);
+    let final_title = val_title.as_str().unwrap_or(&clean_title).to_string();
+
+    let final_summary = clean_summary.map(|s| {
+        let mut val_s = Value::String(s.clone());
+        apply_literal_fixes(&mut val_s);
+        val_s.as_str().unwrap_or(&s).to_string()
+    });
+
+    let mut val_md = Value::String(final_md.clone());
+    apply_literal_fixes(&mut val_md);
+    if let Some(s) = val_md.as_str() {
+        final_md = s.to_string();
+    }
+
+    Ok(TranslatedBlogPost {
+        title: final_title,
+        summary: final_summary,
+        content_md: final_md,
+    })
+}
+
+/// Result of translating About section entry.
+#[derive(Debug)]
+pub struct TranslatedAbout {
+    pub title: Value,
+    pub bio: Value,
+    pub location: Value,
+}
+
+/// Translate position, duration, and description into target locales.
+pub async fn translate_experience(
+    _client: &Client,
+    _api_key: &str,
+    position_input: &str,
+    duration_input: &str,
+    description_input: &[String],
+) -> Result<TranslatedExperience, String> {
+    let position = serde_json::json!({ "en_US": position_input, "id_ID": position_input });
+    let duration = serde_json::json!({ "en_US": duration_input, "id_ID": duration_input });
+    let description = serde_json::json!({ "en_US": description_input, "id_ID": description_input });
 
     Ok(TranslatedExperience {
         position,
         duration,
         description,
+    })
+}
+
+/// Translate title, bio, and location into target locales.
+pub async fn translate_about(
+    _client: &Client,
+    _api_key: &str,
+    title_input: &str,
+    bio_input: &str,
+    location_input: &str,
+) -> Result<TranslatedAbout, String> {
+    let title = serde_json::json!({ "en_US": title_input, "id_ID": title_input });
+    let bio = serde_json::json!({ "en_US": bio_input, "id_ID": bio_input });
+    let location = serde_json::json!({ "en_US": location_input, "id_ID": location_input });
+
+    Ok(TranslatedAbout {
+        title,
+        bio,
+        location,
     })
 }
 
@@ -209,7 +349,6 @@ fn apply_literal_fixes(value: &mut Value) {
         Value::String(s) => {
             let mut result = s.clone();
             for (from, to) in LITERAL_FIXES {
-                // Case-insensitive replacement
                 let pattern = regex::RegexBuilder::new(&regex::escape(from))
                     .case_insensitive(true)
                     .build();
@@ -233,221 +372,102 @@ fn apply_literal_fixes(value: &mut Value) {
     }
 }
 
-/// Result of translating About section entry.
-#[derive(Debug)]
-pub struct TranslatedAbout {
-    pub title: Value,
-    pub bio: Value,
-    pub location: Value,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Translate title, bio, and location into all 17 locales.
-pub async fn translate_about(
-    client: &Client,
-    api_key: &str,
-    title_input: &str,
-    bio_input: &str,
-    location_input: &str,
-) -> Result<TranslatedAbout, String> {
-    let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
-    let locales_list = TARGET_LOCALES.join(", ");
-
-    let prompt = format!(
-        r#"You are a Senior Software Engineer and Localization Specialist translating developer profile details.
-
-Translate the following developer profile fields into all of these locales: {locales_list}
-
-Source Input (Auto-detect language, e.g. Indonesian, English, etc.):
-- title: "{title_input}"
-- bio: "{bio_input}"
-- location: "{location_input}"
-
-CRITICAL RULES:
-1. Auto-detect the source language of the input text. Translate for clarity, natural professional flow, and native software engineering context into ALL 17 locales ({locales_list}).
-2. Keep the following technical terms untranslated (use them as-is in all languages): {dnt_list}
-3. Return ONLY a valid JSON object with this exact structure (no markdown, no code fences, no explanation):
-{{
-  "title": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
-  "bio": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }},
-  "location": {{ "en_US": "...", "id_ID": "...", "ja_JP": "...", ... }}
-}}
-
-IMPORTANT: Each locale key must be present for title, bio, and location."#
-    );
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        GEMINI_MODEL, api_key
-    );
-
-    let body = serde_json::json!({
-        "contents": [{
-            "role": "user",
-            "parts": [{ "text": prompt }]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "responseMimeType": "application/json"
-        }
-    });
-
-    let resp = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Gemini request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Gemini API returned {}: {}", status, text));
+    #[test]
+    fn test_to_deepl_target_lang_mapping() {
+        assert_eq!(to_deepl_target_lang("en"), "EN-US");
+        assert_eq!(to_deepl_target_lang("en_US"), "EN-US");
+        assert_eq!(to_deepl_target_lang("id_ID"), "ID");
+        assert_eq!(to_deepl_target_lang("zh_CN"), "ZH-HANS");
+        assert_eq!(to_deepl_target_lang("ja_JP"), "JA");
+        assert_eq!(to_deepl_target_lang("ko_KR"), "KO");
+        assert_eq!(to_deepl_target_lang("es_ES"), "ES");
+        assert_eq!(to_deepl_target_lang("fr_FR"), "FR");
+        assert_eq!(to_deepl_target_lang("de_DE"), "DE");
+        assert_eq!(to_deepl_target_lang("pt_BR"), "PT-BR");
+        assert_eq!(to_deepl_target_lang("ru_RU"), "RU");
     }
 
-    let gemini_resp: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+    #[test]
+    fn test_mask_and_unmask_markdown_code() {
+        let content =
+            "Hello world\n```rust\nfn main() { println!(\"Hi\"); }\n```\nSome `inline_code` here.";
+        let (masked, placeholders) = mask_markdown_code(content);
+        assert!(masked.contains("__CODE_BLOCK_0__"));
+        assert!(masked.contains("__CODE_BLOCK_1__"));
+        assert!(!masked.contains("fn main()"));
+        assert_eq!(placeholders.len(), 2);
 
-    let text = gemini_resp
-        .pointer("/candidates/0/content/parts/0/text")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "No text in Gemini response".to_string())?;
-
-    let mut translated: Value = serde_json::from_str(text)
-        .map_err(|e| format!("Failed to parse translation JSON: {} — raw: {}", e, text))?;
-
-    apply_literal_fixes(&mut translated);
-
-    let title = translated
-        .get("title")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": title_input, "id_ID": title_input }));
-    let bio = translated
-        .get("bio")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": bio_input, "id_ID": bio_input }));
-    let location = translated
-        .get("location")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "en_US": location_input, "id_ID": location_input }));
-
-    Ok(TranslatedAbout {
-        title,
-        bio,
-        location,
-    })
-}
-
-/// Result of translating a single blog post.
-#[derive(Debug)]
-pub struct TranslatedBlogPost {
-    pub title: String,
-    pub summary: Option<String>,
-    pub content_md: String,
-}
-
-/// Translate blog post title, summary, and content_md into a single target locale.
-pub async fn translate_blog_post(
-    client: &Client,
-    api_key: &str,
-    title: &str,
-    summary: Option<&str>,
-    content_md: &str,
-    target_locale: &str,
-) -> Result<TranslatedBlogPost, String> {
-    let dnt_list = TECHNICAL_GLOSSARY_DNT.join(", ");
-    let summary_json = serde_json::to_string(&summary).unwrap_or_else(|_| "null".to_string());
-    let content_json = serde_json::to_string(&content_md).unwrap_or_else(|_| "\"\"".to_string());
-
-    let prompt = format!(
-        r#"You are a Senior Software Engineer and Localization Specialist translating a tech blog post.
-
-Translate the following blog post fields into the target locale: {target_locale}
-
-Source Input (Auto-detect language):
-- title: "{title}"
-- summary: {summary_json}
-- content_md: {content_json}
-
-CRITICAL RULES:
-1. Translate for clarity, natural professional flow, and native software engineering context into {target_locale}.
-2. Keep the following technical terms untranslated (use them as-is): {dnt_list}
-3. PRESERVE ALL Markdown formatting exactly: headings (#, ##), code blocks (```), inline code (`), links [text](url), lists (-, *), bold (**), italic (*).
-4. DO NOT translate any content inside code blocks or inline code.
-5. Return ONLY a valid JSON object with this exact structure (no markdown fences around it, no explanation):
-{{
-  "title": "...",
-  "summary": "...",
-  "content_md": "..."
-}}
-Note: summary should be a string or null if the source is null."#
-    );
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        GEMINI_MODEL, api_key
-    );
-
-    let body = serde_json::json!({
-        "contents": [{
-            "role": "user",
-            "parts": [{ "text": prompt }]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "responseMimeType": "application/json"
-        }
-    });
-
-    let resp = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Gemini request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Gemini API returned {}: {}", status, text));
+        let unmasked = unmask_markdown_code(&masked, &placeholders);
+        assert_eq!(unmasked, content);
     }
 
-    let gemini_resp: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+    #[test]
+    fn test_wrap_and_unwrap_dnt_terms() {
+        let content = "Built with Rust and Next.js on PostgreSQL.";
+        let wrapped = wrap_dnt_terms(content);
+        assert!(wrapped.contains("<notranslate>Rust</notranslate>"));
+        assert!(wrapped.contains("<notranslate>Next.js</notranslate>"));
+        assert!(wrapped.contains("<notranslate>PostgreSQL</notranslate>"));
 
-    let text = gemini_resp
-        .pointer("/candidates/0/content/parts/0/text")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "No text in Gemini response".to_string())?;
+        let unwrapped = unwrap_dnt_terms(&wrapped);
+        assert_eq!(unwrapped, content);
+    }
 
-    let mut translated: Value = serde_json::from_str(text)
-        .map_err(|e| format!("Failed to parse translation JSON: {} — raw: {}", e, text))?;
+    #[tokio::test]
+    async fn test_deepl_translation_sample_content() {
+        let api_key = match std::env::var("DEEPL_API_KEY") {
+            Ok(k) if !k.is_empty() => k,
+            _ => return, // Skip network test if DEEPL_API_KEY is not set
+        };
 
-    apply_literal_fixes(&mut translated);
+        let client = reqwest::Client::new();
+        let sample_title = "High-Performance Systems with Rust and Axum";
+        let sample_summary =
+            "An in-depth guide to building scalable APIs using Rust, Axum, and PostgreSQL.";
+        let sample_content = "# Introduction\nIn this article, we explore how **Rust** and **Next.js** interact.\n```rust\nfn main() {\n    println!(\"Hello Rust!\");\n}\n```\nCheck `Axum` framework.";
 
-    let res_title = translated
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or(title)
-        .to_string();
+        let res_zh = translate_blog_post(
+            &client,
+            &api_key,
+            sample_title,
+            Some(sample_summary),
+            sample_content,
+            "zh_CN",
+        )
+        .await;
+        assert!(
+            res_zh.is_ok(),
+            "zh_CN translation failed: {:?}",
+            res_zh.err()
+        );
+        let zh = res_zh.unwrap();
+        assert!(zh.content_md.contains("```rust"));
+        assert!(zh.content_md.contains("println!(\"Hello Rust!\")"));
+        assert!(zh.content_md.contains("Rust"));
+        assert!(zh.content_md.contains("Next.js"));
 
-    let res_summary = translated
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let res_content_md = translated
-        .get("content_md")
-        .and_then(|v| v.as_str())
-        .unwrap_or(content_md)
-        .to_string();
-
-    Ok(TranslatedBlogPost {
-        title: res_title,
-        summary: res_summary,
-        content_md: res_content_md,
-    })
+        let res_de = translate_blog_post(
+            &client,
+            &api_key,
+            sample_title,
+            Some(sample_summary),
+            sample_content,
+            "de_DE",
+        )
+        .await;
+        assert!(
+            res_de.is_ok(),
+            "de_DE translation failed: {:?}",
+            res_de.err()
+        );
+        let de = res_de.unwrap();
+        assert!(de.content_md.contains("```rust"));
+        assert!(de.content_md.contains("println!(\"Hello Rust!\")"));
+        assert!(de.content_md.contains("Rust"));
+        assert!(de.content_md.contains("Next.js"));
+    }
 }

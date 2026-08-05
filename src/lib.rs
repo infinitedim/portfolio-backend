@@ -234,17 +234,6 @@ pub fn create_app(redis: RedisMode) -> Router {
             .expect("newsletter governor config"),
     );
 
-    // AI chat endpoint: tighter abuse guard for potentially expensive requests.
-    let ai_governor = std::sync::Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(8)
-            .burst_size(10)
-            .key_extractor(SmartIpKeyExtractor)
-            .use_headers()
-            .finish()
-            .expect("ai governor config"),
-    );
-
     let gate_config = routes::gate::GateConfig::from_env();
     let gate_state = routes::gate::GateState::new(gate_config);
     let gate_routes = with_rate_limit!(
@@ -479,15 +468,6 @@ pub fn create_app(redis: RedisMode) -> Router {
         ))
         .with_state(cms_state);
 
-    let ai_state = routes::ai::AiState::from_env();
-    let ai_routes = with_rate_limit!(
-        Router::new().route("/api/ai/chat", post(routes::ai::chat)),
-        &redis,
-        RateLimitConfig::AI,
-        ai_governor
-    )
-    .with_state(ai_state);
-
     let presence_state = routes::presence::PresenceState::new(&redis);
     let presence_routes = Router::new()
         .route("/ws/presence", get(routes::presence::ws_handler))
@@ -562,7 +542,6 @@ pub fn create_app(redis: RedisMode) -> Router {
         .merge(newsletter_public)
         .merge(newsletter_admin)
         .merge(cms_routes)
-        .merge(ai_routes)
         .merge(presence_routes)
         .merge(admin_messages_routes)
         .merge(admin_series_routes)
