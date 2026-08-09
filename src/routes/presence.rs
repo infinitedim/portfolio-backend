@@ -26,8 +26,28 @@ pub struct PresenceState {
 impl PresenceState {
     pub fn new(redis: &crate::redis::RedisMode) -> Self {
         let (broadcast_tx, _) = broadcast::channel(64);
+        let backend = build_presence_backend(redis);
+
+        let b_tx = broadcast_tx.clone();
+        let b_backend = backend.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                let mut last_total: Option<u32> = None;
+                loop {
+                    interval.tick().await;
+                    if let Ok(total) = b_backend.prune_stale(30).await {
+                        if last_total != Some(total) {
+                            last_total = Some(total);
+                            let _ = b_tx.send(total);
+                        }
+                    }
+                }
+            });
+        }
+
         Self {
-            backend: build_presence_backend(redis),
+            backend,
             broadcast_tx,
         }
     }
