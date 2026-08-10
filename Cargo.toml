@@ -116,4 +116,4 @@ tracing-loki = { version = "0.2.2", default-features = false, features = ["rustl
 object_store = { version = "0.14", features = ["gcp"] }
 
 [dev-dependencies]
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
