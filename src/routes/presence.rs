@@ -166,7 +166,11 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                                 let _ = state.broadcast_tx.send(new_total);
                             }
                             Ok(ClientMessage::Ping) => {
-                                let _ = state.backend.refresh_conn(&conn_id).await;
+                                let refreshed = state.backend.refresh_conn(&conn_id).await.unwrap_or(false);
+                                if !refreshed {
+                                    let room = current_room.as_deref().unwrap_or("site");
+                                    let _ = state.backend.join_room(&conn_id, room).await;
+                                }
                                 let payload =
                                     serde_json::to_string(&ServerMessage::Pong).unwrap_or_default();
                                 let _ = sender.send(Message::Text(payload.into())).await;

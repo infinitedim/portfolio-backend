@@ -119,6 +119,15 @@ impl RedisPresence {
     fn conn_key(conn_id: &str) -> String {
         format!("presence:conn:{conn_id}")
     }
+
+    async fn ensure_zset_key(conn: &mut redis::aio::ConnectionManager, key: &str) {
+        let key_type: Result<String, _> = redis::cmd("TYPE").arg(key).query_async(conn).await;
+        if let Ok(kt) = key_type {
+            if kt != "zset" && kt != "none" {
+                let _: () = redis::cmd("DEL").arg(key).query_async(conn).await.unwrap_or(());
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -128,6 +137,9 @@ impl PresenceBackend for RedisPresence {
         let conn_key = Self::conn_key(conn_id);
         let room_key = Self::room_key(room);
         let now = now_secs();
+
+        Self::ensure_zset_key(&mut conn, "presence:global").await;
+        Self::ensure_zset_key(&mut conn, &room_key).await;
 
         // 1. Store connection metadata with TTL
         redis::cmd("SET")
