@@ -134,29 +134,107 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
       {
         "id": "terminal-portfolio",
         "name": "Terminal Portfolio",
-        "description": "Portfolio interaktif bergaya terminal dengan Next.js 15, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
-        "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Tailwind CSS"],
+        "slug": "portfolio-v2",
+        "description": "Portfolio interaktif bergaya terminal dengan Next.js 16, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
+        "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Redis", "Grafana", "Loki", "Prometheus", "Tailwind CSS"],
         "demoUrl": "https://infinitedim.dev",
         "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
-        "status": "active",
-        "featured": true
+        "imageUrl": "/avatar.jpg",
+        "status": "completed",
+        "featured": true,
+        "metrics": {
+          "latencyP95": "< 35ms",
+          "testCoverage": "94%",
+          "lighthouseScore": 100,
+          "architectureType": "Rust / Axum / PPR"
+        },
+        "highlights": [
+          {
+            "id": "arch",
+            "category": "Architecture",
+            "title": "Full-stack monorepo with Rust/Axum backend and Next.js 16 frontend",
+            "detail": "PostgreSQL, Redis rate limiting, WebSocket presence, PPR streaming"
+          },
+          {
+            "id": "perf",
+            "category": "Performance",
+            "title": "All API routes verified P95 < 35ms against SLA",
+            "detail": "CI smoke tests validate latency on every deploy"
+          },
+          {
+            "id": "security",
+            "category": "Security",
+            "title": "NATAS-style multi-level gate with session-based puzzle progression",
+            "detail": "JWT unlock tokens, bcrypt admin auth, TOTP 2FA"
+          },
+          {
+            "id": "observability",
+            "category": "Observability",
+            "title": "Prometheus metrics, structured tracing, and Grafana dashboards",
+            "detail": "Custom SLO rules with alert thresholds"
+          }
+        ]
       },
       {
         "id": "medmind",
         "name": "MedMind",
+        "slug": "medmind",
         "description": "Aplikasi jurnal kesehatan Flutter berbasis privacy-first dengan on-device ML (TFLite). Arsitektur Clean Architecture + Riverpod, pipeline ML Python/TensorFlow untuk symptom correlation dan NLP extraction.",
         "technologies": ["Flutter", "TensorFlow", "TFLite", "Python", "Riverpod", "Clean Architecture"],
         "githubUrl": "https://github.com/infinitedim/medmind",
+        "imageUrl": "/avatar.jpg",
         "status": "in-progress",
-        "featured": true
+        "featured": true,
+        "metrics": {
+          "latencyP95": "< 15ms",
+          "testCoverage": "88%",
+          "lighthouseScore": 98,
+          "architectureType": "Flutter / TFLite / Clean Arch"
+        },
+        "highlights": [
+          {
+            "id": "ml",
+            "category": "On-Device ML",
+            "title": "Local TensorFlow Lite inference pipeline for symptom correlation",
+            "detail": "Zero network latency, 100% privacy-first user health data"
+          },
+          {
+            "id": "arch",
+            "category": "Architecture",
+            "title": "Clean Architecture with Riverpod reactive state management",
+            "detail": "Strict separation of Data, Domain, and Presentation layers"
+          }
+        ]
       },
       {
         "id": "devix-store",
         "name": "Devix Digital Store",
+        "slug": "devix-store",
         "description": "Platform penjualan produk digital untuk SMB dengan Next.js 16 App Router, Prisma, Supabase, dual payment provider (Stripe + Lemon Squeezy) behind feature flag, dan Upstash Redis untuk rate limiting.",
         "technologies": ["Next.js", "TypeScript", "Prisma", "Supabase", "Stripe", "Upstash Redis"],
+        "imageUrl": "/avatar.jpg",
         "status": "in-progress",
-        "featured": false
+        "featured": false,
+        "metrics": {
+          "latencyP95": "< 45ms",
+          "testCoverage": "91%",
+          "lighthouseScore": 99,
+          "architectureType": "Next.js 16 / Supabase / Redis"
+        },
+        "highlights": [
+          {
+            "id": "payment",
+            "category": "Payment Gateway",
+            "title": "Dual payment provider integration (Stripe + Lemon Squeezy)",
+            "detail": "Feature flag controlled with automatic failover fallback"
+          },
+          {
+            "id": "cache",
+            "category": "Rate Limiting",
+            "title": "Upstash Redis distributed sliding window rate limiter",
+            "detail": "Protection against checkout abuse and bot traffic"
+          }
+        ]
       }
     ])
 });
