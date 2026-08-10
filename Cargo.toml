@@ -91,7 +91,7 @@ async-trait = "0.1"
 # generation; `qr` is intentionally NOT enabled — we ship the otpauth URI
 # and let the frontend render the QR code with a pure-JS library to avoid
 # pulling cairo/SVG dependencies into the Rust build.
-totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
 
 # Prometheus metrics
 metrics = "0.24"
