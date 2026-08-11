@@ -7,6 +7,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::db::{
@@ -202,8 +203,210 @@ pub struct SuccessResponse {
 }
 
 lazy_static::lazy_static! {
-
     static ref SLUG_REGEX: Regex = Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap();
+    static ref STATIC_BLOG_POSTS: Value = serde_json::json!([
+      {
+        "id": "c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+        "slug": "c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+        "title": {
+          "en_US": "Building High-Performance REST APIs with Rust and Axum",
+          "id_ID": "Membangun REST API Performa Tinggi dengan Rust dan Axum",
+          "ja_JP": "RustとAxumによる高性能REST APIの構築",
+          "de_DE": "Erstellen hochperformanter REST-APIs mit Rust und Axum",
+          "fr_FR": "Créer des API REST haute performance avec Rust et Axum",
+          "es_ES": "Construyendo APIs REST de Alto Rendimiento con Rust y Axum",
+          "zh_CN": "使用 Rust 和 Axum 构建高性能 REST API",
+          "ko_KR": "Rust 및 Axum을 사용한 고성능 REST API 구축",
+          "pt_BR": "Construindo APIs REST de Alto Desempenho com Rust e Axum",
+          "ru_RU": "Создание высокопроизводительных REST API на Rust и Axum"
+        },
+        "summary": {
+          "en_US": "An in-depth exploration of asynchronous Rust architecture, zero-cost abstractions, and P95 latency optimization using Axum 0.8.",
+          "id_ID": "Eksplorasi mendalam arsitektur async Rust, zero-cost abstraction, dan optimasi latensi P95 menggunakan Axum 0.8.",
+          "ja_JP": "Axum 0.8を使用した非同期Rustアーキテクチャ、ゼロコスト抽象化、およびP95レイテンシ最適化の深掘り。",
+          "de_DE": "Eine eingehende Untersuchung der asynchronen Rust-Architektur, Zero-Cost-Abstraktionen und P95-Latenzoptimierung mit Axum 0.8.",
+          "fr_FR": "Une exploration approfondie de l'architecture async Rust, des abstractions à coût nul et de l'optimisation de la latence P95 avec Axum 0.8.",
+          "es_ES": "Una exploración profunda de la arquitectura asíncrona de Rust, abstracciones de costo cero y optimización de latencia P95 usando Axum 0.8.",
+          "zh_CN": "深入探讨异步 Rust 架构、零成本抽象以及使用 Axum 0.8 进行 P95 延迟优化。",
+          "ko_KR": "Axum 0.8을 사용한 비동기 Rust 아키텍처, 제로 코스트 추상화 및 P95 지연 시간 최적화에 대한 심층 탐구.",
+          "pt_BR": "Uma exploração aprofundada da arquitetura Rust assíncrona, abstrações de custo zero e otimização de latência P95 usando Axum 0.8.",
+          "ru_RU": "Глубокий разбор асинхронной архитектуры Rust, абстракций нулевой стоимости и оптимизации P95-задержки с помощью Axum 0.8."
+        },
+        "contentHtml": {
+          "en_US": "<h2>Introduction to Axum 0.8</h2><p>Rust and Axum provide unmatched type safety, concurrency, and ultra-low memory overhead for modern microservices.</p><h3>Why Axum?</h3><p>Built on top of Hyper and Tower, Axum leverages Tokio async runtime to achieve sub-millisecond route handling.</p>",
+          "id_ID": "<h2>Pengenalan Axum 0.8</h2><p>Rust dan Axum memberikan keandalan type safety, konkurensi luar biasa, dan penggunaan memori ultra-rendah untuk microservices modern.</p><h3>Mengapa Axum?</h3><p>Dibuat di atas Hyper dan Tower, Axum memanfaatkan Tokio async runtime untuk menangani routing kurang dari 1 milidetik.</p>",
+          "ja_JP": "<h2>Axum 0.8の概要</h2><p>RustとAxumは、現代のマイクロサービス向けに比類のない型安全性、並行性、および非常に低いメモリオーバーヘッドを提供します。</p>",
+          "de_DE": "<h2>Einführung in Axum 0.8</h2><p>Rust und Axum bieten unübertroffene Typsicherheit, Nebenläufigkeit und extrem geringen Speicherverbrauch für moderne Microservices.</p>",
+          "fr_FR": "<h2>Introduction à Axum 0.8</h2><p>Rust et Axum offrent une sécurité de type inégalée, une concurrence et une surcharge mémoire ultra-faible pour les microservices modernes.</p>",
+          "es_ES": "<h2>Introducción a Axum 0.8</h2><p>Rust y Axum ofrecen seguridad de tipos inigualable, concurrencia y sobrecarga de memoria extremadamente baja para microservicios modernos.</p>",
+          "zh_CN": "<h2>Axum 0.8 简介</h2><p>Rust 和 Axum 为现代微服务提供无可比拟的类型安全、并发性能以及极低的内存开销。</p>",
+          "ko_KR": "<h2>Axum 0.8 소개</h2><p>Rust와 Axum은 현대적인 마이크로서비스를 위한 타의 추종을 불허하는 타입 안정성, 동시성 및 극도로 낮은 메모리 오버헤드를 제공합니다。</p>",
+          "pt_BR": "<h2>Introdução ao Axum 0.8</h2><p>Rust e Axum oferecem segurança de tipo inigualável, concorrência e baixíssimo consumo de memória para microsserviços modernos.</p>",
+          "ru_RU": "<h2>Введение в Axum 0.8</h2><p>Rust и Axum обеспечивают непревзойденную типобезопасность, параллелизм и ультранизкие накладные расходы по памяти для современных микросервисов.</p>"
+        },
+        "tags": ["Rust", "Axum", "Performance", "WebDev"],
+        "readingTimeMinutes": 5,
+        "createdAt": "2026-08-01T10:00:00Z"
+      },
+      {
+        "id": "d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
+        "slug": "d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
+        "title": {
+          "en_US": "Mastering Next.js 16 Partial Prerendering (PPR) and Web Vitals",
+          "id_ID": "Menguasai Partial Prerendering (PPR) dan Web Vitals di Next.js 16",
+          "ja_JP": "Next.js 16のPartial Prerendering (PPR)とWeb Vitalsを極める",
+          "de_DE": "Meisterung von Next.js 16 Partial Prerendering (PPR) und Web Vitals",
+          "fr_FR": "Maîtriser le Partial Prerendering (PPR) et les Web Vitals dans Next.js 16",
+          "es_ES": "Dominando Partial Prerendering (PPR) y Web Vitals en Next.js 16",
+          "zh_CN": "精通 Next.js 16 局部预渲染 (PPR) 与 Web Vitals 性能指标",
+          "ko_KR": "Next.js 16 부분 사전 렌더링(PPR) 및 Web Vitals 마스터하기",
+          "pt_BR": "Dominando o Prerendering Parcial (PPR) e Web Vitals no Next.js 16",
+          "ru_RU": "Освоение частичного пререндеринга (PPR) и Web Vitals в Next.js 16"
+        },
+        "summary": {
+          "en_US": "How to combine static layout shells with instant dynamic streaming to hit 100 Lighthouse scores and sub-50ms INP.",
+          "id_ID": "Cara menggabungkan static layout shell dengan instant dynamic streaming untuk mencapai skor Lighthouse 100 dan INP < 50ms.",
+          "ja_JP": "静的レイアウトシェルとインスタント動的ストリーミングを組み合わせて、Lighthouseスコア100と50ms未満のINPを達成する方法。",
+          "de_DE": "Wie man statische Layout-Shells mit dynamischem Instant-Streaming kombiniert, um 100 Lighthouse-Punkte und unter 50ms INP zu erreichen.",
+          "fr_FR": "Comment combiner des coques de mise en page statiques avec un streaming dynamique instantané pour atteindre 100 sur Lighthouse et un INP < 50ms.",
+          "es_ES": "Cómo combinar carcasas de diseño estáticas con streaming dinámico instantáneo para alcanzar 100 en Lighthouse y un INP menor a 50ms.",
+          "zh_CN": "如何将静态布局外壳与实时动态流式传输相结合，实现 100 分 Lighthouse 得分与低于 50ms 的 INP 指标。",
+          "ko_KR": "정적 레이아웃 셸과 즉각적인 동적 스트리밍을 결합하여 100점 Lighthouse 점수와 50ms 미만의 INP를 달성하는 방법.",
+          "pt_BR": "Como combinar shells de layout estáticos com streaming dinâmico instantâneo para atingir pontuação 100 no Lighthouse e INP abaixo de 50ms.",
+          "ru_RU": "Как объединить статические оболочки макета с мгновенным динамическим стримингом для достижения 100 баллов в Lighthouse и INP менее 50 мс."
+        },
+        "contentHtml": {
+          "en_US": "<h2>Understanding Partial Prerendering</h2><p>PPR combines the static shell speed of SSG with the flexibility of SSR in Next.js 16 App Router.</p><h3>Optimizing Core Web Vitals</h3><p>Leveraging React 19 Suspense boundaries ensures immediate LCP and zero Cumulative Layout Shift (CLS).</p>",
+          "id_ID": "<h2>Memahami Partial Prerendering</h2><p>PPR menggabungkan kecepatan static shell SSG dengan fleksibilitas SSR di Next.js 16 App Router.</p><h3>Mengoptimalkan Core Web Vitals</h3><p>Memanfaatkan React 19 Suspense boundary menjamin LCP instan dan zero Cumulative Layout Shift (CLS).</p>",
+          "ja_JP": "<h2>Partial Prerenderingの理解</h2><p>PPRはSSGの静的シェルの速度とNext.js 16 App RouterにおけるSSRの柔軟性を組み合わせます。</p>",
+          "de_DE": "<h2>Partial Prerendering verstehen</h2><p>PPR kombiniert die Geschwindigkeit statischer SSG-Shells mit der Flexibilität von SSR im Next.js 16 App Router.</p>",
+          "fr_FR": "<h2>Comprendre le Partial Prerendering</h2><p>Le PPR combine la vitesse des coques statiques SSG avec la flexibilité du SSR dans Next.js 16 App Router.</p>",
+          "es_ES": "<h2>Comprendiendo Partial Prerendering</h2><p>PPR combina la velocidad de la carcasa estática de SSG con la flexibilidad de SSR en Next.js 16 App Router.</p>",
+          "zh_CN": "<h2>理解局部预渲染 (PPR)</h2><p>PPR 将 SSG 的静态外壳加载速度与 Next.js 16 App Router 中 SSR 的灵活性完美结合。</p>",
+          "ko_KR": "<h2>부분 사전 렌더링 이해하기</h2><p>PPR은 SSG의 정적 셸 속도와 Next.js 16 App Router의 SSR 유연성을 결합합니다。</p>",
+          "pt_BR": "<h2>Entendendo o Prerendering Parcial</h2><p>O PPR combina a velocidade da shell estática do SSG com a flexibilidade do SSR no Next.js 16 App Router.</p>",
+          "ru_RU": "<h2>Понимание частичного пререндеринга</h2><p>PPR объединяет скорость статической оболочки SSG с гибкостью SSR в Next.js 16 App Router.</p>"
+        },
+        "tags": ["Next.js", "React", "Frontend", "PPR", "WebDev"],
+        "readingTimeMinutes": 4,
+        "createdAt": "2026-08-05T14:30:00Z"
+      }
+    ]);
+}
+
+fn resolve_blog_locale_string(jsonb: &Value, locale: &str) -> String {
+    if let Some(s) = jsonb.get(locale).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    let short_code = locale.split(&['_', '-'][..]).next().unwrap_or(locale);
+    if let Some(s) = jsonb.get(short_code).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    if let Some(obj) = jsonb.as_object() {
+        for (k, v) in obj {
+            if k.starts_with(short_code) || short_code.starts_with(k) {
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    if let Some(s) = jsonb.get("en_US").or_else(|| jsonb.get("en")).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    if let Some(obj) = jsonb.as_object() {
+        if let Some((_, v)) = obj.iter().next() {
+            if let Some(s) = v.as_str() {
+                return s.to_string();
+            }
+        }
+    }
+    jsonb.as_str().unwrap_or_default().to_string()
+}
+
+pub fn get_static_blog_posts(locale: &str) -> Vec<BlogPostSummary> {
+    if std::env::var("ENVIRONMENT").as_deref() == Ok("production") {
+        return Vec::new();
+    }
+    STATIC_BLOG_POSTS
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|post| {
+                    let title = resolve_blog_locale_string(&post["title"], locale);
+                    let summary = resolve_blog_locale_string(&post["summary"], locale);
+                    BlogPostSummary {
+                        id: Uuid::parse_str(post["id"].as_str().unwrap()).unwrap(),
+                        title,
+                        slug: post["slug"].as_str().unwrap().to_string(),
+                        summary: Some(summary),
+                        published: true,
+                        tags: post["tags"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|t| t.as_str().unwrap().to_string())
+                            .collect(),
+                        reading_time_minutes: post["readingTimeMinutes"].as_i64().unwrap_or(5) as i32,
+                        publish_at: None,
+                        status: BlogStatus::Published,
+                        locale: locale.to_string(),
+                        translation_group_id: None,
+                        translation_status: "published".to_string(),
+                        reviewed_at: None,
+                        reviewed_by: None,
+                        series_id: None,
+                        series_order: None,
+                        created_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+                        updated_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn get_static_blog_post_detail(slug: &str, locale: &str) -> Option<BlogPostResponse> {
+    if std::env::var("ENVIRONMENT").as_deref() == Ok("production") {
+        return None;
+    }
+    let arr = STATIC_BLOG_POSTS.as_array()?;
+    let post = arr.iter().find(|p| {
+        p["slug"].as_str() == Some(slug) || p["id"].as_str() == Some(slug)
+    })?;
+
+    let title = resolve_blog_locale_string(&post["title"], locale);
+    let summary = resolve_blog_locale_string(&post["summary"], locale);
+    let content_html = resolve_blog_locale_string(&post["contentHtml"], locale);
+
+    Some(BlogPostResponse {
+        id: Uuid::parse_str(post["id"].as_str().unwrap()).unwrap(),
+        title,
+        slug: post["slug"].as_str().unwrap().to_string(),
+        summary: Some(summary),
+        content_md: None,
+        content_html: Some(content_html),
+        published: true,
+        tags: post["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t.as_str().unwrap().to_string())
+            .collect(),
+        reading_time_minutes: post["readingTimeMinutes"].as_i64().unwrap_or(5) as i32,
+        view_count: 42,
+        publish_at: None,
+        status: BlogStatus::Published,
+        locale: locale.to_string(),
+        series_id: None,
+        series_order: None,
+        translation_group_id: None,
+        translation_status: "published".to_string(),
+        reviewed_at: None,
+        reviewed_by: None,
+        created_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+        updated_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+    })
 }
 
 pub fn is_valid_slug(slug: &str) -> bool {
@@ -377,7 +580,35 @@ pub async fn list_posts(
     headers: HeaderMap,
     Query(query): Query<BlogListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            if std::env::var("ENVIRONMENT").as_deref() != Ok("production") {
+                let req_locale = query.locale.as_deref().unwrap_or("en_US");
+                let static_items = get_static_blog_posts(req_locale);
+                let total = static_items.len() as i64;
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    axum::http::header::CACHE_CONTROL,
+                    "public, max-age=60, stale-while-revalidate=30"
+                        .parse()
+                        .unwrap(),
+                );
+                return Ok((
+                    StatusCode::OK,
+                    headers,
+                    Json(BlogListResponse {
+                        items: static_items,
+                        page: 1,
+                        page_size: 10,
+                        total,
+                    }),
+                )
+                    .into_response());
+            }
+            return Err(AppError::DbUnavailable);
+        }
+    };
 
     let is_admin = require_admin(&headers).is_ok();
     let page_size = query.page_size.clamp(1, 100);
@@ -436,32 +667,44 @@ pub async fn list_posts(
     )
     .await?;
 
-    let items: Vec<BlogPostSummary> = posts
-        .into_iter()
-        .map(|p| {
-            let status = p.status();
-            BlogPostSummary {
-                id: p.id,
-                title: p.title,
-                slug: p.slug,
-                summary: p.summary,
-                published: p.published,
-                tags: p.tags,
-                reading_time_minutes: p.reading_time_minutes,
-                publish_at: p.publish_at,
-                status,
-                locale: p.locale,
-                translation_group_id: p.translation_group_id,
-                translation_status: p.translation_status,
-                reviewed_at: p.reviewed_at,
-                reviewed_by: p.reviewed_by,
-                series_id: p.series_id,
-                series_order: p.series_order,
-                created_at: p.created_at,
-                updated_at: p.updated_at,
-            }
-        })
-        .collect();
+    let (items, final_total) = if posts.is_empty()
+        && std::env::var("ENVIRONMENT").as_deref() != Ok("production")
+    {
+        let req_locale = query.locale.as_deref().unwrap_or("en_US");
+        let static_posts = get_static_blog_posts(req_locale);
+        let count = static_posts.len() as i64;
+        (static_posts, count)
+    } else {
+        (
+            posts
+                .into_iter()
+                .map(|p| {
+                    let status = p.status();
+                    BlogPostSummary {
+                        id: p.id,
+                        title: p.title,
+                        slug: p.slug,
+                        summary: p.summary,
+                        published: p.published,
+                        tags: p.tags,
+                        reading_time_minutes: p.reading_time_minutes,
+                        publish_at: p.publish_at,
+                        status,
+                        locale: p.locale,
+                        translation_group_id: p.translation_group_id,
+                        translation_status: p.translation_status,
+                        reviewed_at: p.reviewed_at,
+                        reviewed_by: p.reviewed_by,
+                        series_id: p.series_id,
+                        series_order: p.series_order,
+                        created_at: p.created_at,
+                        updated_at: p.updated_at,
+                    }
+                })
+                .collect(),
+            total,
+        )
+    };
 
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -478,7 +721,7 @@ pub async fn list_posts(
             items,
             page,
             page_size,
-            total,
+            total: final_total,
         }),
     )
         .into_response())
@@ -565,6 +808,18 @@ pub async fn get_post(
     let pool = match db::get_pool() {
         Some(p) => p,
         None => {
+            if std::env::var("ENVIRONMENT").as_deref() != Ok("production") {
+                if let Some(post) = get_static_blog_post_detail(&slug, &locale) {
+                    let mut res_headers = axum::http::HeaderMap::new();
+                    res_headers.insert(
+                        axum::http::header::CACHE_CONTROL,
+                        "public, max-age=60, stale-while-revalidate=30"
+                            .parse()
+                            .unwrap(),
+                    );
+                    return (StatusCode::OK, res_headers, Json(post)).into_response();
+                }
+            }
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
@@ -645,24 +900,52 @@ pub async fn get_post(
                     res_headers.insert("X-Translation-Fallback", "en".parse().unwrap());
                     (StatusCode::OK, res_headers, Json(post_to_response(post))).into_response()
                 }
-                _ => (
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: "Not found".to_string(),
-                        message: None,
-                    }),
-                )
-                    .into_response(),
+                _ => {
+                    if std::env::var("ENVIRONMENT").as_deref() != Ok("production") {
+                        if let Some(post) = get_static_blog_post_detail(&slug, &locale) {
+                            let mut res_headers = axum::http::HeaderMap::new();
+                            res_headers.insert(
+                                axum::http::header::CACHE_CONTROL,
+                                "public, max-age=60, stale-while-revalidate=30"
+                                    .parse()
+                                    .unwrap(),
+                            );
+                            return (StatusCode::OK, res_headers, Json(post)).into_response();
+                        }
+                    }
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(ErrorResponse {
+                            error: "Not found".to_string(),
+                            message: None,
+                        }),
+                    )
+                        .into_response()
+                }
             }
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Not found".to_string(),
-                message: None,
-            }),
-        )
-            .into_response(),
+        Ok(None) => {
+            if std::env::var("ENVIRONMENT").as_deref() != Ok("production") {
+                if let Some(post) = get_static_blog_post_detail(&slug, &locale) {
+                    let mut res_headers = axum::http::HeaderMap::new();
+                    res_headers.insert(
+                        axum::http::header::CACHE_CONTROL,
+                        "public, max-age=60, stale-while-revalidate=30"
+                            .parse()
+                            .unwrap(),
+                    );
+                    return (StatusCode::OK, res_headers, Json(post)).into_response();
+                }
+            }
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Not found".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
         Err(e) => {
             tracing::error!("Database error fetching blog post: {}", e);
             (
@@ -2586,5 +2869,23 @@ mod tests {
             get_status_body(app.clone(), "/api/blog?sort=updated&published=true").await;
         let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(!res.items.is_empty());
+    }
+
+    #[test]
+    fn test_static_blog_posts_locale() {
+        std::env::remove_var("ENVIRONMENT");
+        let id_posts = get_static_blog_posts("id_ID");
+        assert_eq!(id_posts.len(), 2);
+        assert!(id_posts[0].title.contains("Membangun REST API"));
+
+        let ja_posts = get_static_blog_posts("ja_JP");
+        assert_eq!(ja_posts.len(), 2);
+        assert!(ja_posts[0].title.contains("RustとAxumによる高性能"));
+
+        let detail = get_static_blog_post_detail("c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c", "de_DE").unwrap();
+        assert!(detail.title.contains("Erstellen hochperformanter REST-APIs"));
+
+        let fallback_detail = get_static_blog_post_detail("d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d", "unknown").unwrap();
+        assert!(fallback_detail.title.contains("Mastering Next.js 16"));
     }
 }

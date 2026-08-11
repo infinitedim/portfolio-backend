@@ -132,10 +132,21 @@ pub fn is_valid_section(section: &str) -> bool {
 static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
     serde_json::json!([
       {
-        "id": "terminal-portfolio",
+        "id": "e829a2b4-5f1d-4c3e-9b2a-8f7e6d5c4b3a",
         "name": "Terminal Portfolio",
-        "slug": "portfolio-v2",
-        "description": "Portfolio interaktif bergaya terminal dengan Next.js 16, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
+        "slug": "e829a2b4-5f1d-4c3e-9b2a-8f7e6d5c4b3a",
+        "description": {
+          "en_US": "Interactive terminal-style portfolio with Next.js 16, Rust/Axum backend, OverTheWire Natas-inspired gate system, and complete observability stack (Grafana, Loki, Prometheus).",
+          "id_ID": "Portfolio interaktif bergaya terminal dengan Next.js 16, Rust/Axum backend, gate system berbasis OverTheWire Natas, dan observability stack lengkap (Grafana, Loki, Prometheus).",
+          "ja_JP": "Next.js 16、Rust/Axumバックエンド、OverTheWire Natasにインスパイアされたゲートシステム、完全なオブザーバビリティスタック（Grafana、Loki、Prometheus）を備えたインタラクティブなターミナル風ポートフォリオ。",
+          "de_DE": "Interaktives Portfolio im Terminal-Stil mit Next.js 16, Rust/Axum-Backend, OverTheWire Natas-inspiriertem Gate-System und vollständigem Observability-Stack (Grafana, Loki, Prometheus).",
+          "fr_FR": "Portfolio interactif au style terminal avec Next.js 16, backend Rust/Axum, système de porte inspiré d'OverTheWire Natas et pile d'observabilité complète (Grafana, Loki, Prometheus).",
+          "es_ES": "Portafolio interactivo al estilo terminal con Next.js 16, backend de Rust/Axum, sistema de puerta inspirado en OverTheWire Natas y pila completa de observabilidad (Grafana, Loki, Prometheus).",
+          "zh_CN": "交互式终端风格作品集，整合 Next.js 16、Rust/Axum 后端、受 OverTheWire Natas 启发的关卡解密系统以及完整的可观测性技术栈（Grafana、Loki、Prometheus）。",
+          "ko_KR": "Next.js 16, Rust/Axum 백엔드, OverTheWire Natas에서 영감을 받은 게이트 시스템, 완전한 관찰 가능성 스택(Grafana, Loki, Prometheus)을 갖춘 대화형 터미널 스타일 포트폴리오.",
+          "pt_BR": "Portfólio interativo no estilo terminal com Next.js 16, backend Rust/Axum, sistema de portão inspirado no OverTheWire Natas e pilha completa de observabilidade (Grafana, Loki, Prometheus).",
+          "ru_RU": "Интерактивное портфолио в стиле терминала с Next.js 16, бэкендом на Rust/Axum, гейт-системой в стиле OverTheWire Natas и полным стеком наблюдаемости (Grafana, Loki, Prometheus)."
+        },
         "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Redis", "Grafana", "Loki", "Prometheus", "Tailwind CSS"],
         "demoUrl": "https://infinitedim.dev",
         "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
@@ -176,10 +187,21 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
         ]
       },
       {
-        "id": "medmind",
+        "id": "f930b3c5-6a2e-4d4f-ac3b-9a8b7c6d5e4b",
         "name": "MedMind",
-        "slug": "medmind",
-        "description": "Aplikasi jurnal kesehatan Flutter berbasis privacy-first dengan on-device ML (TFLite). Arsitektur Clean Architecture + Riverpod, pipeline ML Python/TensorFlow untuk symptom correlation dan NLP extraction.",
+        "slug": "f930b3c5-6a2e-4d4f-ac3b-9a8b7c6d5e4b",
+        "description": {
+          "en_US": "Privacy-first Flutter health journal app powered by on-device ML (TFLite). Built with Clean Architecture + Riverpod, with Python/TensorFlow ML pipelines for symptom correlation and NLP extraction.",
+          "id_ID": "Aplikasi jurnal kesehatan Flutter berbasis privacy-first dengan on-device ML (TFLite). Arsitektur Clean Architecture + Riverpod, pipeline ML Python/TensorFlow untuk symptom correlation dan NLP extraction.",
+          "ja_JP": "オンデバイスML（TFLite）を搭載したプライバシーファーストのFlutter健康日記アプリ。Clean Architecture + Riverpod、症状の相関分析やNLP抽出を行うPython/TensorFlowパイプラインで構築。",
+          "de_DE": "Datenschutzorientierte Flutter-Gesundheits-Journal-App mit On-Device ML (TFLite). Entwickelt mit Clean Architecture + Riverpod sowie Python/TensorFlow ML-Pipelines für Symptomkorrelation und NLP-Extraktion.",
+          "fr_FR": "Application de journal de santé Flutter axée sur la confidentialité, propulsée par l'apprentissage automatique sur appareil (TFLite). Conçue avec Clean Architecture + Riverpod et des pipelines ML Python/TensorFlow pour la corrélation des symptômes et l'extraction NLP.",
+          "es_ES": "Aplicación de diario de salud en Flutter orientada a la privacidad impulsada por ML en dispositivo (TFLite). Construida con Clean Architecture + Riverpod y pipelines de ML en Python/TensorFlow para correlación de síntomas y extracción NLP.",
+          "zh_CN": "注重隐私的 Flutter 健康日志应用，由端侧机器学习（TFLite）驱动。采用 Clean Architecture + Riverpod 架构，结合 Python/TensorFlow 机器学习管道实现症状相关性分析和 NLP 文本提取。",
+          "ko_KR": "온디바이스 ML(TFLite)을 탑재한 프라이버시 중심의 Flutter 건강 일기 앱. 증상 상관관계 분석 및 NLP 추출을 위한 Python/TensorFlow ML 파이프라인과 Clean Architecture + Riverpod으로 구축.",
+          "pt_BR": "Aplicativo de diário de saúde em Flutter focado em privacidade, alimentado por ML no dispositivo (TFLite). Construído com Clean Architecture + Riverpod e pipelines de ML em Python/TensorFlow para correlação de sintomas e extração de PNL.",
+          "ru_RU": "Приложение для дневника здоровья на Flutter с фокусом на конфиденциальность на базе локального машинного обучения (TFLite). Построено на Clean Architecture + Riverpod с пайплайнами Python/TensorFlow для корреляции симптомов и NLP-экстракции."
+        },
         "technologies": ["Flutter", "TensorFlow", "TFLite", "Python", "Riverpod", "Clean Architecture"],
         "githubUrl": "https://github.com/infinitedim/medmind",
         "imageUrl": "/avatar.jpg",
@@ -207,10 +229,21 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
         ]
       },
       {
-        "id": "devix-store",
+        "id": "a041c4d6-7b3f-4e50-bd4c-0b9c8d7e6f5c",
         "name": "Devix Digital Store",
-        "slug": "devix-store",
-        "description": "Platform penjualan produk digital untuk SMB dengan Next.js 16 App Router, Prisma, Supabase, dual payment provider (Stripe + Lemon Squeezy) behind feature flag, dan Upstash Redis untuk rate limiting.",
+        "slug": "a041c4d6-7b3f-4e50-bd4c-0b9c8d7e6f5c",
+        "description": {
+          "en_US": "Digital product storefront platform for SMBs with Next.js 16 App Router, Prisma, Supabase, dual payment provider integration (Stripe + Lemon Squeezy) behind feature flags, and Upstash Redis rate limiting.",
+          "id_ID": "Platform penjualan produk digital untuk SMB dengan Next.js 16 App Router, Prisma, Supabase, dual payment provider (Stripe + Lemon Squeezy) behind feature flag, dan Upstash Redis untuk rate limiting.",
+          "ja_JP": "Next.js 16 App Router、Prisma、Supabase、フィーチャーフラグ制御のデュアル決済プロバイダー（Stripe + Lemon Squeezy）、Upstash Redisによるレート制限を備えた中小企業向けデジタル商品販売プラットフォーム。",
+          "de_DE": "Digitale Produkt-Storefront-Plattform für KMUs mit Next.js 16 App Router, Prisma, Supabase, dualer Zahlungsanbieter-Integration (Stripe + Lemon Squeezy) über Feature-Flags und Upstash Redis-Ratenbegrenzung.",
+          "fr_FR": "Plateforme de vente de produits numériques pour PME avec Next.js 16 App Router, Prisma, Supabase, double fournisseur de paiement (Stripe + Lemon Squeezy) sous feature flags et limitation de débit Upstash Redis.",
+          "es_ES": "Plataforma de tienda de productos digitales para PyMEs con Next.js 16 App Router, Prisma, Supabase, integración dual de proveedores de pago (Stripe + Lemon Squeezy) con feature flags y limitación de tasa con Upstash Redis.",
+          "zh_CN": "面向中小企业的数字产品销售平台，基于 Next.js 16 App Router、Prisma、Supabase 构建，集成双支付提供商（Stripe + Lemon Squeezy）特性开关以及 Upstash Redis 分布式限流。",
+          "ko_KR": "Next.js 16 App Router, Prisma, Supabase, 피처 플래그 기반 이중 결제 대행사(Stripe + Lemon Squeezy) 연동, Upstash Redis 속도 제한을 갖춘 중소기업용 디지털 제품 판매 플랫폼.",
+          "pt_BR": "Plataforma de loja de produtos digitais para PMEs com Next.js 16 App Router, Prisma, Supabase, integração dupla de provedores de pagamento (Stripe + Lemon Squeezy) controlada por feature flags e limitação de taxa com Upstash Redis.",
+          "ru_RU": "Платформа интернет-магазина цифровых продуктов для малого бизнеса на Next.js 16 App Router, Prisma, Supabase с интеграцией двух платежных провайдеров (Stripe + Lemon Squeezy) под фича-флагами и ограничением запросов через Upstash Redis."
+        },
         "technologies": ["Next.js", "TypeScript", "Prisma", "Supabase", "Stripe", "Upstash Redis"],
         "imageUrl": "/avatar.jpg",
         "status": "in-progress",
@@ -370,6 +403,8 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
             Ok(Some(section)) => {
                 let final_data = if section_key == "about" {
                     resolve_about_locale(&section.content, req_locale)
+                } else if section_key == "projects" {
+                    resolve_projects_locale(&section.content, req_locale)
                 } else {
                     section.content
                 };
@@ -407,6 +442,8 @@ pub async fn get_portfolio(Query(query): Query<PortfolioQuery>) -> impl IntoResp
         Some(data) => {
             let final_data = if section_key == "about" {
                 resolve_about_locale(&data, req_locale)
+            } else if section_key == "projects" {
+                resolve_projects_locale(&data, req_locale)
             } else {
                 data
             };
@@ -850,15 +887,29 @@ fn resolve_experience_locale(exp: &db::models::PortfolioExperience, locale: &str
 }
 
 fn resolve_locale_string(jsonb: &Value, locale: &str) -> String {
-    // Try exact locale
+    // 1. Try exact match (e.g. "id_ID" or "id")
     if let Some(s) = jsonb.get(locale).and_then(|v| v.as_str()) {
         return s.to_string();
     }
-    // Fallback to en_US
-    if let Some(s) = jsonb.get("en_US").and_then(|v| v.as_str()) {
+    // 2. Try short code match (e.g. if locale is "id_ID", try "id", or if "id", try "id_ID")
+    let short_code = locale.split(&['_', '-'][..]).next().unwrap_or(locale);
+    if let Some(s) = jsonb.get(short_code).and_then(|v| v.as_str()) {
         return s.to_string();
     }
-    // Fallback to first available
+    if let Some(obj) = jsonb.as_object() {
+        for (k, v) in obj {
+            if k.starts_with(short_code) || short_code.starts_with(k) {
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    // 3. Fallback to en_US / en
+    if let Some(s) = jsonb.get("en_US").or_else(|| jsonb.get("en")).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    // 4. Fallback to first available value in object
     if let Some(obj) = jsonb.as_object() {
         if let Some((_, v)) = obj.iter().next() {
             if let Some(s) = v.as_str() {
@@ -866,8 +917,71 @@ fn resolve_locale_string(jsonb: &Value, locale: &str) -> String {
             }
         }
     }
-    // If the value itself is a plain string (non-JSONB migrated data)
+    // 5. If plain string
     jsonb.as_str().unwrap_or_default().to_string()
+}
+
+pub fn resolve_projects_locale(content: &Value, locale: &str) -> Value {
+    if let Some(arr) = content.as_array() {
+        let resolved_projects: Vec<Value> = arr
+            .iter()
+            .map(|proj| {
+                if let Some(obj) = proj.as_object() {
+                    let mut resolved = obj.clone();
+                    if let Some(desc) = obj.get("description") {
+                        resolved.insert(
+                            "description".to_string(),
+                            Value::String(resolve_locale_string(desc, locale)),
+                        );
+                    }
+                    if let Some(name) = obj.get("name") {
+                        resolved.insert(
+                            "name".to_string(),
+                            Value::String(resolve_locale_string(name, locale)),
+                        );
+                    }
+                    if let Some(highlights) = obj.get("highlights").and_then(|h| h.as_array()) {
+                        let resolved_h: Vec<Value> = highlights
+                            .iter()
+                            .map(|h_item| {
+                                if let Some(h_obj) = h_item.as_object() {
+                                    let mut r_h = h_obj.clone();
+                                    if let Some(cat) = h_obj.get("category") {
+                                        r_h.insert(
+                                            "category".to_string(),
+                                            Value::String(resolve_locale_string(cat, locale)),
+                                        );
+                                    }
+                                    if let Some(title) = h_obj.get("title") {
+                                        r_h.insert(
+                                            "title".to_string(),
+                                            Value::String(resolve_locale_string(title, locale)),
+                                        );
+                                    }
+                                    if let Some(detail) = h_obj.get("detail") {
+                                        r_h.insert(
+                                            "detail".to_string(),
+                                            Value::String(resolve_locale_string(detail, locale)),
+                                        );
+                                    }
+                                    Value::Object(r_h)
+                                } else {
+                                    h_item.clone()
+                                }
+                            })
+                            .collect();
+                        resolved.insert("highlights".to_string(), Value::Array(resolved_h));
+                    }
+                    Value::Object(resolved)
+                } else {
+                    proj.clone()
+                }
+            })
+            .collect();
+        Value::Array(resolved_projects)
+    } else {
+        content.clone()
+    }
 }
 
 pub fn resolve_about_locale(content: &Value, locale: &str) -> Value {
@@ -1773,5 +1887,26 @@ mod tests {
 
         let (_, body) = get_json::<PortfolioResponse>(app, "/api/portfolio?section=skills").await;
         assert_eq!(body.data, Some(v1));
+    }
+
+    #[test]
+    fn test_resolve_projects_locale() {
+        let projects_data = get_static_data("projects").unwrap();
+
+        let id_res = resolve_projects_locale(&projects_data, "id_ID");
+        let id_desc = id_res[0]["description"].as_str().unwrap();
+        assert!(id_desc.contains("Portfolio interaktif bergaya terminal"));
+
+        let ja_res = resolve_projects_locale(&projects_data, "ja_JP");
+        let ja_desc = ja_res[0]["description"].as_str().unwrap();
+        assert!(ja_desc.contains("ターミナル風ポートフォリオ"));
+
+        let de_res = resolve_projects_locale(&projects_data, "de_DE");
+        let de_desc = de_res[0]["description"].as_str().unwrap();
+        assert!(de_desc.contains("Interaktives Portfolio im Terminal-Stil"));
+
+        let fallback_res = resolve_projects_locale(&projects_data, "unknown_LOCALE");
+        let fallback_desc = fallback_res[0]["description"].as_str().unwrap();
+        assert!(fallback_desc.contains("Interactive terminal-style portfolio"));
     }
 }
