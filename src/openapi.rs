@@ -158,6 +158,9 @@ impl Modify for SecurityAddon {
         // GitHub
         routes::github::get_user,
         routes::github::get_stats,
+        routes::github::get_repo_commits,
+        routes::github::get_commit_detail,
+        routes::github::get_repo_branches,
     ),
     components(schemas(
         crate::metrics::PageviewRequest,
@@ -166,6 +169,11 @@ impl Modify for SecurityAddon {
         routes::github::GitHubStatsResponse,
         routes::github::GitHubRepoSummary,
         routes::github::GitHubProfileStats,
+        routes::github::GitHubCommitSummary,
+        routes::github::GitHubCommitDetail,
+        routes::github::GitHubCommitStats,
+        routes::github::GitHubCommitFile,
+        routes::github::GitHubBranchResponse,
         routes::upload::UploadResponse,
         routes::upload::ImageInfo,
         routes::upload::ImageListResponse,

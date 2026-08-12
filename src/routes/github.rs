@@ -1,8 +1,11 @@
-//! GitHub API proxy with in-memory caching and optional `GH_TOKEN` auth.
-
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, Query},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -59,6 +62,16 @@ fn is_valid_username(username: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
+
+fn is_valid_repo_identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+
 
 async fn github_fetch_raw(path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{GITHUB_API}{path}");
@@ -280,9 +293,332 @@ pub async fn get_stats(Path(username): Path<String>) -> impl IntoResponse {
     (StatusCode::OK, Json(stats)).into_response()
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CommitQuery {
+    pub sha: Option<String>,
+    pub per_page: Option<u32>,
+    pub page: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCommitSummary {
+    pub sha: String,
+    pub short_sha: String,
+    pub message: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub author_avatar: Option<String>,
+    pub author_login: Option<String>,
+    pub author_url: Option<String>,
+    pub html_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCommitStats {
+    pub additions: u32,
+    pub deletions: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCommitFile {
+    pub filename: String,
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub changes: u32,
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCommitDetail {
+    pub sha: String,
+    pub short_sha: String,
+    pub message: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub author_avatar: Option<String>,
+    pub author_login: Option<String>,
+    pub author_url: Option<String>,
+    pub html_url: String,
+    pub stats: Option<GitHubCommitStats>,
+    pub files: Option<Vec<GitHubCommitFile>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubBranchResponse {
+    pub name: String,
+    pub commit_sha: String,
+    pub protected: bool,
+}
+
+/// GET /api/github/repos/:owner/:repo/commits
+#[utoipa::path(
+    get,
+    path = "/api/github/repos/{owner}/{repo}/commits",
+    tag = "GitHub",
+    params(
+        ("owner" = String, Path, description = "Repository owner"),
+        ("repo" = String, Path, description = "Repository name"),
+        CommitQuery
+    ),
+    responses(
+        (status = 200, description = "List of repository commits", body = [GitHubCommitSummary]),
+        (status = 400, description = "Invalid owner or repo name", body = crate::routes::ErrorResponse),
+        (status = 404, description = "Repository not found", body = crate::routes::ErrorResponse),
+    )
+)]
+pub async fn get_repo_commits(
+    Path((owner, repo)): Path<(String, String)>,
+    Query(params): Query<CommitQuery>,
+) -> impl IntoResponse {
+    let owner = owner.trim();
+    let repo = repo.trim();
+    if !is_valid_username(owner) || !is_valid_repo_identifier(repo) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid owner or repository name" })),
+        )
+            .into_response();
+    }
+
+    let per_page = params.per_page.unwrap_or(20).min(100);
+    let page = params.page.unwrap_or(1);
+    let mut path = format!("/repos/{owner}/{repo}/commits?per_page={per_page}&page={page}");
+    if let Some(ref sha) = params.sha {
+        if !sha.is_empty()
+            && sha
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
+        {
+            path.push_str(&format!("&sha={sha}"));
+        }
+    }
+
+    match github_get(&path).await {
+        Ok(raw) => {
+            let items = raw.as_array().cloned().unwrap_or_default();
+            let summaries: Vec<GitHubCommitSummary> = items
+                .iter()
+                .map(|item| {
+                    let sha = item["sha"].as_str().unwrap_or_default().to_string();
+                    let short_sha = if sha.len() >= 7 {
+                        sha[..7].to_string()
+                    } else {
+                        sha.clone()
+                    };
+                    let message = item["commit"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let author_name = item["commit"]["author"]["name"]
+                        .as_str()
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let author_email = item["commit"]["author"]["email"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let author_date = item["commit"]["author"]["date"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let author_avatar = item["author"]["avatar_url"].as_str().map(str::to_string);
+                    let author_login = item["author"]["login"].as_str().map(str::to_string);
+                    let author_url = item["author"]["html_url"].as_str().map(str::to_string);
+                    let html_url = item["html_url"].as_str().unwrap_or_default().to_string();
+
+                    GitHubCommitSummary {
+                        sha,
+                        short_sha,
+                        message,
+                        author_name,
+                        author_email,
+                        author_date,
+                        author_avatar,
+                        author_login,
+                        author_url,
+                        html_url,
+                    }
+                })
+                .collect();
+
+            (StatusCode::OK, Json(summaries)).into_response()
+        }
+        Err((status, json)) => (status, json).into_response(),
+    }
+}
+
+/// GET /api/github/repos/:owner/:repo/commits/:ref_id
+#[utoipa::path(
+    get,
+    path = "/api/github/repos/{owner}/{repo}/commits/{ref_id}",
+    tag = "GitHub",
+    params(
+        ("owner" = String, Path, description = "Repository owner"),
+        ("repo" = String, Path, description = "Repository name"),
+        ("ref_id" = String, Path, description = "Commit SHA or ref"),
+    ),
+    responses(
+        (status = 200, description = "Detailed commit information", body = GitHubCommitDetail),
+        (status = 400, description = "Invalid parameters", body = crate::routes::ErrorResponse),
+        (status = 404, description = "Commit not found", body = crate::routes::ErrorResponse),
+    )
+)]
+pub async fn get_commit_detail(
+    Path((owner, repo, ref_id)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    let owner = owner.trim();
+    let repo = repo.trim();
+    let ref_id = ref_id.trim();
+
+    if !is_valid_username(owner)
+        || !is_valid_repo_identifier(repo)
+        || !is_valid_repo_identifier(ref_id)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid owner, repo, or ref" })),
+        )
+            .into_response();
+    }
+
+    let path = format!("/repos/{owner}/{repo}/commits/{ref_id}");
+    match github_get(&path).await {
+        Ok(raw) => {
+            let sha = raw["sha"].as_str().unwrap_or_default().to_string();
+            let short_sha = if sha.len() >= 7 {
+                sha[..7].to_string()
+            } else {
+                sha.clone()
+            };
+            let message = raw["commit"]["message"].as_str().unwrap_or_default().to_string();
+            let author_name = raw["commit"]["author"]["name"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string();
+            let author_email = raw["commit"]["author"]["email"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let author_date = raw["commit"]["author"]["date"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let author_avatar = raw["author"]["avatar_url"].as_str().map(str::to_string);
+            let author_login = raw["author"]["login"].as_str().map(str::to_string);
+            let author_url = raw["author"]["html_url"].as_str().map(str::to_string);
+            let html_url = raw["html_url"].as_str().unwrap_or_default().to_string();
+
+            let stats = raw.get("stats").map(|s| GitHubCommitStats {
+                additions: s["additions"].as_u64().unwrap_or(0) as u32,
+                deletions: s["deletions"].as_u64().unwrap_or(0) as u32,
+                total: s["total"].as_u64().unwrap_or(0) as u32,
+            });
+
+            let files = raw.get("files").and_then(|f| f.as_array()).map(|arr| {
+                arr.iter()
+                    .map(|f| GitHubCommitFile {
+                        filename: f["filename"].as_str().unwrap_or_default().to_string(),
+                        status: f["status"].as_str().unwrap_or_default().to_string(),
+                        additions: f["additions"].as_u64().unwrap_or(0) as u32,
+                        deletions: f["deletions"].as_u64().unwrap_or(0) as u32,
+                        changes: f["changes"].as_u64().unwrap_or(0) as u32,
+                        patch: f["patch"].as_str().map(str::to_string),
+                    })
+                    .collect()
+            });
+
+            let detail = GitHubCommitDetail {
+                sha,
+                short_sha,
+                message,
+                author_name,
+                author_email,
+                author_date,
+                author_avatar,
+                author_login,
+                author_url,
+                html_url,
+                stats,
+                files,
+            };
+
+            (StatusCode::OK, Json(detail)).into_response()
+        }
+        Err((status, json)) => (status, json).into_response(),
+    }
+}
+
+/// GET /api/github/repos/:owner/:repo/branches
+#[utoipa::path(
+    get,
+    path = "/api/github/repos/{owner}/{repo}/branches",
+    tag = "GitHub",
+    params(
+        ("owner" = String, Path, description = "Repository owner"),
+        ("repo" = String, Path, description = "Repository name"),
+    ),
+    responses(
+        (status = 200, description = "List of repository branches", body = [GitHubBranchResponse]),
+        (status = 400, description = "Invalid owner or repo", body = crate::routes::ErrorResponse),
+        (status = 404, description = "Repository not found", body = crate::routes::ErrorResponse),
+    )
+)]
+pub async fn get_repo_branches(
+    Path((owner, repo)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let owner = owner.trim();
+    let repo = repo.trim();
+
+    if !is_valid_username(owner) || !is_valid_repo_identifier(repo) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid owner or repository name" })),
+        )
+            .into_response();
+    }
+
+    let path = format!("/repos/{owner}/{repo}/branches?per_page=100");
+    match github_get(&path).await {
+        Ok(raw) => {
+            let items = raw.as_array().cloned().unwrap_or_default();
+            let branches: Vec<GitHubBranchResponse> = items
+                .iter()
+                .map(|b| GitHubBranchResponse {
+                    name: b["name"].as_str().unwrap_or_default().to_string(),
+                    commit_sha: b["commit"]["sha"].as_str().unwrap_or_default().to_string(),
+                    protected: b["protected"].as_bool().unwrap_or(false),
+                })
+                .collect();
+
+            (StatusCode::OK, Json(branches)).into_response()
+        }
+        Err((status, json)) => (status, json).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_repo_identifiers_accept_valid_characters() {
+        assert!(is_valid_repo_identifier("portfolio-backend"));
+        assert!(is_valid_repo_identifier("medmind.app_v1"));
+        assert!(!is_valid_repo_identifier(""));
+        assert!(!is_valid_repo_identifier("bad repo name"));
+        assert!(!is_valid_repo_identifier("bad/path"));
+    }
+
 
     #[test]
     fn valid_usernames_accept_alphanumeric_dash_underscore() {
