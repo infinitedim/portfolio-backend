@@ -75,12 +75,14 @@ fn is_valid_repo_identifier(name: &str) -> bool {
 
 async fn github_fetch_raw(path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{GITHUB_API}{path}");
+    let has_token = !GH_TOKEN.is_empty();
+
     let mut request = HTTP_CLIENT
         .get(&url)
         .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "portfolio-backend");
 
-    if !GH_TOKEN.is_empty() {
+    if has_token {
         request = request.header("Authorization", format!("Bearer {}", GH_TOKEN.as_str()));
     }
 
@@ -90,6 +92,32 @@ async fn github_fetch_raw(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("upstream request failed: {e}"))?;
 
     let status = response.status();
+
+    // If 401 Unauthorized occurred and a token was sent, retry unauthenticated for public repos
+    if status == reqwest::StatusCode::UNAUTHORIZED && has_token {
+        tracing::warn!(
+            path = %path,
+            "GH_TOKEN returned 401 Unauthorized; retrying unauthenticated for public repo"
+        );
+        let unauth_response = HTTP_CLIENT
+            .get(&url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "portfolio-backend")
+            .send()
+            .await
+            .map_err(|e| format!("upstream unauthenticated retry failed: {e}"))?;
+
+        let unauth_status = unauth_response.status();
+        if !unauth_status.is_success() {
+            return Err(format!("upstream error: {unauth_status}"));
+        }
+
+        return unauth_response
+            .json()
+            .await
+            .map_err(|e| format!("parse failed: {e}"));
+    }
+
     if !status.is_success() {
         return Err(format!("upstream error: {status}"));
     }
@@ -314,6 +342,7 @@ pub struct GitHubCommitSummary {
     pub author_login: Option<String>,
     pub author_url: Option<String>,
     pub html_url: String,
+    pub status_state: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -348,6 +377,7 @@ pub struct GitHubCommitDetail {
     pub author_login: Option<String>,
     pub author_url: Option<String>,
     pub html_url: String,
+    pub status_state: Option<String>,
     pub stats: Option<GitHubCommitStats>,
     pub files: Option<Vec<GitHubCommitFile>>,
 }
@@ -392,20 +422,45 @@ pub async fn get_repo_commits(
 
     let per_page = params.per_page.unwrap_or(20).min(100);
     let page = params.page.unwrap_or(1);
-    let mut path = format!("/repos/{owner}/{repo}/commits?per_page={per_page}&page={page}");
-    if let Some(ref sha) = params.sha {
-        if !sha.is_empty()
+
+    let (path, is_compare) = if let Some(ref sha) = params.sha {
+        if sha.contains("...")
             && sha
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
         {
-            path.push_str(&format!("&sha={sha}"));
+            (format!("/repos/{owner}/{repo}/compare/{sha}"), true)
+        } else if !sha.is_empty()
+            && sha
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
+        {
+            (
+                format!("/repos/{owner}/{repo}/commits?per_page={per_page}&page={page}&sha={sha}"),
+                false,
+            )
+        } else {
+            (
+                format!("/repos/{owner}/{repo}/commits?per_page={per_page}&page={page}"),
+                false,
+            )
         }
-    }
+    } else {
+        (
+            format!("/repos/{owner}/{repo}/commits?per_page={per_page}&page={page}"),
+            false,
+        )
+    };
 
     match github_get(&path).await {
         Ok(raw) => {
-            let items = raw.as_array().cloned().unwrap_or_default();
+            let items_option = if is_compare {
+                raw["commits"].as_array().cloned()
+            } else {
+                raw.as_array().cloned()
+            };
+
+            let items = items_option.unwrap_or_default();
             let summaries: Vec<GitHubCommitSummary> = items
                 .iter()
                 .map(|item| {
@@ -436,6 +491,12 @@ pub async fn get_repo_commits(
                     let author_url = item["author"]["html_url"].as_str().map(str::to_string);
                     let html_url = item["html_url"].as_str().unwrap_or_default().to_string();
 
+                    let status_state = item
+                        .get("status")
+                        .and_then(|s| s["state"].as_str())
+                        .map(str::to_string)
+                        .or_else(|| Some("success".to_string()));
+
                     GitHubCommitSummary {
                         sha,
                         short_sha,
@@ -447,6 +508,7 @@ pub async fn get_repo_commits(
                         author_login,
                         author_url,
                         html_url,
+                        status_state,
                     }
                 })
                 .collect();
@@ -518,6 +580,12 @@ pub async fn get_commit_detail(
             let author_url = raw["author"]["html_url"].as_str().map(str::to_string);
             let html_url = raw["html_url"].as_str().unwrap_or_default().to_string();
 
+            let status_state = raw
+                .get("status")
+                .and_then(|s| s["state"].as_str())
+                .map(str::to_string)
+                .or_else(|| Some("success".to_string()));
+
             let stats = raw.get("stats").map(|s| GitHubCommitStats {
                 additions: s["additions"].as_u64().unwrap_or(0) as u32,
                 deletions: s["deletions"].as_u64().unwrap_or(0) as u32,
@@ -548,6 +616,7 @@ pub async fn get_commit_detail(
                 author_login,
                 author_url,
                 html_url,
+                status_state,
                 stats,
                 files,
             };
