@@ -421,6 +421,56 @@ pub struct CheckRunsQueryParams {
     pub force: Option<bool>,
 }
 
+async fn get_commit_combined_status(owner: &str, repo: &str, ref_id: &str) -> String {
+    let path = format!("/repos/{owner}/{repo}/commits/{ref_id}/check-runs");
+    match github_get(&path).await {
+        Ok(raw) => {
+            let total_count = raw["total_count"].as_u64().unwrap_or(0) as u32;
+            if total_count == 0 {
+                return "unconfigured".to_string();
+            }
+
+            let check_runs = match raw["check_runs"].as_array() {
+                Some(arr) => arr,
+                None => return "unconfigured".to_string(),
+            };
+
+            if check_runs.is_empty() {
+                return "unconfigured".to_string();
+            }
+
+            // Check if any check run has failed or timed out
+            let has_failure = check_runs.iter().any(|item| {
+                let c = item["conclusion"].as_str().unwrap_or_default();
+                c == "failure" || c == "timed_out" || c == "action_required"
+            });
+            if has_failure {
+                return "failure".to_string();
+            }
+
+            // Check if ANY check run is still queued or in progress or missing conclusion
+            let is_running = check_runs.iter().any(|item| {
+                let s = item["status"].as_str().unwrap_or_default();
+                s == "in_progress" || s == "queued" || item.get("conclusion").is_none_or(|c| c.is_null())
+            });
+            if is_running {
+                return "running".to_string();
+            }
+
+            // Check if all check runs were cancelled
+            let all_cancelled = check_runs.iter().all(|item| {
+                item["conclusion"].as_str().unwrap_or_default() == "cancelled"
+            });
+            if all_cancelled {
+                return "cancelled".to_string();
+            }
+
+            "success".to_string()
+        }
+        Err(_) => "unconfigured".to_string(),
+    }
+}
+
 /// GET /api/github/repos/:owner/:repo/commits
 #[utoipa::path(
     get,
@@ -492,57 +542,52 @@ pub async fn get_repo_commits(
             };
 
             let items = items_option.unwrap_or_default();
-            let summaries: Vec<GitHubCommitSummary> = items
-                .iter()
-                .map(|item| {
-                    let sha = item["sha"].as_str().unwrap_or_default().to_string();
-                    let short_sha = if sha.len() >= 7 {
-                        sha[..7].to_string()
-                    } else {
-                        sha.clone()
-                    };
-                    let message = item["commit"]["message"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    let author_name = item["commit"]["author"]["name"]
-                        .as_str()
-                        .unwrap_or("Unknown")
-                        .to_string();
-                    let author_email = item["commit"]["author"]["email"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    let author_date = item["commit"]["author"]["date"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    let author_avatar = item["author"]["avatar_url"].as_str().map(str::to_string);
-                    let author_login = item["author"]["login"].as_str().map(str::to_string);
-                    let author_url = item["author"]["html_url"].as_str().map(str::to_string);
-                    let html_url = item["html_url"].as_str().unwrap_or_default().to_string();
+            let mut summaries = Vec::with_capacity(items.len());
 
-                    let status_state = item
-                        .get("status")
-                        .and_then(|s| s["state"].as_str())
-                        .map(str::to_string)
-                        .or_else(|| Some("success".to_string()));
+            for item in items {
+                let sha = item["sha"].as_str().unwrap_or_default().to_string();
+                let short_sha = if sha.len() >= 7 {
+                    sha[..7].to_string()
+                } else {
+                    sha.clone()
+                };
+                let message = item["commit"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let author_name = item["commit"]["author"]["name"]
+                    .as_str()
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let author_email = item["commit"]["author"]["email"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let author_date = item["commit"]["author"]["date"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let author_avatar = item["author"]["avatar_url"].as_str().map(str::to_string);
+                let author_login = item["author"]["login"].as_str().map(str::to_string);
+                let author_url = item["author"]["html_url"].as_str().map(str::to_string);
+                let html_url = item["html_url"].as_str().unwrap_or_default().to_string();
 
-                    GitHubCommitSummary {
-                        sha,
-                        short_sha,
-                        message,
-                        author_name,
-                        author_email,
-                        author_date,
-                        author_avatar,
-                        author_login,
-                        author_url,
-                        html_url,
-                        status_state,
-                    }
-                })
-                .collect();
+                let status_state = Some(get_commit_combined_status(owner, repo, &sha).await);
+
+                summaries.push(GitHubCommitSummary {
+                    sha,
+                    short_sha,
+                    message,
+                    author_name,
+                    author_email,
+                    author_date,
+                    author_avatar,
+                    author_login,
+                    author_url,
+                    html_url,
+                    status_state,
+                });
+            }
 
             (StatusCode::OK, Json(summaries)).into_response()
         }
