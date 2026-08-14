@@ -913,4 +913,59 @@ mod tests {
             .unwrap();
         assert_eq!(db_count, 0);
     }
+
+    #[tokio::test]
+    async fn contact_edge_cases_and_error_branches() {
+        let Some(_db) = test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let mailer = TestMailer::ok();
+        let bearer = test_support::admin_bearer();
+
+        // 1. validate_bulk_ids > 100 items
+        let large_ids: Vec<Uuid> = (0..101).map(|_| Uuid::new_v4()).collect();
+        let req_large = Request::patch("/api/admin/messages/bulk")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "ids": large_ids })).unwrap(),
+            ))
+            .unwrap();
+        let (status_large, _) = call(contact_router(mailer.clone()), req_large).await;
+        assert_eq!(status_large, StatusCode::BAD_REQUEST);
+
+        // 2. update_message missing 'read' field -> 400
+        let random_id = Uuid::new_v4();
+        let req_no_read = Request::patch(format!("/api/admin/messages/{}", random_id))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(br#"{}"#.as_slice()))
+            .unwrap();
+        let (status_no_read, _) = call(contact_router(mailer.clone()), req_no_read).await;
+        assert_eq!(status_no_read, StatusCode::BAD_REQUEST);
+
+        // 3. get/update/delete non-existent message id -> 404
+        let req_get = Request::get(format!("/api/admin/messages/{}", random_id))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let (status_get, _) = call(contact_router(mailer.clone()), req_get).await;
+        assert_eq!(status_get, StatusCode::NOT_FOUND);
+
+        let req_upd = Request::patch(format!("/api/admin/messages/{}", random_id))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(br#"{"read":true}"#.as_slice()))
+            .unwrap();
+        let (status_upd, _) = call(contact_router(mailer.clone()), req_upd).await;
+        assert_eq!(status_upd, StatusCode::NOT_FOUND);
+
+        let req_del = Request::delete(format!("/api/admin/messages/{}", random_id))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let (status_del, _) = call(contact_router(mailer.clone()), req_del).await;
+        assert_eq!(status_del, StatusCode::NOT_FOUND);
+    }
 }

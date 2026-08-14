@@ -906,7 +906,11 @@ fn resolve_locale_string(jsonb: &Value, locale: &str) -> String {
         }
     }
     // 3. Fallback to en_US / en
-    if let Some(s) = jsonb.get("en_US").or_else(|| jsonb.get("en")).and_then(|v| v.as_str()) {
+    if let Some(s) = jsonb
+        .get("en_US")
+        .or_else(|| jsonb.get("en"))
+        .and_then(|v| v.as_str())
+    {
         return s.to_string();
     }
     // 4. Fallback to first available value in object

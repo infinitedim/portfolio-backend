@@ -71,8 +71,6 @@ fn is_valid_repo_identifier(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
-
-
 async fn github_fetch_raw(path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{GITHUB_API}{path}");
     let has_token = !GH_TOKEN.is_empty();
@@ -390,6 +388,39 @@ pub struct GitHubBranchResponse {
     pub protected: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCheckApp {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCheckRun {
+    pub id: u64,
+    pub name: String,
+    pub head_sha: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub html_url: String,
+    pub app: GitHubCheckApp,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCheckRunsResponse {
+    pub total_count: u32,
+    pub combined_state: String,
+    pub check_runs: Vec<GitHubCheckRun>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckRunsQueryParams {
+    pub force: Option<bool>,
+}
+
 /// GET /api/github/repos/:owner/:repo/commits
 #[utoipa::path(
     get,
@@ -562,7 +593,10 @@ pub async fn get_commit_detail(
             } else {
                 sha.clone()
             };
-            let message = raw["commit"]["message"].as_str().unwrap_or_default().to_string();
+            let message = raw["commit"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let author_name = raw["commit"]["author"]["name"]
                 .as_str()
                 .unwrap_or("Unknown")
@@ -627,6 +661,116 @@ pub async fn get_commit_detail(
     }
 }
 
+/// GET /api/github/repos/:owner/:repo/commits/:ref_id/check-runs
+#[utoipa::path(
+    get,
+    path = "/api/github/repos/{owner}/{repo}/commits/{ref_id}/check-runs",
+    tag = "GitHub",
+    params(
+        ("owner" = String, Path, description = "Repository owner"),
+        ("repo" = String, Path, description = "Repository name"),
+        ("ref_id" = String, Path, description = "Commit SHA or ref"),
+        ("force" = Option<bool>, Query, description = "Bypass cache if true and cache age >= 10s"),
+    ),
+    responses(
+        (status = 200, description = "Commit check runs and status", body = GitHubCheckRunsResponse),
+        (status = 400, description = "Invalid parameters", body = crate::routes::ErrorResponse),
+        (status = 404, description = "Commit not found", body = crate::routes::ErrorResponse),
+    )
+)]
+pub async fn get_commit_check_runs(
+    Path((owner, repo, ref_id)): Path<(String, String, String)>,
+    Query(params): Query<CheckRunsQueryParams>,
+) -> impl IntoResponse {
+    let owner = owner.trim();
+    let repo = repo.trim();
+    let ref_id = ref_id.trim();
+
+    if !is_valid_username(owner)
+        || !is_valid_repo_identifier(repo)
+        || !is_valid_repo_identifier(ref_id)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid owner, repo, or ref" })),
+        )
+            .into_response();
+    }
+
+    let path = format!("/repos/{owner}/{repo}/commits/{ref_id}/check-runs");
+
+    // Check if force reload is requested
+    let force_reload = params.force.unwrap_or(false);
+    if force_reload {
+        let cache_key = path.clone();
+        let mut cache = CACHE.lock().expect("github cache poisoned");
+        if let Some(entry) = cache.get(&cache_key) {
+            if entry.fetched_at.elapsed() >= Duration::from_secs(10) {
+                cache.remove(&cache_key);
+            }
+        }
+    }
+
+    match github_get(&path).await {
+        Ok(raw) => {
+            let total_count = raw["total_count"].as_u64().unwrap_or(0) as u32;
+            let check_runs: Vec<GitHubCheckRun> = raw["check_runs"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|item| GitHubCheckRun {
+                            id: item["id"].as_u64().unwrap_or(0),
+                            name: item["name"].as_str().unwrap_or_default().to_string(),
+                            head_sha: item["head_sha"].as_str().unwrap_or_default().to_string(),
+                            status: item["status"].as_str().unwrap_or_default().to_string(),
+                            conclusion: item["conclusion"].as_str().map(str::to_string),
+                            started_at: item["started_at"].as_str().unwrap_or_default().to_string(),
+                            completed_at: item["completed_at"].as_str().map(str::to_string),
+                            html_url: item["html_url"].as_str().unwrap_or_default().to_string(),
+                            app: GitHubCheckApp {
+                                name: item["app"]["name"]
+                                    .as_str()
+                                    .unwrap_or("GitHub Actions")
+                                    .to_string(),
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let combined_state = if total_count == 0 {
+                "unconfigured".to_string()
+            } else if check_runs.iter().any(|c| {
+                c.conclusion == Some("failure".to_string())
+                    || c.conclusion == Some("timed_out".to_string())
+            }) {
+                "failure".to_string()
+            } else if check_runs
+                .iter()
+                .any(|c| c.status == "in_progress" || c.status == "queued")
+            {
+                "running".to_string()
+            } else if check_runs
+                .iter()
+                .all(|c| c.conclusion == Some("cancelled".to_string()))
+            {
+                "cancelled".to_string()
+            } else {
+                "success".to_string()
+            };
+
+            let response = GitHubCheckRunsResponse {
+                total_count,
+                combined_state,
+                check_runs,
+            };
+
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err((status, json)) => (status, json).into_response(),
+    }
+}
+
 /// GET /api/github/repos/:owner/:repo/branches
 #[utoipa::path(
     get,
@@ -642,9 +786,7 @@ pub async fn get_commit_detail(
         (status = 404, description = "Repository not found", body = crate::routes::ErrorResponse),
     )
 )]
-pub async fn get_repo_branches(
-    Path((owner, repo)): Path<(String, String)>,
-) -> impl IntoResponse {
+pub async fn get_repo_branches(Path((owner, repo)): Path<(String, String)>) -> impl IntoResponse {
     let owner = owner.trim();
     let repo = repo.trim();
 
@@ -687,7 +829,6 @@ mod tests {
         assert!(!is_valid_repo_identifier("bad repo name"));
         assert!(!is_valid_repo_identifier("bad/path"));
     }
-
 
     #[test]
     fn valid_usernames_accept_alphanumeric_dash_underscore() {

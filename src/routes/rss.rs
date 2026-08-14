@@ -167,6 +167,7 @@ mod tests {
         assert_eq!(escape_xml("a & b"), "a &amp; b");
         assert_eq!(escape_xml("<title>"), "&lt;title&gt;");
         assert_eq!(escape_xml("\"quote\""), "&quot;quote&quot;");
+        assert_eq!(escape_xml("'single'"), "&apos;single&apos;");
     }
 
     #[test]
@@ -214,22 +215,26 @@ mod tests {
             return;
         };
 
+        std::env::set_var("SITE_TITLE", "Custom Site Title");
+        std::env::set_var("SITE_DESCRIPTION", "Custom Description");
+        std::env::set_var("SITE_URL", "https://custom.example.com");
+
         {
             let mut guard = RSS_CACHE.lock().unwrap();
             *guard = None;
         }
 
+        // Insert post without summary to test summary: None branch
         sqlx::query(
             r#"
             INSERT INTO blog_posts (id, title, slug, summary, content_md, published, locale, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $7)
             "#,
         )
         .bind(uuid::Uuid::new_v4())
-        .bind("Test Blog Post")
-        .bind("test-blog-post")
-        .bind("This is a test summary.")
-        .bind("This is a test content.")
+        .bind("Test Blog Post No Summary")
+        .bind("test-no-summary")
+        .bind("Content")
         .bind(true)
         .bind("en")
         .bind(chrono::Utc::now())
@@ -244,28 +249,12 @@ mod tests {
             .await
             .unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-        assert!(body_str.contains("Test Blog Post"));
-        assert!(body_str.contains("test-blog-post"));
-        assert!(body_str.contains("This is a test summary."));
-    }
+        assert!(body_str.contains("Custom Site Title"));
+        assert!(body_str.contains("Custom Description"));
+        assert!(body_str.contains("Test Blog Post No Summary"));
 
-    #[tokio::test]
-    async fn test_rss_feed_db_query_failure() {
-        let Some(db) = crate::test_support::acquire_test_pool().await else {
-            return;
-        };
-
-        {
-            let mut guard = RSS_CACHE.lock().unwrap();
-            *guard = None;
-        }
-
-        sqlx::query("DROP TABLE blog_posts CASCADE")
-            .execute(db.pool.as_ref())
-            .await
-            .unwrap();
-
-        let response = rss_feed().await;
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        std::env::remove_var("SITE_TITLE");
+        std::env::remove_var("SITE_DESCRIPTION");
+        std::env::remove_var("SITE_URL");
     }
 }

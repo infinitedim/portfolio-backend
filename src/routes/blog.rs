@@ -311,7 +311,11 @@ fn resolve_blog_locale_string(jsonb: &Value, locale: &str) -> String {
             }
         }
     }
-    if let Some(s) = jsonb.get("en_US").or_else(|| jsonb.get("en")).and_then(|v| v.as_str()) {
+    if let Some(s) = jsonb
+        .get("en_US")
+        .or_else(|| jsonb.get("en"))
+        .and_then(|v| v.as_str())
+    {
         return s.to_string();
     }
     if let Some(obj) = jsonb.as_object() {
@@ -347,7 +351,8 @@ pub fn get_static_blog_posts(locale: &str) -> Vec<BlogPostSummary> {
                             .iter()
                             .map(|t| t.as_str().unwrap().to_string())
                             .collect(),
-                        reading_time_minutes: post["readingTimeMinutes"].as_i64().unwrap_or(5) as i32,
+                        reading_time_minutes: post["readingTimeMinutes"].as_i64().unwrap_or(5)
+                            as i32,
                         publish_at: None,
                         status: BlogStatus::Published,
                         locale: locale.to_string(),
@@ -357,8 +362,16 @@ pub fn get_static_blog_posts(locale: &str) -> Vec<BlogPostSummary> {
                         reviewed_by: None,
                         series_id: None,
                         series_order: None,
-                        created_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
-                        updated_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+                        created_at: DateTime::parse_from_rfc3339(
+                            post["createdAt"].as_str().unwrap(),
+                        )
+                        .unwrap()
+                        .with_timezone(&Utc),
+                        updated_at: DateTime::parse_from_rfc3339(
+                            post["createdAt"].as_str().unwrap(),
+                        )
+                        .unwrap()
+                        .with_timezone(&Utc),
                     }
                 })
                 .collect()
@@ -371,9 +384,9 @@ pub fn get_static_blog_post_detail(slug: &str, locale: &str) -> Option<BlogPostR
         return None;
     }
     let arr = STATIC_BLOG_POSTS.as_array()?;
-    let post = arr.iter().find(|p| {
-        p["slug"].as_str() == Some(slug) || p["id"].as_str() == Some(slug)
-    })?;
+    let post = arr
+        .iter()
+        .find(|p| p["slug"].as_str() == Some(slug) || p["id"].as_str() == Some(slug))?;
 
     let title = resolve_blog_locale_string(&post["title"], locale);
     let summary = resolve_blog_locale_string(&post["summary"], locale);
@@ -404,8 +417,12 @@ pub fn get_static_blog_post_detail(slug: &str, locale: &str) -> Option<BlogPostR
         translation_status: "published".to_string(),
         reviewed_at: None,
         reviewed_by: None,
-        created_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
-        updated_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap()).unwrap().with_timezone(&Utc),
+        created_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc),
+        updated_at: DateTime::parse_from_rfc3339(post["createdAt"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc),
     })
 }
 
@@ -667,44 +684,43 @@ pub async fn list_posts(
     )
     .await?;
 
-    let (items, final_total) = if posts.is_empty()
-        && std::env::var("ENVIRONMENT").as_deref() != Ok("production")
-    {
-        let req_locale = query.locale.as_deref().unwrap_or("en_US");
-        let static_posts = get_static_blog_posts(req_locale);
-        let count = static_posts.len() as i64;
-        (static_posts, count)
-    } else {
-        (
-            posts
-                .into_iter()
-                .map(|p| {
-                    let status = p.status();
-                    BlogPostSummary {
-                        id: p.id,
-                        title: p.title,
-                        slug: p.slug,
-                        summary: p.summary,
-                        published: p.published,
-                        tags: p.tags,
-                        reading_time_minutes: p.reading_time_minutes,
-                        publish_at: p.publish_at,
-                        status,
-                        locale: p.locale,
-                        translation_group_id: p.translation_group_id,
-                        translation_status: p.translation_status,
-                        reviewed_at: p.reviewed_at,
-                        reviewed_by: p.reviewed_by,
-                        series_id: p.series_id,
-                        series_order: p.series_order,
-                        created_at: p.created_at,
-                        updated_at: p.updated_at,
-                    }
-                })
-                .collect(),
-            total,
-        )
-    };
+    let (items, final_total) =
+        if posts.is_empty() && std::env::var("ENVIRONMENT").as_deref() != Ok("production") {
+            let req_locale = query.locale.as_deref().unwrap_or("en_US");
+            let static_posts = get_static_blog_posts(req_locale);
+            let count = static_posts.len() as i64;
+            (static_posts, count)
+        } else {
+            (
+                posts
+                    .into_iter()
+                    .map(|p| {
+                        let status = p.status();
+                        BlogPostSummary {
+                            id: p.id,
+                            title: p.title,
+                            slug: p.slug,
+                            summary: p.summary,
+                            published: p.published,
+                            tags: p.tags,
+                            reading_time_minutes: p.reading_time_minutes,
+                            publish_at: p.publish_at,
+                            status,
+                            locale: p.locale,
+                            translation_group_id: p.translation_group_id,
+                            translation_status: p.translation_status,
+                            reviewed_at: p.reviewed_at,
+                            reviewed_by: p.reviewed_by,
+                            series_id: p.series_id,
+                            series_order: p.series_order,
+                            created_at: p.created_at,
+                            updated_at: p.updated_at,
+                        }
+                    })
+                    .collect(),
+                total,
+            )
+        };
 
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -2189,8 +2205,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_posts_no_db_returns_503() {
+        std::env::set_var("ENVIRONMENT", "production");
         let status = get_status(blog_router(), "/api/blog").await;
+        std::env::remove_var("ENVIRONMENT");
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_list_posts_no_db_in_dev_returns_ok() {
+        std::env::remove_var("ENVIRONMENT");
+        let status = get_status(blog_router(), "/api/blog").await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]
@@ -2882,10 +2907,14 @@ mod tests {
         assert_eq!(ja_posts.len(), 2);
         assert!(ja_posts[0].title.contains("RustとAxumによる高性能"));
 
-        let detail = get_static_blog_post_detail("c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c", "de_DE").unwrap();
-        assert!(detail.title.contains("Erstellen hochperformanter REST-APIs"));
+        let detail =
+            get_static_blog_post_detail("c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c", "de_DE").unwrap();
+        assert!(detail
+            .title
+            .contains("Erstellen hochperformanter REST-APIs"));
 
-        let fallback_detail = get_static_blog_post_detail("d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d", "unknown").unwrap();
+        let fallback_detail =
+            get_static_blog_post_detail("d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d", "unknown").unwrap();
         assert!(fallback_detail.title.contains("Mastering Next.js 16"));
     }
 }

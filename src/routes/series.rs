@@ -471,6 +471,173 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    #[test]
+    fn test_series_to_response_helper() {
+        let series = BlogSeries {
+            id: Uuid::nil(),
+            title: "Title".to_string(),
+            slug: "slug".to_string(),
+            description: Some("desc".to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let resp = series_to_response(series, 5);
+        assert_eq!(resp.title, "Title");
+        assert_eq!(resp.post_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_series_unit_branches_without_db() {
+        // 1. get_series_public invalid slug -> BadRequest
+        let Err(err) = get_series_public(Path("INVALID_SLUG".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 2. get_series_public valid slug without DB -> DbUnavailable
+        let Err(err) = get_series_public(Path("valid-slug".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 3. list_series_admin without auth -> Unauthorized
+        let Err(err) = list_series_admin(HeaderMap::new()).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 4. list_series_admin with auth without DB -> DbUnavailable
+        let bearer = crate::test_support::admin_bearer();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            bearer.parse().unwrap(),
+        );
+        let Err(err) = list_series_admin(headers.clone()).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 5. create_series without auth -> Unauthorized
+        let Err(err) = create_series(
+            HeaderMap::new(),
+            Json(CreateSeriesRequest {
+                title: "T".to_string(),
+                slug: "s".to_string(),
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 6. create_series empty title -> BadRequest
+        let Err(err) = create_series(
+            headers.clone(),
+            Json(CreateSeriesRequest {
+                title: "   ".to_string(),
+                slug: "valid-slug".to_string(),
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 7. create_series invalid slug -> BadRequest
+        let Err(err) = create_series(
+            headers.clone(),
+            Json(CreateSeriesRequest {
+                title: "Title".to_string(),
+                slug: "INVALID SLUG".to_string(),
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 8. create_series valid request without DB -> DbUnavailable
+        let Err(err) = create_series(
+            headers.clone(),
+            Json(CreateSeriesRequest {
+                title: "Title".to_string(),
+                slug: "valid-slug".to_string(),
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 9. get_series_admin without auth -> Unauthorized
+        let Err(err) = get_series_admin(HeaderMap::new(), Path("valid-slug".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 10. get_series_admin invalid slug -> BadRequest
+        let Err(err) = get_series_admin(headers.clone(), Path("INVALID_SLUG".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 11. get_series_admin valid slug without DB -> DbUnavailable
+        let Err(err) = get_series_admin(headers.clone(), Path("valid-slug".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 12. update_series without auth -> Unauthorized
+        let Err(err) = update_series(
+            HeaderMap::new(),
+            Path("valid-slug".to_string()),
+            Json(UpdateSeriesRequest {
+                title: None,
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 13. update_series invalid slug -> BadRequest
+        let Err(err) = update_series(
+            headers.clone(),
+            Path("INVALID_SLUG".to_string()),
+            Json(UpdateSeriesRequest {
+                title: None,
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 14. update_series valid slug without DB -> DbUnavailable
+        let Err(err) = update_series(
+            headers.clone(),
+            Path("valid-slug".to_string()),
+            Json(UpdateSeriesRequest {
+                title: Some("New Title".to_string()),
+                description: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 15. delete_series without auth -> Unauthorized
+        let Err(err) = delete_series(HeaderMap::new(), Path("valid-slug".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 16. delete_series invalid slug -> BadRequest
+        let Err(err) = delete_series(headers.clone(), Path("INVALID_SLUG".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 17. delete_series valid slug without DB -> DbUnavailable
+        let Err(err) = delete_series(headers, Path("valid-slug".to_string())).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+    }
+
+    #[test]
+    fn test_series_struct_serializations() {
+        let detail = SeriesDetailResponse {
+            id: Uuid::nil(),
+            title: "Title".to_string(),
+            slug: "slug".to_string(),
+            description: Some("desc".to_string()),
+            posts: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&detail).unwrap();
+        assert!(json.contains("posts"));
+
+        let succ = SuccessResponse { success: true };
+        let json = serde_json::to_string(&succ).unwrap();
+        assert!(json.contains("true"));
+    }
+
     #[tokio::test]
     async fn admin_create_series_requires_auth() {
         let app = series_router();

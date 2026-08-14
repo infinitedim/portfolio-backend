@@ -160,6 +160,7 @@ impl Modify for SecurityAddon {
         routes::github::get_stats,
         routes::github::get_repo_commits,
         routes::github::get_commit_detail,
+        routes::github::get_commit_check_runs,
         routes::github::get_repo_branches,
     ),
     components(schemas(
@@ -173,6 +174,9 @@ impl Modify for SecurityAddon {
         routes::github::GitHubCommitDetail,
         routes::github::GitHubCommitStats,
         routes::github::GitHubCommitFile,
+        routes::github::GitHubCheckRunsResponse,
+        routes::github::GitHubCheckRun,
+        routes::github::GitHubCheckApp,
         routes::github::GitHubBranchResponse,
         routes::upload::UploadResponse,
         routes::upload::ImageInfo,

@@ -135,5 +135,39 @@ mod tests {
 
         let response = converted.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test all other AppError variants
+        let err_not_found = AppError::NotFound;
+        assert_eq!(err_not_found.status_code(), StatusCode::NOT_FOUND);
+        assert_eq!(err_not_found.public_message(), "Not found");
+
+        let err_bad_req = AppError::BadRequest("invalid query".to_string());
+        assert_eq!(err_bad_req.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(err_bad_req.public_message(), "invalid query");
+
+        let err_unauth = AppError::Unauthorized;
+        assert_eq!(err_unauth.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(err_unauth.public_message(), "Authorization required");
+
+        let err_forbidden = AppError::Forbidden;
+        assert_eq!(err_forbidden.status_code(), StatusCode::FORBIDDEN);
+        assert_eq!(err_forbidden.public_message(), "Forbidden");
+
+        let err_internal = AppError::Internal("server boom".to_string());
+        assert_eq!(err_internal.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err_internal.public_message(), "Internal server error");
+        let internal_resp = err_internal.into_response();
+        assert_eq!(internal_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err_pool_timeout = AppError::Db(sqlx::Error::PoolTimedOut);
+        assert_eq!(err_pool_timeout.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let err_resp = ErrorResponse {
+            error: "Error title".to_string(),
+            message: Some("Detailed message".to_string()),
+        };
+        let json = serde_json::to_string(&err_resp).unwrap();
+        assert!(json.contains("Error title"));
+        assert!(json.contains("Detailed message"));
     }
 }

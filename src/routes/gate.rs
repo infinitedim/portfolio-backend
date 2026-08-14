@@ -842,6 +842,61 @@ mod integration_tests {
         );
         assert!(!is_unlocked(&hdrs_unlocked, &cfg));
     }
+
+    #[tokio::test]
+    async fn test_gate_additional_branches() {
+        let cfg = config();
+        let state = GateState::new(cfg.clone());
+
+        // 1. Session creation
+        get_or_create_session(&state, "test-clean");
+
+        // 2. Invalid level 0 in login
+        let Err(err) = login(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(LoginRequest {
+                level: 0,
+                username: "yourblooo0".to_string(),
+                password: "yourblooo0".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 3. Challenge 3 without completing level 2
+        let Err(err) = challenge_3_encoded(State(state.clone()), HeaderMap::new()).await else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, AppError::Forbidden));
+
+        // 4. Status when unlocked cookie is valid
+        let now = Utc::now();
+        let exp = now + Duration::days(7);
+        let claims = GateTokenClaims {
+            sub: "gate".into(),
+            iss: GATE_TOKEN_ISSUER.into(),
+            aud: GATE_TOKEN_AUDIENCE.into(),
+            iat: now.timestamp(),
+            exp: exp.timestamp(),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(cfg.token_secret.as_bytes()),
+        )
+        .unwrap();
+
+        let mut hdrs = HeaderMap::new();
+        hdrs.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str(&format!("portfolio_gate={}", token)).unwrap(),
+        );
+        assert!(is_unlocked(&hdrs, &cfg));
+
+        let res = status(State(state.clone()), hdrs).await;
+        assert!(res.is_ok());
+    }
 }
 
 #[cfg(test)]

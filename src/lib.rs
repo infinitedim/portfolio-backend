@@ -324,6 +324,10 @@ pub fn create_app(redis: RedisMode) -> Router {
                 get(routes::github::get_commit_detail),
             )
             .route(
+                "/api/github/repos/{owner}/{repo}/commits/{ref_id}/check-runs",
+                get(routes::github::get_commit_check_runs),
+            )
+            .route(
                 "/api/github/repos/{owner}/{repo}/branches",
                 get(routes::github::get_repo_branches),
             ),

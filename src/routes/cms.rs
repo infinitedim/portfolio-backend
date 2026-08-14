@@ -161,7 +161,7 @@ pub struct CmsBlogItem {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CmsBlogWriteRequest {
     pub title: Option<String>,
@@ -426,7 +426,173 @@ mod tests {
         std::env::set_var("HEADLESS_CMS_ENABLED", "true");
         let state = CmsState::from_env();
         assert!(state.enabled);
+
+        std::env::set_var("HEADLESS_CMS_ENABLED", "1");
+        let state2 = CmsState::from_env();
+        assert!(state2.enabled);
+
         std::env::remove_var("HEADLESS_CMS_ENABLED");
+    }
+
+    #[test]
+    fn test_cms_helpers_and_defaults() {
+        assert_eq!(default_page(), 1);
+        assert_eq!(default_page_size(), 20);
+
+        let admin_ctx = ApiKeyContext {
+            scope: "admin".to_string(),
+            key_id: Uuid::nil(),
+        };
+        assert!(require_admin_scope(&admin_ctx).is_ok());
+
+        let read_ctx = ApiKeyContext {
+            scope: "read".to_string(),
+            key_id: Uuid::nil(),
+        };
+        assert!(matches!(
+            require_admin_scope(&read_ctx),
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_cms_unit_branches_without_db() {
+        let app = test_cms_router(true);
+
+        // 1. Missing X-Api-Key -> 401
+        let req = Request::get("/api/v1/content/blog")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 2. Empty X-Api-Key -> 401
+        let req = Request::get("/api/v1/content/blog")
+            .header("x-api-key", "   ")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 3. X-Api-Key present but DB unavailable -> 503 Service Unavailable
+        let req = Request::get("/api/v1/content/blog")
+            .header("x-api-key", "some-key")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // Direct handler unit tests without DB
+        let Err(err) = list_blog(Query(CmsBlogQuery {
+            page: 1,
+            page_size: 10,
+            locale: None,
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        let Err(err) = get_blog_post(
+            Path("slug".to_string()),
+            Query(CmsBlogQuery {
+                page: 1,
+                page_size: 10,
+                locale: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        let read_ctx = ApiKeyContext {
+            scope: "read".to_string(),
+            key_id: Uuid::nil(),
+        };
+        let Err(err) = update_blog_post(
+            Path("slug".to_string()),
+            Query(CmsBlogQuery {
+                page: 1,
+                page_size: 10,
+                locale: None,
+            }),
+            Extension(read_ctx),
+            Json(CmsBlogWriteRequest {
+                title: Some("t".to_string()),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: None,
+                tags: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Forbidden));
+
+        let admin_ctx = ApiKeyContext {
+            scope: "admin".to_string(),
+            key_id: Uuid::nil(),
+        };
+        let Err(err) = update_blog_post(
+            Path("slug".to_string()),
+            Query(CmsBlogQuery {
+                page: 1,
+                page_size: 10,
+                locale: None,
+            }),
+            Extension(admin_ctx),
+            Json(CmsBlogWriteRequest {
+                title: Some("t".to_string()),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: None,
+                tags: None,
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
+            section: "".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
+            section: "projects".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+    }
+
+    #[test]
+    fn test_cms_struct_serializations() {
+        let item = CmsBlogItem {
+            id: Uuid::nil(),
+            title: "T".to_string(),
+            slug: "s".to_string(),
+            summary: Some("sum".to_string()),
+            locale: "en".to_string(),
+            published: true,
+            updated_at: chrono::Utc::now(),
+        };
+        let list_resp = CmsBlogListResponse {
+            items: vec![item],
+            page: 1,
+            page_size: 20,
+            total: 1,
+        };
+        let json = serde_json::to_string(&list_resp).unwrap();
+        assert!(json.contains("\"title\":\"T\""));
+
+        let write_req = CmsBlogWriteRequest {
+            title: Some("new title".to_string()),
+            summary: None,
+            content_md: Some("md".to_string()),
+            content_html: None,
+            published: Some(true),
+            tags: Some(vec!["rust".to_string()]),
+        };
+        let json = serde_json::to_string(&write_req).unwrap();
+        assert!(json.contains("new title"));
     }
 
     #[tokio::test]
@@ -626,6 +792,46 @@ mod tests {
             .unwrap();
         let sect: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(sect["section"], "projects");
+
+        // Get non-existent blog post -> 404
+        let req = Request::get("/api/v1/content/blog/non-existent-slug")
+            .header("x-api-key", read_key)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // Patch non-existent blog post -> 404
+        let req = Request::patch("/api/v1/content/blog/non-existent-slug")
+            .header("x-api-key", admin_key)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "title": "Title"
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // Update all fields on existent blog post -> 200 OK
+        let req = Request::patch(format!("/api/v1/content/blog/{}", slug))
+            .header("x-api-key", admin_key)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "summary": "Updated Summary",
+                    "contentMd": "Updated MD",
+                    "contentHtml": "<p>Updated HTML</p>",
+                    "published": false,
+                    "tags": ["cms", "test"]
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
 
         // Get non-existent section -> 404
         let req = Request::get("/api/v1/content/portfolio?section=skills")

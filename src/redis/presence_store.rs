@@ -124,7 +124,11 @@ impl RedisPresence {
         let key_type: Result<String, _> = redis::cmd("TYPE").arg(key).query_async(conn).await;
         if let Ok(kt) = key_type {
             if kt != "zset" && kt != "none" {
-                let _: () = redis::cmd("DEL").arg(key).query_async(conn).await.unwrap_or(());
+                let _: () = redis::cmd("DEL")
+                    .arg(key)
+                    .query_async(conn)
+                    .await
+                    .unwrap_or(());
             }
         }
     }

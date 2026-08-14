@@ -150,4 +150,28 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         assert!(response.headers().contains_key("x-request-id"));
     }
+
+    #[tokio::test]
+    async fn log_request_middleware_handles_client_and_server_errors_and_missing_id() {
+        let app = Router::new()
+            .route("/bad", get(|| async { StatusCode::BAD_REQUEST }))
+            .route("/err", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+            .layer(middleware::from_fn(log_request));
+
+        let res_bad = app
+            .clone()
+            .oneshot(Request::builder().uri("/bad").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res_bad.status(), StatusCode::BAD_REQUEST);
+
+        let res_err = app
+            .oneshot(Request::builder().uri("/err").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res_err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let _set_layer = request_id_layer();
+        let _prop_layer = propagate_request_id_layer();
+    }
 }

@@ -392,12 +392,202 @@ mod tests {
     fn plausible_email_validation() {
         assert!(is_plausible_email("user@example.com"));
         assert!(!is_plausible_email("not-an-email"));
+        assert!(!is_plausible_email(""));
+        assert!(!is_plausible_email("a@b"));
+        assert!(!is_plausible_email(&"a".repeat(255)));
     }
 
     #[test]
     fn hash_api_key_is_deterministic() {
         assert_eq!(hash_api_key("abc"), hash_api_key("abc"));
         assert_ne!(hash_api_key("abc"), hash_api_key("def"));
+    }
+
+    #[test]
+    fn test_random_token_format() {
+        let token = random_token();
+        assert_eq!(token.len(), TOKEN_BYTES * 2);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_site_base_url_env_resolution() {
+        std::env::set_var("SITE_URL", "https://site.example.com");
+        assert_eq!(site_base_url(), "https://site.example.com");
+        std::env::remove_var("SITE_URL");
+
+        std::env::set_var("FRONTEND_ORIGIN", "https://frontend.example.com");
+        assert_eq!(site_base_url(), "https://frontend.example.com");
+        std::env::remove_var("FRONTEND_ORIGIN");
+
+        assert_eq!(site_base_url(), "http://localhost:3000");
+    }
+
+    #[tokio::test]
+    async fn test_newsletter_unit_branches_without_db() {
+        let mailer = Arc::new(crate::email::NoopMailer);
+
+        // 1. Subscribe invalid email
+        let Err(err) = subscribe(
+            State(mailer.clone()),
+            Json(SubscribeRequest {
+                email: "invalid".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 2. Subscribe valid email without DB -> DbUnavailable
+        let Err(err) = subscribe(
+            State(mailer.clone()),
+            Json(SubscribeRequest {
+                email: "valid@example.com".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 3. Confirm empty token
+        let Err(err) = confirm(Query(ConfirmQuery {
+            token: "   ".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 4. Confirm valid token without DB -> DbUnavailable
+        let Err(err) = confirm(Query(ConfirmQuery {
+            token: "valid-token".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 5. Unsubscribe empty token
+        let Err(err) = unsubscribe(Json(UnsubscribeRequest {
+            token: "".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 6. Unsubscribe valid token without DB -> DbUnavailable
+        let Err(err) = unsubscribe(Json(UnsubscribeRequest {
+            token: "valid-token".to_string(),
+        }))
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 7. List subscribers without admin header
+        let Err(err) = list_subscribers(HeaderMap::new()).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 8. List subscribers with admin header without DB -> DbUnavailable
+        let token_header = crate::test_support::admin_bearer();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            token_header.parse().unwrap(),
+        );
+        let Err(err) = list_subscribers(headers.clone()).await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+
+        // 9. Broadcast without admin header
+        let Err(err) = broadcast(
+            HeaderMap::new(),
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "Subject".to_string(),
+                body: "Body".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::Unauthorized));
+
+        // 10. Broadcast empty subject
+        let Err(err) = broadcast(
+            headers.clone(),
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "".to_string(),
+                body: "Body".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 11. Broadcast oversized subject
+        let Err(err) = broadcast(
+            headers.clone(),
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "a".repeat(MAX_SUBJECT_LEN + 1),
+                body: "Body".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 12. Broadcast empty body
+        let Err(err) = broadcast(
+            headers.clone(),
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "Subject".to_string(),
+                body: "".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 13. Broadcast oversized body
+        let Err(err) = broadcast(
+            headers.clone(),
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "Subject".to_string(),
+                body: "a".repeat(MAX_BODY_LEN + 1),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::BadRequest(_)));
+
+        // 14. Broadcast valid request without DB -> DbUnavailable
+        let Err(err) = broadcast(
+            headers,
+            State(mailer.clone()),
+            Json(BroadcastRequest {
+                subject: "Subject".to_string(),
+                body: "Body".to_string(),
+            }),
+        )
+        .await else { panic!("expected error"); };
+        assert!(matches!(err, AppError::DbUnavailable));
+    }
+
+    #[test]
+    fn test_newsletter_struct_serializations() {
+        let sub_resp = SubscribeResponse {
+            success: true,
+            message: "msg".to_string(),
+        };
+        let json = serde_json::to_string(&sub_resp).unwrap();
+        assert!(json.contains("success"));
+
+        let item = SubscriberListItem {
+            id: Uuid::nil(),
+            email: "sub@example.com".to_string(),
+            confirmed: true,
+            subscribed_at: Utc::now(),
+            confirmed_at: Some(Utc::now()),
+        };
+        let list_resp = SubscriberListResponse {
+            items: vec![item],
+            total: 1,
+        };
+        let json = serde_json::to_string(&list_resp).unwrap();
+        assert!(json.contains("sub@example.com"));
+
+        let broadcast_resp = BroadcastResponse { sent: 5, failed: 1 };
+        let json = serde_json::to_string(&broadcast_resp).unwrap();
+        assert!(json.contains("\"sent\":5"));
     }
 
     #[tokio::test]

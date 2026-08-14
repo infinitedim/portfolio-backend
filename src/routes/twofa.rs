@@ -1055,4 +1055,10 @@ mod tests {
         assert_eq!(body_status2["enabled"], false);
         let _ = uid;
     }
+
+    #[test]
+    fn test_verify_totp_code_invalid_secret() {
+        let res = verify_totp_code("invalid_base32", "account", "123456");
+        assert!(res.is_err());
+    }
 }

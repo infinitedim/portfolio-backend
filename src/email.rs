@@ -324,6 +324,22 @@ mod tests {
         std::env::remove_var("RESEND_FROM");
     }
 
+    #[test]
+    fn resend_config_from_env_defaults_from_and_to() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        std::env::set_var("RESEND_API_KEY", "test-api-key");
+        std::env::remove_var("RESEND_FROM");
+        std::env::set_var("CONTACT_EMAIL", "admin@example.com");
+
+        let config = resend_config_from_env().expect("expected resend config");
+        assert_eq!(config.0, "test-api-key");
+        assert_eq!(config.1, "noreply@example.com");
+        assert_eq!(config.2, "admin@example.com");
+
+        std::env::remove_var("RESEND_API_KEY");
+        std::env::remove_var("CONTACT_EMAIL");
+    }
+
     #[tokio::test]
     async fn test_noop_mailer_all_methods() {
         let mailer = NoopMailer;
@@ -397,16 +413,32 @@ mod tests {
 
     #[test]
     fn test_mailer_error_display() {
+        use std::error::Error;
+
         let err1 = MailerError::Transport("timeout".to_string());
         assert!(err1.to_string().contains("timeout"));
+        assert!(err1.source().is_none());
 
         let err2 = MailerError::Provider {
             status: 400,
             body: "bad request".to_string(),
         };
         assert!(err2.to_string().contains("400"));
+        assert!(err2.source().is_none());
 
         let err3 = MailerError::Misconfigured("API_KEY");
         assert!(err3.to_string().contains("missing API_KEY"));
+        assert!(err3.source().is_none());
+    }
+
+    #[test]
+    fn test_mailer_struct_derivations() {
+        let noop = NoopMailer::default();
+        let noop_clone = noop.clone();
+        assert!(format!("{:?}", noop_clone).contains("NoopMailer"));
+
+        let resend = ResendMailer::new("key".to_string(), "a@b.com".to_string(), "c@d.com".to_string());
+        let resend_clone = resend.clone();
+        assert!(format!("{:?}", resend_clone).contains("ResendMailer"));
     }
 }
