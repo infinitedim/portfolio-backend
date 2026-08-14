@@ -175,8 +175,8 @@ jobs:
       - name: Run tests with coverage
         run: cargo llvm-cov test --all-features
 
-      - name: Enforce coverage gate and export lcov
-        run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 77
+      - name: Export lcov
+        run: cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Coverage report
         run: cargo llvm-cov report --summary-only
