@@ -587,7 +587,7 @@ pub async fn challenge_2_users_txt(
 mod integration_tests {
     use super::*;
 
-    fn config() -> GateConfig {
+    pub(super) fn config() -> GateConfig {
         let l3_answer = "l3-secret-answer".to_string();
         let l3_encoded = encode_secret(&l3_answer);
         GateConfig {
@@ -899,12 +899,40 @@ mod integration_tests {
 
         let res = status(State(state.clone()), hdrs).await;
         assert!(res.is_ok());
+
+        // Test status currentLevel across level completions
+        let session1 = GateSession {
+            completed_levels: [1].into_iter().collect(),
+            failed_attempts: HashMap::new(),
+            created_at: Instant::now(),
+        };
+        save_session(&state, "session-l1", session1);
+        let mut hdrs1 = HeaderMap::new();
+        hdrs1.insert(header::COOKIE, header::HeaderValue::from_str("gate_progress=session-l1").unwrap());
+        let res_l1 = status(State(state.clone()), hdrs1).await;
+        assert!(res_l1.is_ok());
+
+        let session2 = GateSession {
+            completed_levels: [1, 2].into_iter().collect(),
+            failed_attempts: HashMap::new(),
+            created_at: Instant::now(),
+        };
+        save_session(&state, "session-l2", session2);
+        let mut hdrs2 = HeaderMap::new();
+        hdrs2.insert(header::COOKIE, header::HeaderValue::from_str("gate_progress=session-l2").unwrap());
+        let res_l2 = status(State(state.clone()), hdrs2).await;
+        assert!(res_l2.is_ok());
+
+        let mut hdrs_invalid = HeaderMap::new();
+        hdrs_invalid.insert(header::COOKIE, header::HeaderValue::from_str("portfolio_gate=invalid.jwt.token").unwrap());
+        assert!(!is_unlocked(&hdrs_invalid, &cfg));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use integration_tests::config;
 
     #[test]
     fn constant_time_eq_works() {
@@ -925,5 +953,49 @@ mod tests {
         assert!(hint_for_level(1, 2).is_none());
         assert!(hint_for_level(1, 3).is_some());
         assert!(hint_for_level(2, 3).is_some());
+        assert!(hint_for_level(3, 3).is_some());
+        assert!(hint_for_level(3, 6).is_some());
+        assert!(hint_for_level(3, 10).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_gate_helpers_and_unconfigured_login() {
+        std::env::set_var("ENVIRONMENT", "production");
+        assert!(cookie_secure());
+        std::env::remove_var("ENVIRONMENT");
+
+        assert_eq!(expected_username(3), None);
+        let cfg_empty = config();
+        assert_eq!(expected_password(&cfg_empty, 3), "");
+
+        // Login level 2 without level 1 completed -> Forbidden
+        let mut cfg = config();
+        let state = GateState::new(cfg.clone());
+        let res_l2_forbidden = login(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(LoginRequest {
+                level: 2,
+                username: "yourblooo1".to_string(),
+                password: "secret-l2".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(res_l2_forbidden, Err(AppError::Forbidden)));
+
+        // Login level 1 when l1_answer is empty -> Internal
+        cfg.l1_answer = "".to_string();
+        let state_no_l1 = GateState::new(cfg);
+        let res_no_l1 = login(
+            State(state_no_l1),
+            HeaderMap::new(),
+            Json(LoginRequest {
+                level: 1,
+                username: "yourblooo0".to_string(),
+                password: "yourblooo0".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(res_no_l1, Err(AppError::Internal(_))));
     }
 }

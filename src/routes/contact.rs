@@ -967,5 +967,39 @@ mod tests {
             .unwrap();
         let (status_del, _) = call(contact_router(mailer.clone()), req_del).await;
         assert_eq!(status_del, StatusCode::NOT_FOUND);
+
+        // Additional helpers and validation limits coverage
+        assert_eq!(default_page(), 1);
+        assert_eq!(default_page_size(), 20);
+
+        assert!(!is_plausible_email("user@no_dot_domain"));
+        assert!(!is_plausible_email("@domain.com"));
+        assert!(!is_plausible_email("local@"));
+
+        let req_unread = Request::get("/api/admin/messages?unreadOnly=true")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let (status_unread, _) = call(contact_router(mailer.clone()), req_unread).await;
+        assert_eq!(status_unread, StatusCode::OK);
+
+        let invalid_email_msg = CreateContactMessage {
+            name: "Test User".to_string(),
+            email: "invalid_email".to_string(),
+            subject: None,
+            message: "Hello".to_string(),
+            website: None,
+        };
+        assert!(matches!(validate_payload(&invalid_email_msg), Err(AppError::BadRequest(_))));
+
+        let long_subject = "a".repeat(201);
+        let long_subject_msg = CreateContactMessage {
+            name: "Test User".to_string(),
+            email: "test@example.com".to_string(),
+            subject: Some(long_subject),
+            message: "Hello".to_string(),
+            website: None,
+        };
+        assert!(matches!(validate_payload(&long_subject_msg), Err(AppError::BadRequest(_))));
     }
 }

@@ -483,36 +483,28 @@ mod tests {
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         // Direct handler unit tests without DB
-        let Err(err) = list_blog(Query(CmsBlogQuery {
+        let res1 = list_blog(Query(CmsBlogQuery {
             page: 1,
             page_size: 10,
             locale: None,
-        }))
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::DbUnavailable));
+        })).await;
+        assert!(matches!(res1, Err(AppError::DbUnavailable)));
 
-        let Err(err) = get_blog_post(
+        let res2 = get_blog_post(
             Path("slug".to_string()),
             Query(CmsBlogQuery {
                 page: 1,
                 page_size: 10,
                 locale: None,
             }),
-        )
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::DbUnavailable));
+        ).await;
+        assert!(matches!(res2, Err(AppError::DbUnavailable)));
 
         let read_ctx = ApiKeyContext {
             scope: "read".to_string(),
             key_id: Uuid::nil(),
         };
-        let Err(err) = update_blog_post(
+        let res3 = update_blog_post(
             Path("slug".to_string()),
             Query(CmsBlogQuery {
                 page: 1,
@@ -528,18 +520,14 @@ mod tests {
                 published: None,
                 tags: None,
             }),
-        )
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::Forbidden));
+        ).await;
+        assert!(matches!(res3, Err(AppError::Forbidden)));
 
         let admin_ctx = ApiKeyContext {
             scope: "admin".to_string(),
             key_id: Uuid::nil(),
         };
-        let Err(err) = update_blog_post(
+        let res4 = update_blog_post(
             Path("slug".to_string()),
             Query(CmsBlogQuery {
                 page: 1,
@@ -555,30 +543,18 @@ mod tests {
                 published: None,
                 tags: None,
             }),
-        )
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::DbUnavailable));
+        ).await;
+        assert!(matches!(res4, Err(AppError::DbUnavailable)));
 
-        let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
+        let res5 = get_portfolio(Query(CmsPortfolioQuery {
             section: "".to_string(),
-        }))
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::DbUnavailable));
+        })).await;
+        assert!(matches!(res5, Err(AppError::DbUnavailable)));
 
-        let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
+        let res6 = get_portfolio(Query(CmsPortfolioQuery {
             section: "projects".to_string(),
-        }))
-        .await
-        else {
-            panic!("expected error");
-        };
-        assert!(matches!(err, AppError::DbUnavailable));
+        })).await;
+        assert!(matches!(res6, Err(AppError::DbUnavailable)));
     }
 
     #[test]
@@ -858,5 +834,18 @@ mod tests {
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // API Key lookup DB query failure -> 500 Internal Server Error
+        sqlx::query("DROP TABLE api_keys CASCADE")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        let req_err = Request::get("/api/v1/content/blog")
+            .header("x-api-key", "somekey")
+            .body(Body::empty())
+            .unwrap();
+        let res_err = app.oneshot(req_err).await.unwrap();
+        assert_eq!(res_err.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
