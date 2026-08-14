@@ -861,7 +861,10 @@ mod integration_tests {
                 password: "yourblooo0".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 3. Challenge 3 without completing level 2

@@ -437,7 +437,11 @@ mod tests {
         let noop_clone = noop.clone();
         assert!(format!("{:?}", noop_clone).contains("NoopMailer"));
 
-        let resend = ResendMailer::new("key".to_string(), "a@b.com".to_string(), "c@d.com".to_string());
+        let resend = ResendMailer::new(
+            "key".to_string(),
+            "a@b.com".to_string(),
+            "c@d.com".to_string(),
+        );
         let resend_clone = resend.clone();
         assert!(format!("{:?}", resend_clone).contains("ResendMailer"));
     }

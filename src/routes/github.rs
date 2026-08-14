@@ -451,16 +451,18 @@ async fn get_commit_combined_status(owner: &str, repo: &str, ref_id: &str) -> St
             // Check if ANY check run is still queued or in progress or missing conclusion
             let is_running = check_runs.iter().any(|item| {
                 let s = item["status"].as_str().unwrap_or_default();
-                s == "in_progress" || s == "queued" || item.get("conclusion").is_none_or(|c| c.is_null())
+                s == "in_progress"
+                    || s == "queued"
+                    || item.get("conclusion").is_none_or(|c| c.is_null())
             });
             if is_running {
                 return "running".to_string();
             }
 
             // Check if all check runs were cancelled
-            let all_cancelled = check_runs.iter().all(|item| {
-                item["conclusion"].as_str().unwrap_or_default() == "cancelled"
-            });
+            let all_cancelled = check_runs
+                .iter()
+                .all(|item| item["conclusion"].as_str().unwrap_or_default() == "cancelled");
             if all_cancelled {
                 return "cancelled".to_string();
             }

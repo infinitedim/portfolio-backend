@@ -488,7 +488,10 @@ mod tests {
             page_size: 10,
             locale: None,
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         let Err(err) = get_blog_post(
@@ -499,7 +502,10 @@ mod tests {
                 locale: None,
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         let read_ctx = ApiKeyContext {
@@ -523,7 +529,10 @@ mod tests {
                 tags: None,
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::Forbidden));
 
         let admin_ctx = ApiKeyContext {
@@ -547,19 +556,28 @@ mod tests {
                 tags: None,
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
             section: "".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         let Err(err) = get_portfolio(Query(CmsPortfolioQuery {
             section: "projects".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
     }
 

@@ -434,7 +434,10 @@ mod tests {
                 email: "invalid".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 2. Subscribe valid email without DB -> DbUnavailable
@@ -444,39 +447,56 @@ mod tests {
                 email: "valid@example.com".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         // 3. Confirm empty token
         let Err(err) = confirm(Query(ConfirmQuery {
             token: "   ".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 4. Confirm valid token without DB -> DbUnavailable
         let Err(err) = confirm(Query(ConfirmQuery {
             token: "valid-token".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         // 5. Unsubscribe empty token
         let Err(err) = unsubscribe(Json(UnsubscribeRequest {
             token: "".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 6. Unsubscribe valid token without DB -> DbUnavailable
         let Err(err) = unsubscribe(Json(UnsubscribeRequest {
             token: "valid-token".to_string(),
         }))
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         // 7. List subscribers without admin header
-        let Err(err) = list_subscribers(HeaderMap::new()).await else { panic!("expected error"); };
+        let Err(err) = list_subscribers(HeaderMap::new()).await else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::Unauthorized));
 
         // 8. List subscribers with admin header without DB -> DbUnavailable
@@ -486,7 +506,9 @@ mod tests {
             axum::http::header::AUTHORIZATION,
             token_header.parse().unwrap(),
         );
-        let Err(err) = list_subscribers(headers.clone()).await else { panic!("expected error"); };
+        let Err(err) = list_subscribers(headers.clone()).await else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
 
         // 9. Broadcast without admin header
@@ -498,7 +520,10 @@ mod tests {
                 body: "Body".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::Unauthorized));
 
         // 10. Broadcast empty subject
@@ -510,7 +535,10 @@ mod tests {
                 body: "Body".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 11. Broadcast oversized subject
@@ -522,7 +550,10 @@ mod tests {
                 body: "Body".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 12. Broadcast empty body
@@ -534,7 +565,10 @@ mod tests {
                 body: "".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 13. Broadcast oversized body
@@ -546,7 +580,10 @@ mod tests {
                 body: "a".repeat(MAX_BODY_LEN + 1),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::BadRequest(_)));
 
         // 14. Broadcast valid request without DB -> DbUnavailable
@@ -558,7 +595,10 @@ mod tests {
                 body: "Body".to_string(),
             }),
         )
-        .await else { panic!("expected error"); };
+        .await
+        else {
+            panic!("expected error");
+        };
         assert!(matches!(err, AppError::DbUnavailable));
     }
 
