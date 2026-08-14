@@ -154,13 +154,19 @@ mod tests {
         assert_eq!(err_forbidden.public_message(), "Forbidden");
 
         let err_internal = AppError::Internal("server boom".to_string());
-        assert_eq!(err_internal.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            err_internal.status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
         assert_eq!(err_internal.public_message(), "Internal server error");
         let internal_resp = err_internal.into_response();
         assert_eq!(internal_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let err_pool_timeout = AppError::Db(sqlx::Error::PoolTimedOut);
-        assert_eq!(err_pool_timeout.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            err_pool_timeout.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
 
         let err_resp = ErrorResponse {
             error: "Error title".to_string(),
