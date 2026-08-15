@@ -208,6 +208,8 @@ lazy_static::lazy_static! {
       {
         "id": "c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
         "slug": "c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+        "seriesId": "11111111-1111-4111-a111-111111111111",
+        "seriesOrder": 1,
         "title": {
           "en_US": "Building High-Performance REST APIs with Rust and Axum",
           "id_ID": "Membangun REST API Performa Tinggi dengan Rust dan Axum",
@@ -251,6 +253,8 @@ lazy_static::lazy_static! {
       {
         "id": "d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
         "slug": "d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
+        "seriesId": "22222222-2222-4222-a222-222222222222",
+        "seriesOrder": 1,
         "title": {
           "en_US": "Mastering Next.js 16 Partial Prerendering (PPR) and Web Vitals",
           "id_ID": "Menguasai Partial Prerendering (PPR) dan Web Vitals di Next.js 16",
@@ -290,6 +294,140 @@ lazy_static::lazy_static! {
         "tags": ["Next.js", "React", "Frontend", "PPR", "WebDev"],
         "readingTimeMinutes": 4,
         "createdAt": "2026-08-05T14:30:00Z"
+      },
+      {
+        "id": "e3c4d5e6-7f8a-9b0c-1d2e-3f4a5b6c7d8e",
+        "slug": "e3c4d5e6-7f8a-9b0c-1d2e-3f4a5b6c7d8e",
+        "seriesId": "11111111-1111-4111-a111-111111111111",
+        "seriesOrder": 2,
+        "title": {
+          "en_US": "Advanced Memory Management and Async Tokio Streams in Rust",
+          "id_ID": "Manajemen Memori Tingkat Lanjut dan Stream Async Tokio di Rust",
+          "ja_JP": "Rustにおける高度なメモリ管理と非同期Tokioストリーム",
+          "de_DE": "Fortgeschrittenes Speicher-Management und Asynchrone Tokio-Streams in Rust",
+          "fr_FR": "Gestion Avancée de la Mémoire et Flux Asynchrones Tokio en Rust",
+          "es_ES": "Gestión Avanzada de Memoria y Flujos Asíncronos Tokio en Rust",
+          "zh_CN": "Rust 中的高级内存管理与异步 Tokio 流",
+          "ko_KR": "Rust의 고급 메모리 관리 및 비동기 Tokio 스트림",
+          "pt_BR": "Gerenciamento Avançado de Memória e Streams Tokio Assíncronos em Rust",
+          "ru_RU": "Продвинутое управление памятью и асинхронные потоки Tokio в Rust"
+        },
+        "summary": {
+          "en_US": "Exploring zero-copy deserialization, pin-projection, and custom Tokio async stream extractors for ultra-low latency microservices.",
+          "id_ID": "Mengeksplorasi deserialisasi zero-copy, pin-projection, dan extractor stream async Tokio kustom untuk microservice latensi ultra-rendah.",
+          "ja_JP": "超低レイテンシマイクロサービス向けのゼロコピー逆シリアル化、ピンプロジェクション、およびカスタムTokio非同期ストリーム抽出の探索。",
+          "de_DE": "Untersuchung von Zero-Copy-Deserialisierung, Pin-Projektion und benutzerdefinierten Tokio-Async-Stream-Extraktoren.",
+          "fr_FR": "Exploration de la désérialisation zéro-copie, de la projection de broches et des extracteurs de flux asynchrones Tokio.",
+          "es_ES": "Explorando la deserialización de copia cero, proyección de pines y extractores de flujo asíncronos Tokio personalizados.",
+          "zh_CN": "探讨零拷贝反序列化、Pin 投影以及用于超低延迟微服务的自定义 Tokio 异步流提取器。",
+          "ko_KR": "초저지연 마이크로서비스를 위한 제로 카피 역직렬화, 핀 프로젝션 및 사용자 지정 Tokio 비동기 스트림 추출기 탐구.",
+          "pt_BR": "Explorando a desserialização de cópia zero, projeção de pinos e extratores de fluxo assíncronos Tokio personalizados.",
+          "ru_RU": "Исследование десериализации с нулевым копированием, проекции пинов и настраиваемых экстракторов асинхронных потоков Tokio."
+        },
+        "contentHtml": {
+          "en_US": "<h2>Pin Projection and Futures</h2><p>Pinning ensures memory self-referential structs remain stationary in memory during async execution.</p><h3>Zero-Copy Streams</h3><p>Using Bytes and Tokio AsyncReadExt minimizes heap allocations across socket buffers.</p>",
+          "id_ID": "<h2>Pin Projection dan Futures</h2><p>Pinning menjamin struct memori self-referential tetap tidak berpindah lokasi di memori selama eksekusi async.</p><h3>Zero-Copy Stream</h3><p>Menggunakan Bytes dan Tokio AsyncReadExt meminimalkan alokasi heap pada buffer socket.</p>",
+          "ja_JP": "<h2>ピンプロジェクションとフューチャー</h2><p>ピン留めにより、非同期実行中に自己参照メモリ構造が固定されます。</p>",
+          "de_DE": "<h2>Pin-Projektion und Futures</h2><p>Pinning stellt sicher, dass selbstreferenzielle Speicherstrukturen im Speicher fixiert bleiben.</p>",
+          "fr_FR": "<h2>Projection de Broches et Futures</h2><p>Le verrouillage garantit que les structures mémoire restent fixes pendant l'exécution asynchrone.</p>",
+          "es_ES": "<h2>Proyección de Pines y Futuros</h2><p>El fijado garantiza que las estructuras autorreferenciales se mantengan estacionarias en memoria.</p>",
+          "zh_CN": "<h2>Pin 投影与 Futures</h2><p>固定 (Pinning) 确保自引用内存结构在异步执行期间在内存中保持固定。</p>",
+          "ko_KR": "<h2>핀 프로젝션 및 퓨처</h2><p>고정(Pinning)은 비동기 실행 중에 자가 참조 메모리 구조가 메모리에 고정되도록 합니다。</p>",
+          "pt_BR": "<h2>Projeção de Pinos e Futuros</h2><p>O pino garante que estruturas autorreferenciais permaneçam estáticas na memória durante a execução assíncrona.</p>",
+          "ru_RU": "<h2>Проекция пинов и фьючерсы</h2><p>Закрепление гарантирует, что структуры памяти остаются неподвижными во время асинхронного выполнения.</p>"
+        },
+        "tags": ["Rust", "Tokio", "Concurrency", "Systems"],
+        "readingTimeMinutes": 6,
+        "createdAt": "2026-08-08T09:00:00Z"
+      },
+
+      {
+        "id": "f4d5e6f7-8a9b-0c1d-2e3f-4a5b6c7d8e9f",
+        "slug": "f4d5e6f7-8a9b-0c1d-2e3f-4a5b6c7d8e9f",
+        "seriesId": "22222222-2222-4222-a222-222222222222",
+        "seriesOrder": 2,
+        "title": {
+          "en_US": "Building Edge Proxies and CSP Security Headers with Next.js 16",
+          "id_ID": "Membangun Edge Proxy dan Header Keamanan CSP dengan Next.js 16",
+          "ja_JP": "Next.js 16によるエッジプロキシとCSPセキュリティヘッダーの構築",
+          "de_DE": "Erstellen von Edge-Proxies und CSP-Sicherheitsheadern mit Next.js 16",
+          "fr_FR": "Création de Proxys Edge et de En-têtes de Sécurité CSP avec Next.js 16",
+          "es_ES": "Construyendo Proxies Edge y Encabezados de Seguridad CSP con Next.js 16",
+          "zh_CN": "使用 Next.js 16 构建 Edge 代理和 CSP 安全响应头",
+          "ko_KR": "Next.js 16으로 엣지 프록시 및 CSP 보안 헤더 구축하기",
+          "pt_BR": "Construindo Edge Proxies e Cabeçalhos de Segurança CSP com Next.js 16",
+          "ru_RU": "Создание Edge-прокси и заголовков безопасности CSP в Next.js 16"
+        },
+        "summary": {
+          "en_US": "Architecting Next.js 16 proxy.ts middleware for Content Security Policy, gate redirection, and origin isolation.",
+          "id_ID": "Mengarsitekturi proxy.ts Next.js 16 untuk Content Security Policy, pengalihan gate, dan isolasi origin.",
+          "ja_JP": "コンテンツセキュリティポリシー、ゲートリダイレクト、およびオリジン分離のためのNext.js 16 proxy.tsの設計。",
+          "de_DE": "Architektur von Next.js 16 proxy.ts für Content Security Policy, Gate-Umleitung und Herkunfts-Isolierung.",
+          "fr_FR": "Architecture de Next.js 16 proxy.ts pour la politique de sécurité du contenu, la redirection de porte et l'isolement d'origine.",
+          "es_ES": "Arquitectura de Next.js 16 proxy.ts para Content Security Policy, redirección de puerta e aislamiento de origen.",
+          "zh_CN": "架构 Next.js 16 proxy.ts 以支持内容安全策略 (CSP)、大门重定向和源站隔离。",
+          "ko_KR": "콘텐츠 보안 정책, 게이트 리디렉션 및 원본 격리를 위한 Next.js 16 proxy.ts 아키텍처 구축.",
+          "pt_BR": "Arquitetura do Next.js 16 proxy.ts para Política de Segurança de Conteúdo, redirecionamento de portão e isolamento de origem.",
+          "ru_RU": "Архитектура Next.js 16 proxy.ts для политики безопасности контента (CSP), перенаправления ворот и изоляции источника."
+        },
+        "contentHtml": {
+          "en_US": "<h2>The New Next.js 16 Proxy Convention</h2><p>Replaces legacy middleware with edge-safe proxy handlers for strict security header injection.</p><h3>Strict Content Security Policy</h3><p>Configuring script-src nonces and strict-dynamic eliminates XSS attack vectors.</p>",
+          "id_ID": "<h2>Konvensi Proxy Baru Next.js 16</h2><p>Menggantikan middleware lama dengan edge-safe proxy handler untuk injeksi header keamanan ketat.</p><h3>Content Security Policy Ketat</h3><p>Mengonfigurasi script-src nonce dan strict-dynamic mengeliminasi vektor serangan XSS.</p>",
+          "ja_JP": "<h2>新しいNext.js 16プロキシ規約</h2><p>厳格なセキュリティヘッダー注入のために、レガシーミドルウェアをエッジセーフなプロキシハンドラーに置き換えます。</p>",
+          "de_DE": "<h2>Die neue Next.js 16 Proxy-Konvention</h2><p>Ersetzt Legacy-Middleware durch edge-sichere Proxy-Handler für strenge Sicherheits-Header-Injektion.</p>",
+          "fr_FR": "<h2>La Nouvelle Convention Proxy Next.js 16</h2><p>Remplace le middleware hérité par des gestionnaires de proxy sécurisés.</p>",
+          "es_ES": "<h2>La Nueva Convención de Proxy de Next.js 16</h2><p>Reemplaza el middleware heredado por controladores de proxy seguros en el borde.</p>",
+          "zh_CN": "<h2>全新的 Next.js 16 Proxy 规范</h2><p>使用 Edge 安全代理处理器替代传统中间件，注入严格的 Security Response Headers。</p>",
+          "ko_KR": "<h2>새로운 Next.js 16 프록시 컨벤션</h2><p>엄격한 보안 헤더 주입을 위해 기존 미들웨어를 엣지 세이프 프록시 핸들러로 교체합니다。</p>",
+          "pt_BR": "<h2>A Nova Convenção de Proxy do Next.js 16</h2><p>Substitui o middleware legado por manipuladores de proxy seguros na borda.</p>",
+          "ru_RU": "<h2>Новое соглашение о прокси в Next.js 16</h2><p>Заменяет устаревший middleware на безопасные прокси-обработчики.</p>"
+        },
+        "tags": ["Next.js", "Security", "EdgeProxy", "WebDev"],
+        "readingTimeMinutes": 5,
+        "createdAt": "2026-08-10T11:15:00Z"
+      },
+      {
+        "id": "a5e6f7a8-9b0c-1d2e-3f4a-5b6c7d8e9f0a",
+        "slug": "a5e6f7a8-9b0c-1d2e-3f4a-5b6c7d8e9f0a",
+        "title": {
+          "en_US": "Zero-Downtime GCP Terraform IaC and Cloud Run VPC Access",
+          "id_ID": "Infrastruktur GCP Terraform IaC dan Cloud Run VPC Access Tanpa Downtime",
+          "ja_JP": "ダウンタイムゼロのGCP Terraform IaCおよびCloud Run VPCアクセス",
+          "de_DE": "Zero-Downtime GCP Terraform IaC und Cloud Run VPC-Zugriff",
+          "fr_FR": "GCP Terraform IaC Sans Interruption et Accès VPC Cloud Run",
+          "es_ES": "GCP Terraform IaC Sin Tiempo de Inactividad y Acceso VPC Cloud Run",
+          "zh_CN": "无停机 GCP Terraform IaC 与 Cloud Run VPC 访问架构",
+          "ko_KR": "무중단 GCP Terraform IaC 및 Cloud Run VPC 액세스",
+          "pt_BR": "GCP Terraform IaC Sem Downtime e Acesso VPC Cloud Run",
+          "ru_RU": "GCP Terraform IaC без простоев и доступ к Cloud Run VPC"
+        },
+        "summary": {
+          "en_US": "Step-by-step production runbook for provisioning PostgreSQL, Redis, and Cloud Run in asia-southeast2 with Serverless VPC Connectors.",
+          "id_ID": "Panduan produksi langkah demi langkah untuk mengkonfigurasi PostgreSQL, Redis, dan Cloud Run di asia-southeast2 dengan Serverless VPC Connector.",
+          "ja_JP": "Serverless VPC Connectorを使用してasia-southeast2でPostgreSQL、Redis、Cloud Runをプロビジョニングするための実用的なプロダクションランブック。",
+          "de_DE": "Schritt-für-Schritt-Produktions-Runbook zur Bereitstellung von PostgreSQL, Redis und Cloud Run.",
+          "fr_FR": "Guide de production étape par étape pour le provisionnement de PostgreSQL, Redis et Cloud Run.",
+          "es_ES": "Guía de producción paso a paso para aprovisionar PostgreSQL, Redis y Cloud Run.",
+          "zh_CN": "在 asia-southeast2 中使用无服务器 VPC 连接器配置 PostgreSQL、Redis 和 Cloud Run 的逐步生产指南。",
+          "ko_KR": "Serverless VPC 커넥터를 사용하여 asia-southeast2에서 PostgreSQL, Redis 및 Cloud Run을 프로비저닝하기 위한 단계별 프로덕션 실행 서.",
+          "pt_BR": "Guia de produção passo a passo para provisionamento de PostgreSQL, Redis e Cloud Run.",
+          "ru_RU": "Пошаговое руководство для развертывания PostgreSQL, Redis и Cloud Run в регион asia-southeast2."
+        },
+        "contentHtml": {
+          "en_US": "<h2>Serverless VPC Egress Architecture</h2><p>Configuring PRIVATE_RANGES_ONLY egress preserves outbound internet traffic for third-party REST APIs while securing internal PostgreSQL access.</p><h3>Infrastructure as Code</h3><p>Terraform modules for Ops VM, Cloud Run service accounts, and Secret Manager bindings.</p>",
+          "id_ID": "<h2>Arsitektur Serverless VPC Egress</h2><p>Mengonfigurasi egress PRIVATE_RANGES_ONLY mempertahankan lalu lintas internet keluar untuk REST API pihak ketiga sambil mengamankan akses PostgreSQL internal.</p><h3>Infrastructure as Code</h3><p>Modul Terraform untuk Ops VM, Cloud Run service account, dan Secret Manager binding.</p>",
+          "ja_JP": "<h2>Serverless VPCエグレスアーキテクチャ</h2><p>PRIVATE_RANGES_ONLYエグレスを設定すると、内部PostgreSQLアクセスを保護しながら、サードパーティREST APIのアウトバウンドインターネットトラフィックが保持されます。</p>",
+          "de_DE": "<h2>Serverless VPC Egress-Architektur</h2><p>Die Konfiguration von PRIVATE_RANGES_ONLY Egress bewahrt den ausgehenden Internetverkehr für REST-APIs von Drittanbietern.</p>",
+          "fr_FR": "<h2>Architecture Egress VPC Serverless</h2><p>La configuration de la sortie PRIVATE_RANGES_ONLY préserve le trafic Internet sortant.</p>",
+          "es_ES": "<h2>Arquitectura de Salida VPC Serverless</h2><p>Configurar la salida PRIVATE_RANGES_ONLY preserva el tráfico de Internet saliente.</p>",
+          "zh_CN": "<h2>无服务器 VPC 出站流量 (Egress) 架构</h2><p>配置 PRIVATE_RANGES_ONLY 出站可以在保护内部 PostgreSQL 访问的同时，保留第三方 REST API 的出站互联网流量。</p>",
+          "ko_KR": "<h2>Serverless VPC 이그레스 아키텍처</h2><p>PRIVATE_RANGES_ONLY 이그레스를 구성하면 내부 PostgreSQL 액세스를 보호하면서 타사 REST API의 아웃바운드 인터넷 트래픽이 보존됩니다。</p>",
+          "pt_BR": "<h2>Arquitetura Egress de VPC Serverless</h2><p>Configurar a saída PRIVATE_RANGES_ONLY preserva o tráfego de saída da Internet para APIs REST de terceiros.</p>",
+          "ru_RU": "<h2>Архитектура исходящего трафика Serverless VPC</h2><p>Настройка PRIVATE_RANGES_ONLY сохраняет исходящий интернет-трафик для сторонних REST API.</p>"
+        },
+        "tags": ["GCP", "Terraform", "DevOps", "CloudRun"],
+        "readingTimeMinutes": 7,
+        "createdAt": "2026-08-12T16:45:00Z"
       }
     ]);
 }
@@ -339,6 +477,10 @@ pub fn get_static_blog_posts(locale: &str) -> Vec<BlogPostSummary> {
                 .map(|post| {
                     let title = resolve_blog_locale_string(&post["title"], locale);
                     let summary = resolve_blog_locale_string(&post["summary"], locale);
+                    let series_id = post["seriesId"]
+                        .as_str()
+                        .and_then(|s| Uuid::parse_str(s).ok());
+                    let series_order = post["seriesOrder"].as_i64().map(|n| n as i32);
                     BlogPostSummary {
                         id: Uuid::parse_str(post["id"].as_str().unwrap()).unwrap(),
                         title,
@@ -360,8 +502,8 @@ pub fn get_static_blog_posts(locale: &str) -> Vec<BlogPostSummary> {
                         translation_status: "published".to_string(),
                         reviewed_at: None,
                         reviewed_by: None,
-                        series_id: None,
-                        series_order: None,
+                        series_id,
+                        series_order,
                         created_at: DateTime::parse_from_rfc3339(
                             post["createdAt"].as_str().unwrap(),
                         )
@@ -391,6 +533,10 @@ pub fn get_static_blog_post_detail(slug: &str, locale: &str) -> Option<BlogPostR
     let title = resolve_blog_locale_string(&post["title"], locale);
     let summary = resolve_blog_locale_string(&post["summary"], locale);
     let content_html = resolve_blog_locale_string(&post["contentHtml"], locale);
+    let series_id = post["seriesId"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let series_order = post["seriesOrder"].as_i64().map(|n| n as i32);
 
     Some(BlogPostResponse {
         id: Uuid::parse_str(post["id"].as_str().unwrap()).unwrap(),
@@ -411,8 +557,8 @@ pub fn get_static_blog_post_detail(slug: &str, locale: &str) -> Option<BlogPostR
         publish_at: None,
         status: BlogStatus::Published,
         locale: locale.to_string(),
-        series_id: None,
-        series_order: None,
+        series_id,
+        series_order,
         translation_group_id: None,
         translation_status: "published".to_string(),
         reviewed_at: None,
@@ -2203,8 +2349,11 @@ mod tests {
         assert_eq!(default_page_size(), 10);
     }
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
     async fn test_list_posts_no_db_returns_503() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("ENVIRONMENT", "production");
         let status = get_status(blog_router(), "/api/blog").await;
         std::env::remove_var("ENVIRONMENT");
@@ -2213,6 +2362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_posts_no_db_in_dev_returns_ok() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::remove_var("ENVIRONMENT");
         let status = get_status(blog_router(), "/api/blog").await;
         assert_eq!(status, StatusCode::OK);
@@ -2898,13 +3048,14 @@ mod tests {
 
     #[test]
     fn test_static_blog_posts_locale() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::remove_var("ENVIRONMENT");
         let id_posts = get_static_blog_posts("id_ID");
-        assert_eq!(id_posts.len(), 2);
+        assert_eq!(id_posts.len(), 5);
         assert!(id_posts[0].title.contains("Membangun REST API"));
 
         let ja_posts = get_static_blog_posts("ja_JP");
-        assert_eq!(ja_posts.len(), 2);
+        assert_eq!(ja_posts.len(), 5);
         assert!(ja_posts[0].title.contains("RustとAxumによる高性能"));
 
         let detail =

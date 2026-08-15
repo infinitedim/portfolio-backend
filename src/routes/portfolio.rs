@@ -1895,6 +1895,7 @@ mod tests {
 
     #[test]
     fn test_resolve_projects_locale() {
+        std::env::remove_var("ENVIRONMENT");
         let projects_data = get_static_data("projects").unwrap();
 
         let id_res = resolve_projects_locale(&projects_data, "id_ID");

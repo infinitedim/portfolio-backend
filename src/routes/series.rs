@@ -88,6 +88,65 @@ async fn count_series_posts(
     Ok(count)
 }
 
+pub fn get_static_series_list() -> Vec<SeriesResponse> {
+    if std::env::var("ENVIRONMENT").as_deref() == Ok("production") {
+        return Vec::new();
+    }
+    let now = Utc::now();
+    vec![
+        SeriesResponse {
+            id: Uuid::parse_str("11111111-1111-4111-a111-111111111111").unwrap(),
+            title: "Rust Systems & Axum Mastery".to_string(),
+            slug: "rust-systems-mastery".to_string(),
+            description: Some(
+                "A comprehensive series on high-performance asynchronous Rust backend engineering, memory safety, and Axum 0.8 architecture."
+                    .to_string(),
+            ),
+            post_count: 2,
+            created_at: now,
+            updated_at: now,
+        },
+        SeriesResponse {
+            id: Uuid::parse_str("22222222-2222-4222-a222-222222222222").unwrap(),
+            title: "Next.js 16 & Modern Web Architecture".to_string(),
+            slug: "nextjs-16-architecture".to_string(),
+            description: Some(
+                "In-depth guide on Partial Prerendering (PPR), React Server Components, Web Vitals, and edge proxy design."
+                    .to_string(),
+            ),
+            post_count: 2,
+            created_at: now,
+            updated_at: now,
+        },
+    ]
+}
+
+pub fn get_static_series_detail(slug: &str, locale: &str) -> Option<SeriesDetailResponse> {
+    if std::env::var("ENVIRONMENT").as_deref() == Ok("production") {
+        return None;
+    }
+    let list = get_static_series_list();
+    let s = list
+        .into_iter()
+        .find(|item| item.slug == slug || item.id.to_string() == slug)?;
+    let all_posts = crate::routes::blog::get_static_blog_posts(locale);
+    let mut posts: Vec<BlogPostSummary> = all_posts
+        .into_iter()
+        .filter(|p| p.series_id == Some(s.id))
+        .collect();
+    posts.sort_by_key(|p| p.series_order.unwrap_or(999));
+
+    Some(SeriesDetailResponse {
+        id: s.id,
+        title: s.title,
+        slug: s.slug,
+        description: s.description,
+        posts,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/api/blog/series",
@@ -98,13 +157,29 @@ async fn count_series_posts(
     ),
 )]
 pub async fn list_series_public() -> Result<impl IntoResponse, AppError> {
-    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            let static_series = get_static_series_list();
+            if !static_series.is_empty() {
+                return Ok((StatusCode::OK, Json(static_series)));
+            }
+            return Err(AppError::DbUnavailable);
+        }
+    };
 
     let rows = sqlx::query_as::<_, BlogSeries>(
         "SELECT id, title, slug, description, created_at, updated_at FROM blog_series ORDER BY title ASC",
     )
     .fetch_all(pool.as_ref())
     .await?;
+
+    if rows.is_empty() {
+        let static_series = get_static_series_list();
+        if !static_series.is_empty() {
+            return Ok((StatusCode::OK, Json(static_series)));
+        }
+    }
 
     let mut items = Vec::with_capacity(rows.len());
     for series in rows {
@@ -133,15 +208,30 @@ pub async fn get_series_public(Path(slug): Path<String>) -> Result<impl IntoResp
         ));
     }
 
-    let pool = db::get_pool().ok_or(AppError::DbUnavailable)?;
+    let pool = match db::get_pool() {
+        Some(p) => p,
+        None => {
+            if let Some(detail) = get_static_series_detail(&slug, "en") {
+                return Ok((StatusCode::OK, Json(detail)));
+            }
+            return Err(AppError::DbUnavailable);
+        }
+    };
 
-    let series = sqlx::query_as::<_, BlogSeries>(
+    let series = match sqlx::query_as::<_, BlogSeries>(
         "SELECT id, title, slug, description, created_at, updated_at FROM blog_series WHERE slug = $1",
     )
     .bind(&slug)
     .fetch_optional(pool.as_ref())
-    .await?
-    .ok_or(AppError::NotFound)?;
+    .await? {
+        Some(s) => s,
+        None => {
+            if let Some(detail) = get_static_series_detail(&slug, "en") {
+                return Ok((StatusCode::OK, Json(detail)));
+            }
+            return Err(AppError::NotFound);
+        }
+    };
 
     let posts = sqlx::query_as::<_, crate::db::models::BlogPost>(
         r#"
@@ -465,10 +555,23 @@ mod tests {
         res.status()
     }
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
-    async fn list_series_no_db_returns_503() {
+    async fn list_series_no_db_in_prod_returns_503() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("ENVIRONMENT", "production");
         let status = get_status(series_router(), "/api/blog/series").await;
+        std::env::remove_var("ENVIRONMENT");
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn list_series_no_db_in_dev_returns_ok() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("ENVIRONMENT");
+        let status = get_status(series_router(), "/api/blog/series").await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[test]
