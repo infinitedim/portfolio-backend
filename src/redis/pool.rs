@@ -130,6 +130,14 @@ mod tests {
         let mode2 = RedisMode::connect_from_env().await;
         assert!(matches!(mode2, RedisMode::Disabled));
 
+        if let Some(url) = redis_test_url() {
+            std::env::set_var("REDIS_URL", &url);
+            let mode3 = RedisMode::connect_from_env().await;
+            assert!(matches!(mode3, RedisMode::Connected(_)));
+            assert!(mode3.pool().is_some());
+            assert!(mode3.ping().await.unwrap().is_some());
+        }
+
         if let Some(val) = original_redis {
             std::env::set_var("REDIS_URL", val);
         } else {

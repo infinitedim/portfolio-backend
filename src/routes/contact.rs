@@ -990,7 +990,10 @@ mod tests {
             message: "Hello".to_string(),
             website: None,
         };
-        assert!(matches!(validate_payload(&invalid_email_msg), Err(AppError::BadRequest(_))));
+        assert!(matches!(
+            validate_payload(&invalid_email_msg),
+            Err(AppError::BadRequest(_))
+        ));
 
         let long_subject = "a".repeat(201);
         let long_subject_msg = CreateContactMessage {
@@ -1000,6 +1003,9 @@ mod tests {
             message: "Hello".to_string(),
             website: None,
         };
-        assert!(matches!(validate_payload(&long_subject_msg), Err(AppError::BadRequest(_))));
+        assert!(matches!(
+            validate_payload(&long_subject_msg),
+            Err(AppError::BadRequest(_))
+        ));
     }
 }

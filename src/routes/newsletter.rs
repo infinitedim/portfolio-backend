@@ -722,5 +722,49 @@ mod tests {
 
         let res_list_err = list_subscribers(HeaderMap::new()).await;
         assert!(res_list_err.is_err());
+
+        // 8. Re-subscribing when already subscribed / unsubscribed
+        let res_resub_unsub = subscribe(
+            State(mailer.clone()),
+            Json(SubscribeRequest {
+                email: "user@example.com".to_string(),
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(res_resub_unsub.status(), StatusCode::OK);
+
+        // Confirm again
+        let sub2: NewsletterSubscriber =
+            sqlx::query_as("SELECT * FROM newsletter_subscribers WHERE email = 'user@example.com'")
+                .fetch_one(&*db.pool)
+                .await
+                .unwrap();
+        confirm(Query(ConfirmQuery {
+            token: sub2.confirm_token.unwrap(),
+        }))
+        .await
+        .unwrap();
+
+        // Subscribe when already confirmed -> "You are already subscribed."
+        let res_already = subscribe(
+            State(mailer.clone()),
+            Json(SubscribeRequest {
+                email: "user@example.com".to_string(),
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(res_already.status(), StatusCode::OK);
+        let bytes_already = axum::body::to_bytes(res_already.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let val_already: serde_json::Value = serde_json::from_slice(&bytes_already).unwrap();
+        assert!(val_already["message"]
+            .as_str()
+            .unwrap()
+            .contains("already subscribed"));
     }
 }

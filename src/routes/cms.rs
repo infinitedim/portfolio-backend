@@ -487,7 +487,8 @@ mod tests {
             page: 1,
             page_size: 10,
             locale: None,
-        })).await;
+        }))
+        .await;
         assert!(matches!(res1, Err(AppError::DbUnavailable)));
 
         let res2 = get_blog_post(
@@ -497,7 +498,8 @@ mod tests {
                 page_size: 10,
                 locale: None,
             }),
-        ).await;
+        )
+        .await;
         assert!(matches!(res2, Err(AppError::DbUnavailable)));
 
         let read_ctx = ApiKeyContext {
@@ -520,7 +522,8 @@ mod tests {
                 published: None,
                 tags: None,
             }),
-        ).await;
+        )
+        .await;
         assert!(matches!(res3, Err(AppError::Forbidden)));
 
         let admin_ctx = ApiKeyContext {
@@ -543,17 +546,20 @@ mod tests {
                 published: None,
                 tags: None,
             }),
-        ).await;
+        )
+        .await;
         assert!(matches!(res4, Err(AppError::DbUnavailable)));
 
         let res5 = get_portfolio(Query(CmsPortfolioQuery {
             section: "".to_string(),
-        })).await;
+        }))
+        .await;
         assert!(matches!(res5, Err(AppError::DbUnavailable)));
 
         let res6 = get_portfolio(Query(CmsPortfolioQuery {
             section: "projects".to_string(),
-        })).await;
+        }))
+        .await;
         assert!(matches!(res6, Err(AppError::DbUnavailable)));
     }
 

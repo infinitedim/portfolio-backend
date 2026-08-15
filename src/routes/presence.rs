@@ -322,5 +322,8 @@ mod tests {
                 break;
             }
         }
+
+        // 9. Send Close frame -> Should close connection cleanly
+        write.send(WsMessage::Close(None)).await.unwrap();
     }
 }

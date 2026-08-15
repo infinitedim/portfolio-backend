@@ -348,4 +348,42 @@ mod tests {
         let response_huge: serde_json::Value = serde_json::from_slice(&bytes_huge).unwrap();
         assert!(!response_huge["success"].as_bool().unwrap());
     }
+
+    #[test]
+    fn test_sanitize_entry_and_redact_value_array() {
+        let mut entry = ClientLogEntry {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            level: "info".to_string(),
+            message: "a".repeat(2500),
+            context: Some(serde_json::json!([
+                { "password": "secret_password" },
+                { "normal": "a".repeat(2500) }
+            ])),
+            metadata: Some(serde_json::json!({ "token": "secret_token" })),
+        };
+
+        sanitize_entry(&mut entry);
+        assert_eq!(entry.message.len(), MAX_FIELD_LEN);
+        let ctx_arr = entry.context.clone().unwrap();
+        assert_eq!(ctx_arr[0]["password"], REDACTED);
+        assert_eq!(ctx_arr[1]["normal"].as_str().unwrap().len(), MAX_FIELD_LEN);
+
+        assert!(process_client_log(&entry, "req-1").is_ok());
+
+        let mut trace_entry = entry.clone();
+        trace_entry.level = "trace".to_string();
+        assert!(process_client_log(&trace_entry, "req-2").is_ok());
+
+        let mut debug_entry = entry.clone();
+        debug_entry.level = "debug".to_string();
+        assert!(process_client_log(&debug_entry, "req-3").is_ok());
+
+        let mut warn_entry = entry.clone();
+        warn_entry.level = "warn".to_string();
+        assert!(process_client_log(&warn_entry, "req-4").is_ok());
+
+        let mut err_entry = entry.clone();
+        err_entry.level = "error".to_string();
+        assert!(process_client_log(&err_entry, "req-5").is_ok());
+    }
 }

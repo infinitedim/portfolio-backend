@@ -83,7 +83,7 @@ fn default_locale() -> String {
     "en_US".to_string()
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateExperienceRequest {
     pub company: String,
@@ -1912,5 +1912,155 @@ mod tests {
         let fallback_res = resolve_projects_locale(&projects_data, "unknown_LOCALE");
         let fallback_desc = fallback_res[0]["description"].as_str().unwrap();
         assert!(fallback_desc.contains("Interactive terminal-style portfolio"));
+    }
+
+    #[tokio::test]
+    async fn db_portfolio_experience_and_about_crud() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        seed_experience_data(db.pool.as_ref()).await;
+        seed_about_data(db.pool.as_ref()).await;
+
+        let bearer = crate::test_support::admin_bearer();
+        let app = Router::new()
+            .route(
+                "/api/portfolio/experience",
+                axum::routing::get(get_experience_i18n),
+            )
+            .route(
+                "/api/admin/portfolio/experience",
+                axum::routing::get(list_experiences_admin).post(create_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}",
+                axum::routing::patch(update_experience).delete(delete_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}/locale/{locale}",
+                axum::routing::patch(override_experience_locale),
+            )
+            .route(
+                "/api/admin/portfolio/about",
+                axum::routing::get(get_about_admin).patch(update_about_admin),
+            )
+            .layer(crate::test_support::mock_connect_info());
+
+        // 1. Get Experience i18n
+        let req_exp = Request::get("/api/portfolio/experience?locale=en_US")
+            .body(Body::empty())
+            .unwrap();
+        let res_exp = app.clone().oneshot(req_exp).await.unwrap();
+        assert_eq!(res_exp.status(), StatusCode::OK);
+
+        // 2. Get Admin Experiences List
+        let req_admin_exp = Request::get("/api/admin/portfolio/experience")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_admin_exp = app.clone().oneshot(req_admin_exp).await.unwrap();
+        assert_eq!(res_admin_exp.status(), StatusCode::OK);
+
+        // 3. Create Experience
+        let mut pos_map = std::collections::HashMap::new();
+        pos_map.insert("en_US".to_string(), "Backend Engineer".to_string());
+        let mut dur_map = std::collections::HashMap::new();
+        dur_map.insert("en_US".to_string(), "2024 - Present".to_string());
+        let mut desc_map = std::collections::HashMap::new();
+        desc_map.insert("en_US".to_string(), vec!["Built Rust services".to_string()]);
+
+        let create_req = CreateExperienceRequest {
+            company: "Acme Corp".to_string(),
+            position: pos_map,
+            duration: dur_map,
+            description: desc_map,
+            technologies: vec!["Rust".to_string(), "Axum".to_string()],
+            experience_type: "full-time".to_string(),
+            display_order: 1,
+        };
+
+        let req_create = Request::post("/api/admin/portfolio/experience")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&create_req).unwrap()))
+            .unwrap();
+        let res_create = app.clone().oneshot(req_create).await.unwrap();
+        assert_eq!(res_create.status(), StatusCode::CREATED);
+        let created_body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(res_create.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let created_id = created_body["data"]["id"].as_str().unwrap();
+
+        // 4. Override Experience Locale
+        let req_override = Request::patch(format!(
+            "/api/admin/portfolio/experience/{created_id}/locale/id_ID"
+        ))
+        .header("authorization", &bearer)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "position": "Insinyur Backend",
+                "duration": "2024 - Sekarang",
+                "description": ["Membangun layanan Rust"]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        let res_override = app.clone().oneshot(req_override).await.unwrap();
+        assert_eq!(res_override.status(), StatusCode::OK);
+
+        // 5. Update Experience
+        let req_update = Request::patch(format!("/api/admin/portfolio/experience/{created_id}"))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "company": "Acme Corp Inc"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let res_update = app.clone().oneshot(req_update).await.unwrap();
+        assert_eq!(res_update.status(), StatusCode::OK);
+
+        // 6. Delete Experience
+        let req_delete = Request::delete(format!("/api/admin/portfolio/experience/{created_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_delete = app.clone().oneshot(req_delete).await.unwrap();
+        assert_eq!(res_delete.status(), StatusCode::OK);
+
+        // 7. About Admin GET & PATCH
+        let req_about_get = Request::get("/api/admin/portfolio/about")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_about_get = app.clone().oneshot(req_about_get).await.unwrap();
+        assert_eq!(res_about_get.status(), StatusCode::OK);
+
+        let req_about_patch = Request::patch("/api/admin/portfolio/about")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Dimas Saputra",
+                    "title": { "en_US": "Senior Backend Architect" },
+                    "bio": { "en_US": "Passionate developer" },
+                    "location": { "en_US": "Jakarta" },
+                    "contact": {
+                        "email": "test@example.com",
+                        "github": "https://github.com/infinitedim",
+                        "linkedin": "https://linkedin.com/in/infinitedim"
+                    }
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let res_about_patch = app.clone().oneshot(req_about_patch).await.unwrap();
+        assert_eq!(res_about_patch.status(), StatusCode::OK);
     }
 }

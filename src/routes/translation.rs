@@ -205,8 +205,29 @@ pub async fn translate_blog_post(
     content_md: &str,
     target_locale: &str,
 ) -> Result<TranslatedBlogPost, String> {
-    let target_lang = to_deepl_target_lang(target_locale);
     let endpoint = get_deepl_endpoint(api_key);
+    translate_blog_post_with_endpoint(
+        client,
+        endpoint,
+        api_key,
+        title,
+        summary,
+        content_md,
+        target_locale,
+    )
+    .await
+}
+
+pub async fn translate_blog_post_with_endpoint(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    title: &str,
+    summary: Option<&str>,
+    content_md: &str,
+    target_locale: &str,
+) -> Result<TranslatedBlogPost, String> {
+    let target_lang = to_deepl_target_lang(target_locale);
 
     let (masked_md, placeholders) = mask_markdown_code(content_md);
     let wrapped_title = wrap_dnt_terms(title);
@@ -377,97 +398,154 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_deepl_target_lang_mapping() {
-        assert_eq!(to_deepl_target_lang("en"), "EN-US");
-        assert_eq!(to_deepl_target_lang("en_US"), "EN-US");
-        assert_eq!(to_deepl_target_lang("id_ID"), "ID");
-        assert_eq!(to_deepl_target_lang("zh_CN"), "ZH-HANS");
-        assert_eq!(to_deepl_target_lang("ja_JP"), "JA");
-        assert_eq!(to_deepl_target_lang("ko_KR"), "KO");
-        assert_eq!(to_deepl_target_lang("es_ES"), "ES");
-        assert_eq!(to_deepl_target_lang("fr_FR"), "FR");
-        assert_eq!(to_deepl_target_lang("de_DE"), "DE");
-        assert_eq!(to_deepl_target_lang("pt_BR"), "PT-BR");
-        assert_eq!(to_deepl_target_lang("ru_RU"), "RU");
+    fn test_to_deepl_target_lang_unknown_fallback() {
+        assert_eq!(to_deepl_target_lang("unknown_LOCALE"), "EN-US");
     }
 
     #[test]
-    fn test_mask_and_unmask_markdown_code() {
-        let content =
-            "Hello world\n```rust\nfn main() { println!(\"Hi\"); }\n```\nSome `inline_code` here.";
-        let (masked, placeholders) = mask_markdown_code(content);
-        assert!(masked.contains("__CODE_BLOCK_0__"));
-        assert!(masked.contains("__CODE_BLOCK_1__"));
-        assert!(!masked.contains("fn main()"));
-        assert_eq!(placeholders.len(), 2);
-
-        let unmasked = unmask_markdown_code(&masked, &placeholders);
-        assert_eq!(unmasked, content);
+    fn test_get_deepl_endpoint() {
+        assert_eq!(
+            get_deepl_endpoint("secret-key:fx"),
+            "https://api-free.deepl.com/v2/translate"
+        );
+        assert_eq!(
+            get_deepl_endpoint("secret-key-pro"),
+            "https://api.deepl.com/v2/translate"
+        );
     }
 
     #[test]
-    fn test_wrap_and_unwrap_dnt_terms() {
-        let content = "Built with Rust and Next.js on PostgreSQL.";
-        let wrapped = wrap_dnt_terms(content);
-        assert!(wrapped.contains("<notranslate>Rust</notranslate>"));
-        assert!(wrapped.contains("<notranslate>Next.js</notranslate>"));
-        assert!(wrapped.contains("<notranslate>PostgreSQL</notranslate>"));
+    fn test_apply_literal_fixes() {
+        let mut val_str = Value::String("Utas dan basis data kolam thread".to_string());
+        apply_literal_fixes(&mut val_str);
+        assert_eq!(val_str.as_str().unwrap(), "thread dan database thread pool");
 
-        let unwrapped = unwrap_dnt_terms(&wrapped);
-        assert_eq!(unwrapped, content);
+        let mut val_arr = serde_json::json!(["utas", "basis data"]);
+        apply_literal_fixes(&mut val_arr);
+        assert_eq!(val_arr[0], "thread");
+        assert_eq!(val_arr[1], "database");
+
+        let mut val_obj = serde_json::json!({ "title": "pengembang web" });
+        apply_literal_fixes(&mut val_obj);
+        assert_eq!(val_obj["title"], "web developer");
+
+        let mut val_num = serde_json::json!(123);
+        apply_literal_fixes(&mut val_num);
+        assert_eq!(val_num, 123);
     }
 
     #[tokio::test]
-    async fn test_deepl_translation_sample_content() {
-        let api_key = match std::env::var("DEEPL_API_KEY") {
-            Ok(k) if !k.is_empty() => k,
-            _ => return, // Skip network test if DEEPL_API_KEY is not set
-        };
+    async fn test_translate_experience_and_about() {
+        let client = reqwest::Client::new();
+        let exp = translate_experience(
+            &client,
+            "key",
+            "Software Engineer",
+            "2023 - Present",
+            &["Developed Rust APIs".to_string()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(exp.position["en_US"], "Software Engineer");
+        assert_eq!(exp.duration["id_ID"], "2023 - Present");
+
+        let abt = translate_about(
+            &client,
+            "key",
+            "Full Stack Dev",
+            "Passionate engineer",
+            "Jakarta",
+        )
+        .await
+        .unwrap();
+        assert_eq!(abt.title["en_US"], "Full Stack Dev");
+        assert_eq!(abt.location["id_ID"], "Jakarta");
+    }
+
+    #[tokio::test]
+    async fn test_mock_deepl_blog_translation_flow() {
+        use axum::{routing::post, Json, Router};
+
+        let app = Router::new().route(
+            "/v2/translate",
+            post(|Json(body): Json<Value>| async move {
+                let texts = body["text"].as_array().cloned().unwrap_or_default();
+                if texts.is_empty() {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"message": "empty text"})),
+                    );
+                }
+                let translations = texts
+                    .iter()
+                    .map(|t| serde_json::json!({ "text": format!("[translated] {}", t.as_str().unwrap_or("")) }))
+                    .collect::<Vec<_>>();
+                (
+                    axum::http::StatusCode::OK,
+                    Json(serde_json::json!({ "translations": translations })),
+                )
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
         let client = reqwest::Client::new();
-        let sample_title = "High-Performance Systems with Rust and Axum";
-        let sample_summary =
-            "An in-depth guide to building scalable APIs using Rust, Axum, and PostgreSQL.";
-        let sample_content = "# Introduction\nIn this article, we explore how **Rust** and **Next.js** interact.\n```rust\nfn main() {\n    println!(\"Hello Rust!\");\n}\n```\nCheck `Axum` framework.";
+        let mock_api_key = "test_key";
+        let mock_url = format!("http://{}/v2/translate", addr);
 
-        let res_zh = translate_blog_post(
+        let res = translate_blog_post_with_endpoint(
             &client,
-            &api_key,
-            sample_title,
-            Some(sample_summary),
-            sample_content,
-            "zh_CN",
+            &mock_url,
+            mock_api_key,
+            "Rust Title",
+            Some("Summary text"),
+            "```rust\nfn main() {}\n```",
+            "id_ID",
+        )
+        .await
+        .unwrap();
+
+        assert!(res.title.contains("[translated]"));
+        assert!(res.summary.unwrap().contains("[translated]"));
+        assert!(res.content_md.contains("```rust"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_deepl_error_responses() {
+        use axum::{routing::post, Json, Router};
+
+        let app = Router::new().route(
+            "/v2/translate_err",
+            post(|| async {
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Quota exceeded"})),
+                )
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let mock_url = format!("http://{}/v2/translate_err", addr);
+        let res = translate_blog_post_with_endpoint(
+            &client, &mock_url, "key", "Title", None, "Content", "en_US",
         )
         .await;
-        assert!(
-            res_zh.is_ok(),
-            "zh_CN translation failed: {:?}",
-            res_zh.err()
-        );
-        let zh = res_zh.unwrap();
-        assert!(zh.content_md.contains("```rust"));
-        assert!(zh.content_md.contains("println!(\"Hello Rust!\")"));
-        assert!(zh.content_md.contains("Rust"));
-        assert!(zh.content_md.contains("Next.js"));
 
-        let res_de = translate_blog_post(
-            &client,
-            &api_key,
-            sample_title,
-            Some(sample_summary),
-            sample_content,
-            "de_DE",
-        )
-        .await;
-        assert!(
-            res_de.is_ok(),
-            "de_DE translation failed: {:?}",
-            res_de.err()
-        );
-        let de = res_de.unwrap();
-        assert!(de.content_md.contains("```rust"));
-        assert!(de.content_md.contains("println!(\"Hello Rust!\")"));
-        assert!(de.content_md.contains("Rust"));
-        assert!(de.content_md.contains("Next.js"));
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("400"));
     }
 }

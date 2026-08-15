@@ -40,17 +40,18 @@ impl Default for DbConfig {
     }
 }
 
+pub fn sanitize_db_url(url: &str) -> String {
+    url.replace(
+        |c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '/' && c != '@' && c != '.',
+        "*",
+    )
+}
+
 pub async fn init_pool(config: Option<DbConfig>) -> Result<Arc<PgPool>, sqlx::Error> {
     let config = config.unwrap_or_default();
 
     tracing::info!("Initializing database connection pool...");
-    tracing::debug!(
-        "Database URL: {}",
-        config.url.replace(
-            |c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '/' && c != '@' && c != '.',
-            "*"
-        )
-    );
+    tracing::debug!("Database URL: {}", sanitize_db_url(&config.url));
 
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
@@ -710,5 +711,12 @@ mod tests {
         run_migrations(test_db.pool.as_ref())
             .await
             .expect("third migration run should also succeed");
+    }
+
+    #[test]
+    fn test_sanitize_db_url() {
+        let url = "postgres://user:p@ssw0rd!#@localhost:5432/mydb";
+        let sanitized = sanitize_db_url(url);
+        assert!(sanitized.contains("postgres://user:p@ssw0rd**@localhost:5432/mydb"));
     }
 }

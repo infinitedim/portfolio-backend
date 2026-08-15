@@ -347,4 +347,66 @@ mod tests {
         let res = resume_router().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
+
+    #[test]
+    fn test_gcs_bucket_name_env_parsing() {
+        std::env::set_var("GCS_BUCKET", "test-bucket");
+        assert_eq!(gcs_bucket_name(), Some("test-bucket".to_string()));
+        std::env::remove_var("GCS_BUCKET");
+        assert_eq!(gcs_bucket_name(), None);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_rejects_empty_file() {
+        let boundary = "empty-boundary";
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_pdf_body(boundary, b"")))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_rejects_file_too_large() {
+        let boundary = "large-boundary";
+        // Create >10MB dummy %PDF bytes
+        let mut large_pdf = vec![0u8; MAX_RESUME_SIZE + 10];
+        large_pdf[0..4].copy_from_slice(b"%PDF");
+
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_pdf_body(boundary, &large_pdf)))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_service_unavailable_without_gcs() {
+        let boundary = "valid-boundary";
+        let valid_pdf = b"%PDF-1.4 valid pdf content";
+
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_pdf_body(boundary, valid_pdf)))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

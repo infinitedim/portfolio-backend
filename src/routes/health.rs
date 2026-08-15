@@ -389,12 +389,19 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.status, "unhealthy");
     }
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[tokio::test]
     async fn test_health_detailed_returns_ok() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _orig = std::env::var("DATABASE_URL").ok();
+        std::env::remove_var("DATABASE_URL");
         init_start_time();
         let (status, body) =
             get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        if let Some(val) = _orig {
+            std::env::set_var("DATABASE_URL", val);
+        }
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert!(body.uptime.is_some());
@@ -402,8 +409,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_ready_returns_ready() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _orig = std::env::var("DATABASE_URL").ok();
+        std::env::remove_var("DATABASE_URL");
         init_start_time();
         let (status, body) = get_json::<ReadyResponse>(test_router(), "/health/ready").await;
+        if let Some(val) = _orig {
+            std::env::set_var("DATABASE_URL", val);
+        }
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ready");
     }
@@ -471,5 +484,37 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ready");
         assert_eq!(body.checks.unwrap().database, "healthy");
+    }
+
+    #[tokio::test]
+    async fn test_health_detailed_and_ready_unhealthy_when_db_failing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db_guard = if std::env::var("TEST_DATABASE_URL").is_ok() {
+            let db = crate::test_support::acquire_test_pool().await;
+            crate::db::clear_test_pool();
+            db
+        } else {
+            None
+        };
+        let orig = std::env::var("DATABASE_URL").ok();
+        std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+
+        init_start_time();
+        let (status_det, body_det) =
+            get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        assert_eq!(status_det, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_det.status, "unhealthy");
+        assert_eq!(body_det.checks.database.status, "unhealthy");
+
+        let (status_ready, body_ready) =
+            get_json::<ReadyResponse>(test_router(), "/health/ready").await;
+        assert_eq!(status_ready, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_ready.status, "not ready");
+
+        if let Some(val) = orig {
+            std::env::set_var("DATABASE_URL", val);
+        } else {
+            std::env::remove_var("DATABASE_URL");
+        }
     }
 }

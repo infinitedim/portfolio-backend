@@ -215,6 +215,11 @@ mod tests {
             return;
         };
 
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = None;
+        }
+
         std::env::set_var("SITE_TITLE", "Custom Site Title");
         std::env::set_var("SITE_DESCRIPTION", "Custom Description");
         std::env::set_var("SITE_URL", "https://custom.example.com");

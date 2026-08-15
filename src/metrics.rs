@@ -369,4 +369,36 @@ mod tests {
         assert!(rendered.contains("http_requests_total"));
         assert!(rendered.contains("http_request_duration_seconds"));
     }
+
+    #[tokio::test]
+    async fn pageview_validates_invalid_slug_and_path_fallback() {
+        init();
+
+        // 1. Empty slug -> Bad Request
+        let res_empty = record_pageview(Json(PageviewRequest {
+            path: "/blog/post".into(),
+            slug: Some("".into()),
+        }))
+        .await
+        .into_response();
+        assert_eq!(res_empty.status(), StatusCode::BAD_REQUEST);
+
+        // 2. Oversized slug (>200 chars) -> Bad Request
+        let res_huge = record_pageview(Json(PageviewRequest {
+            path: "/blog/post".into(),
+            slug: Some("a".repeat(250)),
+        }))
+        .await
+        .into_response();
+        assert_eq!(res_huge.status(), StatusCode::BAD_REQUEST);
+
+        // 3. Fallback path extraction when slug is None
+        let res_fallback = record_pageview(Json(PageviewRequest {
+            path: "/blog/extracted-from-path".into(),
+            slug: None,
+        }))
+        .await
+        .into_response();
+        assert_eq!(res_fallback.status(), StatusCode::ACCEPTED);
+    }
 }

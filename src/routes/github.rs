@@ -1014,18 +1014,126 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_github_cache_miss_failure() {
+    async fn get_commits_cached_happy_path() {
         {
             let mut cache = CACHE.lock().unwrap();
-            cache.remove("/users/some-non-existent-user-xyz-123456789");
+            cache.insert(
+                "/repos/infinitedim/portfolio-backend/commits?per_page=20&page=1".to_string(),
+                CacheEntry {
+                    body: serde_json::json!([
+                        {
+                            "sha": "1234567890abcdef",
+                            "commit": {
+                                "message": "feat: add feature\n\nbody message",
+                                "author": {
+                                    "name": "Dimas Saputra",
+                                    "email": "test@example.com",
+                                    "date": "2024-01-01T00:00:00Z"
+                                }
+                            },
+                            "html_url": "https://github.com/infinitedim/portfolio-backend/commit/123456",
+                            "author": {
+                                "login": "infinitedim",
+                                "avatar_url": "https://avatar.url"
+                            }
+                        }
+                    ]),
+                    fetched_at: Instant::now(),
+                },
+            );
+            cache.insert(
+                "/repos/infinitedim/portfolio-backend/commits/1234567890abcdef/check-runs"
+                    .to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "total_count": 1,
+                        "check_runs": [
+                            {
+                                "id": 1,
+                                "name": "build",
+                                "status": "completed",
+                                "conclusion": "success",
+                                "html_url": "https://github.com/check"
+                            }
+                        ]
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
         }
 
-        let response = get_user(Path("some-non-existent-user-xyz-123456789".into()))
+        let response = get_repo_commits(
+            Path(("infinitedim".into(), "portfolio-backend".into())),
+            Query(CommitQuery {
+                per_page: Some(20),
+                page: None,
+                sha: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_branches_cached_happy_path() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/repos/infinitedim/portfolio-backend/branches?per_page=100".to_string(),
+                CacheEntry {
+                    body: serde_json::json!([
+                        {
+                            "name": "main",
+                            "commit": { "sha": "abc12345" },
+                            "protected": true
+                        }
+                    ]),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        let response = get_repo_branches(Path(("infinitedim".into(), "portfolio-backend".into())))
             .await
             .into_response();
-        assert!(
-            response.status() == StatusCode::NOT_FOUND
-                || response.status() == StatusCode::BAD_GATEWAY
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_check_runs_cached_happy_path() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/repos/infinitedim/portfolio-backend/commits/main/check-runs".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "total_count": 1,
+                        "check_runs": [
+                            {
+                                "id": 1,
+                                "name": "build",
+                                "status": "completed",
+                                "conclusion": "success",
+                                "html_url": "https://github.com/check"
+                            }
+                        ]
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        let response = get_commit_check_runs(
+            Path((
+                "infinitedim".into(),
+                "portfolio-backend".into(),
+                "main".into(),
+            )),
+            Query(CheckRunsQueryParams { force: Some(false) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

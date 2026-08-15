@@ -387,4 +387,25 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn prepare_log_dir_returns_none_when_cannot_create_dir() {
+        let invalid = Path::new("/proc/non_existent_dir_xyz_12345/logs");
+        assert!(prepare_log_dir(invalid).is_none());
+    }
+
+    #[test]
+    fn test_loki_url_parsing_logic() {
+        let empty_url = "";
+        assert!(empty_url.trim().is_empty());
+
+        let invalid_url = "not a valid url";
+        assert!(url::Url::parse(invalid_url).is_err());
+
+        let valid_url = "http://localhost:3100";
+        let parsed = url::Url::parse(valid_url).expect("parsed");
+        assert_eq!(parsed.scheme(), "http");
+        assert_eq!(parsed.host_str(), Some("localhost"));
+        assert_eq!(parsed.port(), Some(3100));
+    }
 }

@@ -266,7 +266,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redis_join_leave_when_available() {
+    async fn in_memory_refresh_and_prune() {
+        let backend = InMemoryPresence::new();
+        assert!(!backend.refresh_conn("non-existent").await.unwrap());
+
+        let count = backend.join_room("c1", "room1").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(backend.refresh_conn("c1").await.unwrap());
+        assert_eq!(backend.prune_stale(100).await.unwrap(), 1);
+    }
+
+    #[test]
+    fn test_build_presence_backend() {
+        let _disabled = build_presence_backend(&crate::redis::RedisMode::Disabled);
+    }
+
+    #[tokio::test]
+    async fn redis_full_presence_flow_when_available() {
         let Some(url) = std::env::var("TEST_REDIS_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -275,11 +291,36 @@ mod tests {
         };
 
         let pool = RedisPool::connect(&url).await.expect("connect");
-        let backend = RedisPresence::new(pool);
-        let conn = uuid::Uuid::new_v4().to_string();
+        let backend = RedisPresence::new(pool.clone());
+        let conn1 = uuid::Uuid::new_v4().to_string();
+        let conn2 = uuid::Uuid::new_v4().to_string();
 
-        let count = backend.join_room(&conn, "site").await.expect("join");
-        assert!(count >= 1);
-        backend.leave_conn(&conn).await.expect("leave");
+        assert!(!backend.refresh_conn(&conn1).await.unwrap());
+
+        let count1 = backend.join_room(&conn1, "roomA").await.expect("join");
+        assert!(count1 >= 1);
+
+        let count2 = backend.join_room(&conn2, "roomA").await.expect("join");
+        assert!(count2 >= 2);
+
+        assert!(backend.refresh_conn(&conn1).await.unwrap());
+        assert!(backend.total_connections().await.unwrap() >= 2);
+
+        // Test prune_stale on RedisPresence
+        let _pruned = backend.prune_stale(1).await.unwrap_or(0);
+
+        // Test ensure_zset_key with non-zset key
+        let mut conn = pool.connection();
+        let key = format!("presence:room:badtype_{}", uuid::Uuid::new_v4());
+        let _: () = redis::cmd("SET")
+            .arg(&key)
+            .arg("string_value")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let _c = backend.join_room(&conn1, &key).await.unwrap();
+
+        backend.leave_conn(&conn1).await.expect("leave");
+        backend.leave_conn(&conn2).await.expect("leave");
     }
 }

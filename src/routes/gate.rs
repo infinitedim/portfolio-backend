@@ -908,7 +908,10 @@ mod integration_tests {
         };
         save_session(&state, "session-l1", session1);
         let mut hdrs1 = HeaderMap::new();
-        hdrs1.insert(header::COOKIE, header::HeaderValue::from_str("gate_progress=session-l1").unwrap());
+        hdrs1.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str("gate_progress=session-l1").unwrap(),
+        );
         let res_l1 = status(State(state.clone()), hdrs1).await;
         assert!(res_l1.is_ok());
 
@@ -919,12 +922,18 @@ mod integration_tests {
         };
         save_session(&state, "session-l2", session2);
         let mut hdrs2 = HeaderMap::new();
-        hdrs2.insert(header::COOKIE, header::HeaderValue::from_str("gate_progress=session-l2").unwrap());
+        hdrs2.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str("gate_progress=session-l2").unwrap(),
+        );
         let res_l2 = status(State(state.clone()), hdrs2).await;
         assert!(res_l2.is_ok());
 
         let mut hdrs_invalid = HeaderMap::new();
-        hdrs_invalid.insert(header::COOKIE, header::HeaderValue::from_str("portfolio_gate=invalid.jwt.token").unwrap());
+        hdrs_invalid.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str("portfolio_gate=invalid.jwt.token").unwrap(),
+        );
         assert!(!is_unlocked(&hdrs_invalid, &cfg));
     }
 }
@@ -956,6 +965,7 @@ mod tests {
         assert!(hint_for_level(3, 3).is_some());
         assert!(hint_for_level(3, 6).is_some());
         assert!(hint_for_level(3, 10).is_some());
+        assert!(hint_for_level(4, 5).is_none());
     }
 
     #[tokio::test]

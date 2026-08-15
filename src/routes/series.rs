@@ -701,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn db_series_crud_and_public_list() {
-        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
             return;
         };
         let app = series_router();
@@ -750,6 +750,21 @@ mod tests {
         )
         .unwrap();
         assert!(list.iter().any(|s| s.slug == "getting-started"));
+
+        let series_obj: SeriesResponse = serde_json::from_slice(&bytes).unwrap();
+
+        // Create a blog post belonging to this series
+        sqlx::query(
+            r#"
+            INSERT INTO blog_posts (id, title, slug, summary, content_md, published, series_id, series_order)
+            VALUES ($1, 'Series Part 1', 'series-part-1', 'Summary', '# Content', true, $2, 1)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(series_obj.id)
+        .execute(&*db.pool)
+        .await
+        .unwrap();
 
         let req = Request::get("/api/blog/series/getting-started")
             .body(Body::empty())

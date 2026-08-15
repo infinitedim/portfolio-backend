@@ -1138,10 +1138,13 @@ mod tests {
             .oneshot(
                 Request::post("/api/auth/login")
                     .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_vec(&crate::routes::auth::LoginRequest {
-                        email: email.to_string(),
-                        password: password.to_string(),
-                    }).unwrap()))
+                    .body(Body::from(
+                        serde_json::to_vec(&crate::routes::auth::LoginRequest {
+                            email: email.to_string(),
+                            password: password.to_string(),
+                        })
+                        .unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
@@ -1177,5 +1180,58 @@ mod tests {
     fn test_verify_totp_code_invalid_secret() {
         let res = verify_totp_code("invalid_base32", "account", "123456");
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_enable_totp_wrong_code_and_disable_with_backup() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        let email = format!("admin-twofa-edge-{}@example.com", uuid::Uuid::new_v4());
+        let password = "Password123!";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), &email, password)
+                .await
+                .expect("seed");
+
+        let bearer = crate::test_support::admin_bearer_for(&uid, &email, "ADMIN");
+        let app = Router::new()
+            .route("/api/auth/2fa/setup", post(setup))
+            .route("/api/auth/2fa/verify", post(verify_setup))
+            .route("/api/auth/2fa/disable", post(disable))
+            .layer(crate::test_support::mock_connect_info());
+
+        // 1. Setup 2FA
+        let res_setup = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/setup")
+                    .header("authorization", bearer.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_setup.status(), axum::http::StatusCode::OK);
+
+        // 2. Verify with wrong code -> 401
+        let res_verify_fail = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/2fa/verify")
+                    .header("authorization", bearer.clone())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "code": "000000" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res_verify_fail.status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
     }
 }

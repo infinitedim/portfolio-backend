@@ -160,17 +160,33 @@ impl ResendMailer {
         })
     }
 
-    async fn send_raw_email(&self, to: &str, subject: &str, text: &str) -> Result<(), MailerError> {
+    pub async fn send_raw_email(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<(), MailerError> {
+        self.send_raw_email_with_endpoint("https://api.resend.com/emails", to, subject, body)
+            .await
+    }
+
+    pub async fn send_raw_email_with_endpoint(
+        &self,
+        endpoint: &str,
+        to: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<(), MailerError> {
         let payload = json!({
             "from": self.from,
             "to": [to],
             "subject": subject,
-            "text": text,
+            "text": body,
         });
 
         let res = self
             .client
-            .post("https://api.resend.com/emails")
+            .post(endpoint)
             .bearer_auth(&self.api_key)
             .json(&payload)
             .send()
@@ -444,5 +460,64 @@ mod tests {
         );
         let resend_clone = resend.clone();
         assert!(format!("{:?}", resend_clone).contains("ResendMailer"));
+    }
+
+    #[tokio::test]
+    async fn test_resend_mailer_mock_responses() {
+        use axum::{routing::post, Json, Router};
+
+        let app = Router::new()
+            .route(
+                "/ok",
+                post(|| async {
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(serde_json::json!({"id": "123"})),
+                    )
+                }),
+            )
+            .route(
+                "/err",
+                post(|| async {
+                    (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"message": "Invalid email"})),
+                    )
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let mailer = ResendMailer::new("key".into(), "from@test.com".into(), "to@test.com".into());
+
+        let ok_res = mailer
+            .send_raw_email_with_endpoint(
+                &format!("http://{}/ok", addr),
+                "user@test.com",
+                "sub",
+                "body",
+            )
+            .await;
+        assert!(ok_res.is_ok());
+
+        let err_res = mailer
+            .send_raw_email_with_endpoint(
+                &format!("http://{}/err", addr),
+                "user@test.com",
+                "sub",
+                "body",
+            )
+            .await;
+        assert!(err_res.is_err());
+        if let Err(MailerError::Provider { status, body }) = err_res {
+            assert_eq!(status, 400);
+            assert!(body.contains("Invalid email"));
+        } else {
+            panic!("expected MailerError::Provider");
+        }
     }
 }
