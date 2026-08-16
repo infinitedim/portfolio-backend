@@ -32,3 +32,5 @@ rust-project.json
 *.log.*
 
 # End of https://www.toptal.com/developers/gitignore/api/rust,rust-analyzer,dotenv
+
+uploads/projects

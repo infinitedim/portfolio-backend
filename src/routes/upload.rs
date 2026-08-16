@@ -1065,6 +1065,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_image_rejects_invalid_filename() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let _dir = test_support::isolated_upload_dir()
             .await
             .expect("isolated upload dir should be created");
@@ -1080,6 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_image_returns_not_found_for_missing_file() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let _dir = test_support::isolated_upload_dir()
             .await
             .expect("isolated upload dir should be created");
@@ -1095,6 +1097,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_images_ignores_subdirectories_and_non_matching_files() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = test_support::isolated_upload_dir()
             .await
             .expect("isolated upload dir should be created");
@@ -1126,5 +1129,110 @@ mod tests {
                 .await;
             delete_gcs_object("invalid-url").await;
         });
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_empty_multipart_payload() {
+        let boundary = "empty-bnd";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(format!("--{}--\r\n", boundary)))
+            .unwrap();
+
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("No file provided"));
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_malformed_multipart_body() {
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header("content-type", "multipart/form-data; boundary=bad-bnd")
+            .body(Body::from("invalid non-multipart bytes"))
+            .unwrap();
+
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("Invalid multipart data"));
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_filename_without_extension() {
+        let boundary = "noext-bnd";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                "myimage_no_ext",
+                b"\x89PNG\r\n\x1a\n",
+            )))
+            .unwrap();
+
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("Unsupported file type"));
+    }
+
+    #[test]
+    fn test_upload_helpers_and_sanitization() {
+        // Short magic bytes (< 4)
+        assert_eq!(validate_image_magic_bytes(&[0xFF, 0xD8, 0xFF]), None);
+        assert_eq!(validate_image_magic_bytes(&[0x89]), None);
+
+        // MIME fallback
+        assert_eq!(get_extension_from_mime("application/octet-stream"), "bin");
+
+        // Filename sanitization null bytes & slashes
+        assert!(!sanitize_filename("image\0.png"));
+        assert!(!sanitize_filename("folder/image.png"));
+        assert!(!sanitize_filename("folder\\image.png"));
+    }
+
+    #[tokio::test]
+    async fn delete_image_handles_directory_path_error() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        std::fs::create_dir_all(dir.path.join("sub_dir")).unwrap();
+
+        let req = Request::delete("/api/upload/image/sub_dir")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn list_images_empty_when_dir_missing() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        let non_existent = format!("/tmp/non_existent_upload_dir_{}", uuid::Uuid::new_v4());
+        std::env::set_var("UPLOAD_DIR", &non_existent);
+
+        let req = Request::get("/api/upload/images")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["total"], 0);
+
+        std::env::remove_var("UPLOAD_DIR");
     }
 }

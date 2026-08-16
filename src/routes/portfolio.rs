@@ -1726,6 +1726,7 @@ mod tests {
     fn portfolio_router() -> Router {
         Router::new()
             .route("/api/portfolio", get(get_portfolio).patch(update_portfolio))
+            .route("/api/portfolio/experience", get(get_experience_i18n))
             .route(
                 "/api/admin/portfolio/about",
                 get(get_about_admin).post(update_about_admin),
@@ -1737,6 +1738,18 @@ mod tests {
             .route(
                 "/api/admin/portfolio/versions/{id}/restore",
                 post(restore_portfolio_version),
+            )
+            .route(
+                "/api/admin/portfolio/experience",
+                get(list_experiences_admin).post(create_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}",
+                patch(update_experience).delete(delete_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}/locale/{locale}",
+                patch(override_experience_locale),
             )
             .layer(crate::test_support::mock_connect_info())
     }
@@ -2452,5 +2465,292 @@ mod tests {
             app.oneshot(req_override).await.unwrap().status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test]
+    async fn db_get_portfolio_about_and_projects_locale_resolution() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        // Insert multi-locale section in DB
+        let about_content = serde_json::json!({
+            "bio": {
+                "en": "English Bio",
+                "id": "Bio Indonesia"
+            }
+        });
+        sqlx::query(
+            "INSERT INTO portfolio_sections (key, content, updated_at) VALUES ('about', $1, NOW()) ON CONFLICT (key) DO UPDATE SET content = $1",
+        )
+        .bind(about_content)
+        .execute(db.pool.as_ref())
+        .await
+        .unwrap();
+
+        let app = portfolio_router();
+        let req = Request::get("/api/portfolio?section=about&locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_list_portfolio_versions_and_restore_no_db_returns_503() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let bearer = crate::test_support::admin_bearer();
+        let app = portfolio_router();
+
+        let req_list = Request::get("/api/admin/portfolio/versions?section=skills")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_list).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        let req_restore = Request::post(format!(
+            "/api/admin/portfolio/versions/{}/restore",
+            Uuid::new_v4()
+        ))
+        .header("authorization", &bearer)
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.oneshot(req_restore).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_experience_i18n_moka_cache_hit_and_db_unavailable() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        EXPERIENCE_CACHE
+            .insert("experience:en_US".to_string(), serde_json::json!([]))
+            .await;
+
+        let app = portfolio_router();
+        let req = Request::get("/api/portfolio/experience?locale=en_US")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res
+            .headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("public"));
+    }
+
+    #[tokio::test]
+    async fn db_get_experience_i18n_empty_table_returns_static() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        sqlx::query("TRUNCATE portfolio_experiences")
+            .execute(db.pool.as_ref())
+            .await
+            .unwrap();
+
+        let app = portfolio_router();
+        let req = Request::get("/api/portfolio/experience?locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_resolve_locale_string_all_fallback_branches() {
+        // 1. Short code key "id"
+        let json1 = serde_json::json!({ "id": "Singkat" });
+        assert_eq!(resolve_locale_string(&json1, "id_ID"), "Singkat");
+
+        // 2. Prefix match "en_GB" for "en"
+        let json2 = serde_json::json!({ "en_GB": "Colour" });
+        assert_eq!(resolve_locale_string(&json2, "en"), "Colour");
+
+        // 3. "en" fallback key for ja_JP
+        let json3 = serde_json::json!({ "en": "English Fallback" });
+        assert_eq!(resolve_locale_string(&json3, "ja_JP"), "English Fallback");
+
+        // 4. Non-string step 4 skip
+        let json4 = serde_json::json!({ "de": 12345, "en": "Valid String" });
+        assert_eq!(resolve_locale_string(&json4, "de"), "Valid String");
+    }
+
+    #[test]
+    fn test_resolve_projects_locale_primitive_elements() {
+        let primitives = serde_json::json!([
+            123,
+            "plain string",
+            true,
+            { "title": { "en": "Obj Title" } }
+        ]);
+        let resolved = resolve_projects_locale(&primitives, "en_US");
+        assert_eq!(resolved.as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_resolve_locale_array_en_us_fallback_and_type_filtering() {
+        let json = serde_json::json!({
+            "en_US": ["bullet 1", 42, true]
+        });
+        let result = resolve_locale_array(&json, "ja_JP");
+        assert_eq!(result, vec!["bullet 1"]);
+    }
+
+    #[tokio::test]
+    async fn test_admin_experience_endpoints_db_unavailable_returns_503() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let bearer = crate::test_support::admin_bearer();
+        let app = portfolio_router();
+        let id = Uuid::new_v4();
+
+        let valid_payload = serde_json::json!({
+            "company": "C",
+            "position": { "en_US": "P" },
+            "duration": { "en_US": "D" },
+            "description": { "en_US": ["Desc"] },
+            "technologies": ["Rust"]
+        });
+
+        // 1. Create
+        let req1 = Request::post("/api/admin/portfolio/experience")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(valid_payload.to_string()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req1).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // 2. Update
+        let req2 = Request::patch(format!("/api/admin/portfolio/experience/{id}"))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"company": "U"}).to_string()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req2).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // 3. Delete
+        let req3 = Request::delete(format!("/api/admin/portfolio/experience/{id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req3).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // 4. Override locale
+        let req4 = Request::patch(format!("/api/admin/portfolio/experience/{id}/locale/id_ID"))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"position": "P"}).to_string()))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req4).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn db_update_experience_all_fields_some() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = portfolio_router();
+        let bearer = crate::test_support::admin_bearer();
+
+        let create_payload = serde_json::json!({
+            "company": "Initial Corp",
+            "position": { "en_US": "Dev" },
+            "duration": { "en_US": "2024" },
+            "description": { "en_US": ["Initial desc"] },
+            "technologies": ["Rust"]
+        });
+
+        // 1. Create initial experience
+        let req_create = Request::post("/api/admin/portfolio/experience")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(create_payload.to_string()))
+            .unwrap();
+        let res_create = app.clone().oneshot(req_create).await.unwrap();
+        assert_eq!(res_create.status(), StatusCode::CREATED);
+        let body_bytes = axum::body::to_bytes(res_create.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let exp_id = created["data"]["id"].as_str().unwrap();
+
+        // 2. Patch all fields with Some(...)
+        let req_patch = Request::patch(format!("/api/admin/portfolio/experience/{exp_id}"))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "company": "Acme Corp Inc",
+                    "position": { "en_US": "Senior Dev" },
+                    "duration": { "en_US": "2024-Present" },
+                    "description": { "en_US": ["Updated desc"] },
+                    "technologies": ["Rust", "Axum"],
+                    "type": "full-time",
+                    "displayOrder": 5
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let res_patch = app.clone().oneshot(req_patch).await.unwrap();
+        assert_eq!(res_patch.status(), StatusCode::OK);
+
+        // 3. Override experience locale
+        let req_override = Request::patch(format!(
+            "/api/admin/portfolio/experience/{exp_id}/locale/id_ID"
+        ))
+        .header("authorization", &bearer)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "position": "Pengembang Senior",
+                "duration": "2024-Sekarang",
+                "description": ["Deskripsi diperbarui"]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        let res_override = app.clone().oneshot(req_override).await.unwrap();
+        assert_eq!(res_override.status(), StatusCode::OK);
+
+        // 4. GET experience with locale=id_ID to hit cache & verify locale resolution
+        let req_get = Request::get("/api/portfolio/experience?locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res_get1 = app.clone().oneshot(req_get).await.unwrap();
+        assert_eq!(res_get1.status(), StatusCode::OK);
+
+        // Second GET hits cache
+        let req_get2 = Request::get("/api/portfolio/experience?locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res_get2 = app.clone().oneshot(req_get2).await.unwrap();
+        assert_eq!(res_get2.status(), StatusCode::OK);
+
+        // 5. Delete experience
+        let req_del = Request::delete(format!("/api/admin/portfolio/experience/{exp_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_del = app.oneshot(req_del).await.unwrap();
+        assert_eq!(res_del.status(), StatusCode::OK);
     }
 }

@@ -19,11 +19,30 @@ const GCS_RESUME_PATH: &str = "resume/resume.pdf";
 
 static GCS_CLIENT: OnceCell<Option<Arc<dyn ObjectStore>>> = OnceCell::new();
 
+#[cfg(test)]
+static TEST_GCS_CLIENT: std::sync::RwLock<Option<Option<Arc<dyn ObjectStore>>>> =
+    std::sync::RwLock::new(None);
+
+#[cfg(test)]
+pub fn set_test_gcs_client(client: Option<Arc<dyn ObjectStore>>) {
+    let mut guard = TEST_GCS_CLIENT.write().unwrap();
+    *guard = Some(client);
+}
+
 fn gcs_bucket_name() -> Option<String> {
     std::env::var("GCS_BUCKET").ok().filter(|s| !s.is_empty())
 }
 
 fn gcs_client() -> Option<Arc<dyn ObjectStore>> {
+    #[cfg(test)]
+    {
+        if let Ok(guard) = TEST_GCS_CLIENT.read() {
+            if let Some(ref override_client) = *guard {
+                return override_client.clone();
+            }
+        }
+    }
+
     GCS_CLIENT
         .get_or_init(|| {
             let bucket = gcs_bucket_name()?;
@@ -286,6 +305,8 @@ mod tests {
 
     use crate::test_support;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn resume_router() -> Router {
         Router::new()
             .route("/api/resume/raw", get(get_raw_resume))
@@ -394,6 +415,8 @@ mod tests {
 
     #[tokio::test]
     async fn upload_resume_service_unavailable_without_gcs() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        set_test_gcs_client(None);
         let boundary = "valid-boundary";
         let valid_pdf = b"%PDF-1.4 valid pdf content";
 
@@ -412,6 +435,7 @@ mod tests {
 
     #[test]
     fn test_gcs_bucket_name_empty_string_filtered() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("GCS_BUCKET", "");
         assert_eq!(gcs_bucket_name(), None);
         std::env::remove_var("GCS_BUCKET");
@@ -471,5 +495,54 @@ mod tests {
 
         let res = resume_router().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_gcs_raw_resume_and_upload_happy_path_and_errors() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let mem_store = Arc::new(object_store::memory::InMemory::new());
+
+        // 1. Set in-memory store
+        set_test_gcs_client(Some(mem_store.clone()));
+        std::env::set_var("GCS_BUCKET", "portfolio-bucket");
+
+        // 2. get_raw_resume when file missing -> 404
+        let req_get1 = Request::get("/api/resume/raw").body(Body::empty()).unwrap();
+        let res_get1 = resume_router().oneshot(req_get1).await.unwrap();
+        assert_eq!(res_get1.status(), StatusCode::NOT_FOUND);
+
+        // 3. upload_resume happy path -> 201
+        let boundary = "valid-inmem-boundary";
+        let valid_pdf = b"%PDF-1.7 Valid test resume content bytes";
+        let req_up = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_pdf_body(boundary, valid_pdf)))
+            .unwrap();
+        let res_up = resume_router().oneshot(req_up).await.unwrap();
+        assert_eq!(res_up.status(), StatusCode::CREATED);
+
+        // 4. get_raw_resume happy path -> 200
+        let req_get2 = Request::get("/api/resume/raw").body(Body::empty()).unwrap();
+        let res_get2 = resume_router().oneshot(req_get2).await.unwrap();
+        assert_eq!(res_get2.status(), StatusCode::OK);
+        assert_eq!(
+            res_get2.headers().get("content-type").unwrap(),
+            "application/pdf"
+        );
+        assert!(res_get2
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Dimas_Saputra_Resume.pdf"));
+
+        // Clean up override
+        set_test_gcs_client(None);
+        std::env::remove_var("GCS_BUCKET");
     }
 }

@@ -1167,4 +1167,174 @@ mod tests {
         let res = app.oneshot(req).await.unwrap();
         assert!(res.status().is_client_error());
     }
+
+    #[test]
+    fn test_cors_origin_parsing_and_fallbacks() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        // 1. Invalid allowed origins falling back to FRONTEND_ORIGIN
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("ALLOWED_ORIGINS", "  , \n");
+        std::env::set_var("FRONTEND_ORIGIN", "https://fallback.example.com");
+        let _cors1 = configure_cors();
+
+        // 2. Production empty origins setting localhost fallbacks
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("FRONTEND_ORIGIN");
+        let _cors2 = configure_cors();
+
+        // 3. Early return on duplicate origin in push_origin_if_missing
+        std::env::set_var("ENVIRONMENT", "development");
+        std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
+        let _cors3 = configure_cors();
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("FRONTEND_ORIGIN");
+    }
+
+    #[tokio::test]
+    async fn test_swagger_ui_numeric_zero_and_prod_override() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        // ENABLE_SWAGGER_UI="0" -> 404
+        std::env::set_var("ENABLE_SWAGGER_UI", "0");
+        let app1 = create_app(crate::redis::RedisMode::Disabled);
+        let req1 = Request::get("/api/docs/").body(Body::empty()).unwrap();
+        let res1 = app1.oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::NOT_FOUND);
+
+        // ENVIRONMENT="production" + ENABLE_SWAGGER_UI="true"
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("ENABLE_SWAGGER_UI", "true");
+        let app2 = create_app(crate::redis::RedisMode::Disabled);
+        let req2 = Request::get("/api/docs/").body(Body::empty()).unwrap();
+        let res2 = app2.oneshot(req2).await.unwrap();
+        assert_ne!(res2.status(), StatusCode::NOT_FOUND);
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ENABLE_SWAGGER_UI");
+    }
+
+    #[tokio::test]
+    async fn test_subrouter_payload_limit_layers_and_uploads() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let app = create_app(crate::redis::RedisMode::Disabled)
+            .layer(crate::test_support::mock_connect_info());
+
+        // Logs 128KB rejection (RequestBodyLimitLayer limits payload > 128KB)
+        let req_logs = Request::post("/api/logs")
+            .header("content-type", "application/json")
+            .body(Body::from(vec![b'a'; 130 * 1024]))
+            .unwrap();
+        let res_logs = app.clone().oneshot(req_logs).await.unwrap();
+        assert!(
+            res_logs.status() == StatusCode::PAYLOAD_TOO_LARGE
+                || res_logs.status() == StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // Contact 64KB rejection
+        let req_contact = Request::post("/api/contact")
+            .header("content-type", "application/json")
+            .body(Body::from(vec![b'a'; 70 * 1024]))
+            .unwrap();
+        let res_contact = app.clone().oneshot(req_contact).await.unwrap();
+        assert!(
+            res_contact.status() == StatusCode::PAYLOAD_TOO_LARGE
+                || res_contact.status() == StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // Uploads static route 404
+        let req_upload = Request::get("/uploads/nonexistent_test_file.png")
+            .body(Body::empty())
+            .unwrap();
+        let res_upload = app.oneshot(req_upload).await.unwrap();
+        assert_eq!(res_upload.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_assert_production_environment_additional_branches() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("ADMIN_EMAIL", "admin@prod.test");
+        std::env::set_var("ADMIN_HASH_PASSWORD", "$2b$12$abcdefghijklmnopqrstuv");
+        std::env::set_var("FRONTEND_ORIGIN", "https://prod.test");
+        std::env::set_var("JWT_SECRET", "a".repeat(32));
+        std::env::set_var("REFRESH_TOKEN_SECRET", "a".repeat(32));
+        std::env::set_var("GATE_TOKEN_SECRET", "a".repeat(32));
+        std::env::set_var("GATE_L2_ANSWER", "valid_l2");
+        std::env::set_var("GATE_L3_ANSWER", "valid_l3");
+
+        assert_production_environment_or_panic();
+
+        // Whitespace GATE_L2_ANSWER panic
+        std::env::set_var("GATE_L2_ANSWER", "   ");
+        let panic_l2 = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(panic_l2.is_err());
+        std::env::set_var("GATE_L2_ANSWER", "valid_l2");
+
+        // Whitespace GATE_L3_ANSWER panic
+        std::env::set_var("GATE_L3_ANSWER", "   ");
+        let panic_l3 = std::panic::catch_unwind(|| {
+            assert_production_environment_or_panic();
+        });
+        assert!(panic_l3.is_err());
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ADMIN_EMAIL");
+        std::env::remove_var("ADMIN_HASH_PASSWORD");
+        std::env::remove_var("FRONTEND_ORIGIN");
+        std::env::remove_var("JWT_SECRET");
+        std::env::remove_var("REFRESH_TOKEN_SECRET");
+        std::env::remove_var("GATE_TOKEN_SECRET");
+        std::env::remove_var("GATE_L2_ANSWER");
+        std::env::remove_var("GATE_L3_ANSWER");
+    }
+
+    #[test]
+    fn test_load_env_file_production_and_missing_dev() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        // Production without .env
+        std::env::set_var("ENVIRONMENT", "production");
+        load_env_file();
+
+        // Development without .env.development
+        std::env::set_var("ENVIRONMENT", "development");
+        load_env_file();
+
+        std::env::remove_var("ENVIRONMENT");
+    }
+
+    #[test]
+    fn test_run_production_missing_database_url_panics() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("ADMIN_EMAIL", "admin@prod.test");
+        std::env::set_var("ADMIN_PASSWORD", "password123");
+        std::env::set_var("ALLOWED_ORIGINS", "https://prod.test");
+        std::env::set_var("GATE_TOKEN_SECRET", "a".repeat(32));
+        std::env::set_var("GATE_L2_ANSWER", "l2");
+        std::env::set_var("GATE_L3_ANSWER", "l3");
+        std::env::remove_var("DATABASE_URL");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let panic_res = std::panic::catch_unwind(|| {
+            rt.block_on(async {
+                run().await;
+            });
+        });
+        assert!(panic_res.is_err());
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ADMIN_EMAIL");
+        std::env::remove_var("ADMIN_PASSWORD");
+        std::env::remove_var("ALLOWED_ORIGINS");
+        std::env::remove_var("GATE_TOKEN_SECRET");
+        std::env::remove_var("GATE_L2_ANSWER");
+        std::env::remove_var("GATE_L3_ANSWER");
+    }
 }

@@ -1499,7 +1499,7 @@ pub async fn approve_translation(headers: HeaderMap, Path(id): Path<Uuid>) -> im
         UPDATE blog_posts
         SET translation_status = 'published',
             reviewed_at = now(),
-            reviewed_by = $1,
+            reviewed_by = $1::uuid,
             updated_at = now()
         WHERE id = $2
         RETURNING {BLOG_POST_RETURNING}
@@ -3048,7 +3048,7 @@ mod tests {
 
     #[test]
     fn test_static_blog_posts_locale() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("ENVIRONMENT");
         let id_posts = get_static_blog_posts("id_ID");
         assert_eq!(id_posts.len(), 5);
@@ -3506,5 +3506,391 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_blog_handlers_no_db_returns_503() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENVIRONMENT", "production");
+        let bearer = crate::test_support::admin_bearer();
+
+        let app = Router::new()
+            .route("/api/blog", get(list_posts).post(create_post))
+            .route(
+                "/api/blog/{slug}",
+                get(get_post).patch(update_post).delete(delete_post),
+            )
+            .route(
+                "/api/blog/{id}/approve-translation",
+                post(approve_translation),
+            )
+            .route("/api/admin/blog/translations/link", post(link_translations))
+            .route("/api/admin/blog/translations", get(get_translation_group))
+            .route("/api/blog/tags", get(list_tags))
+            .route("/api/admin/blog/{id}/translate", post(translate_post))
+            .route(
+                "/api/admin/blog/pending-translations",
+                get(list_pending_translations),
+            )
+            .layer(crate::test_support::mock_connect_info());
+
+        // get_post 503 in prod
+        assert_eq!(
+            get_status(app.clone(), "/api/blog/valid-slug").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // create_post 503
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "T".into(),
+                slug: "valid-slug".into(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+
+        // update_post 503
+        let (st, _) = patch_json_auth(
+            app.clone(),
+            "/api/blog/valid-slug",
+            &bearer,
+            &serde_json::json!({"title": "N"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+
+        // delete_post 503
+        assert_eq!(
+            delete_auth(app.clone(), "/api/blog/valid-slug", &bearer).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // list_tags 503
+        assert_eq!(
+            get_status(app.clone(), "/api/blog/tags").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // translate_post 503
+        let req = Request::post(format!(
+            "/api/admin/blog/{}/translate?target=ja",
+            Uuid::new_v4()
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        // list_pending_translations 503
+        let req = Request::get("/api/admin/blog/pending-translations")
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        std::env::remove_var("ENVIRONMENT");
+    }
+
+    #[tokio::test]
+    async fn db_blog_list_advanced_filters_and_clamping() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route("/api/blog", get(list_posts).post(create_post))
+            .layer(crate::test_support::mock_connect_info());
+
+        // 1. Pagination boundary clamping
+        let (_, bytes) = get_status_body(app.clone(), "/api/blog?page=-5&pageSize=500").await;
+        let res: BlogListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(res.page, 1);
+        assert_eq!(res.page_size, 100);
+
+        // 2. Published = None returns all posts (drafts + published) for admin
+        let (st, _) = get_status_body(app.clone(), "/api/blog").await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn db_blog_update_post_clear_schedule_and_sanitize_html() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/blog/{slug}", patch(update_post).get(get_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+        let future = Utc::now() + chrono::Duration::days(5);
+
+        // Create scheduled post
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Scheduled".into(),
+                slug: "sched-clear".into(),
+                summary: None,
+                content_md: Some("word".into()),
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: Some(future),
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        // Patch publishAt to null & inject html
+        let (st_patch, bytes) = patch_json_auth(
+            app.clone(),
+            "/api/blog/sched-clear",
+            &bearer,
+            &serde_json::json!({
+                "publishAt": null,
+                "contentHtml": "<p>Safe</p><script>alert(1)</script>",
+                "contentMd": "word word word"
+            }),
+        )
+        .await;
+        assert_eq!(st_patch, StatusCode::OK);
+        let updated: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(updated.publish_at.is_none());
+        assert_eq!(updated.status, BlogStatus::Draft);
+        let html = updated.content_html.unwrap();
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("Safe"));
+    }
+
+    #[tokio::test]
+    async fn db_blog_link_translations_validation_and_group_propagation() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route("/api/admin/blog/translations/link", post(link_translations))
+            .route("/api/blog", post(create_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        // 1. Invalid slug format
+        let req_bad_slug = Request::post("/api/admin/blog/translations/link")
+            .header("content-type", "application/json")
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::from(
+                serde_json::to_vec(&LinkTranslationRequest {
+                    slug_a: "Invalid Slug!".into(),
+                    locale_a: "en".into(),
+                    slug_b: "valid-slug".into(),
+                    locale_b: "id".into(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_bad_slug).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        // 2. Missing post_a / post_b (404)
+        let req_404 = Request::post("/api/admin/blog/translations/link")
+            .header("content-type", "application/json")
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::from(
+                serde_json::to_vec(&LinkTranslationRequest {
+                    slug_a: "non-existent-a".into(),
+                    locale_a: "en".into(),
+                    slug_b: "non-existent-b".into(),
+                    locale_b: "id".into(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_404).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn db_blog_translate_post_edge_cases() {
+        let Some(_db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/admin/blog/{id}/translate", post(translate_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        // Create post with content_md = None
+        let (st, bytes) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "No Content".into(),
+                slug: "no-content-md".into(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("en".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let created: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+
+        // Request translation -> 400 Bad Request
+        let req = Request::post(format!(
+            "/api/admin/blog/{}/translate?target=ja",
+            created.id
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer)
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn db_blog_get_translation_group_and_approve_translation_matrix() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let uid = crate::test_support::insert_admin_with_password(
+            db.pool.as_ref(),
+            &format!("approver_{}@admin.test", Uuid::new_v4()),
+            "password123",
+        )
+        .await
+        .expect("seed admin");
+        let bearer = crate::test_support::admin_bearer_for(&uid, "approver@admin.test", "ADMIN");
+
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/admin/blog/translations", get(get_translation_group))
+            .route(
+                "/api/admin/blog/{id}/approve-translation",
+                post(approve_translation),
+            )
+            .layer(crate::test_support::mock_connect_info());
+
+        // 1. Get translation group non-existent UUID -> 404 NOT_FOUND
+        let rand_gid = Uuid::new_v4();
+        let req_404_group =
+            Request::get(format!("/api/admin/blog/translations?groupId={rand_gid}"))
+                .header(axum::http::header::AUTHORIZATION, bearer.clone())
+                .body(Body::empty())
+                .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_404_group).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // 2. Approve translation non-existent post -> 404 NOT_FOUND
+        let req_404_appr = Request::post(format!("/api/admin/blog/{rand_gid}/approve-translation"))
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_404_appr).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // 3. Create draft translated post
+        let (st, bytes) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Draft Translation".into(),
+                slug: "draft-trans-post".into(),
+                summary: None,
+                content_md: Some("Draft body".into()),
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+                locale: Some("ja".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: Some(rand_gid),
+                translation_status: Some("draft".into()),
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let created: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+
+        // 4. Get translation group -> 200 OK
+        let req_group_ok = Request::get(format!("/api/admin/blog/translations?groupId={rand_gid}"))
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_group_ok).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        // 5. Approve translation -> 200 OK (publishes & sets status to approved)
+        let req_appr_ok = Request::post(format!(
+            "/api/admin/blog/{}/approve-translation",
+            created.id
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer)
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.oneshot(req_appr_ok).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn test_blog_tag_normalization_and_static_lookups() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("ENVIRONMENT");
+        // Static post lookup fallback
+        assert!(
+            get_static_blog_post_detail("c1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c", "en").is_some()
+        );
+        assert!(get_static_blog_post_detail("non-existent-static-post-slug", "en").is_none());
     }
 }

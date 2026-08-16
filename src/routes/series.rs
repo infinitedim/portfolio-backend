@@ -1000,6 +1000,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_series_public_static_fallback_without_db() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("ENVIRONMENT");
         let res = get_series_public(Path("rust-systems-mastery".to_string())).await;
         assert!(res.is_ok());
     }

@@ -1354,6 +1354,7 @@ mod tests {
 
     #[test]
     fn test_build_refresh_cookie_has_security_flags() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ENVIRONMENT", "production");
         let cookie = build_refresh_cookie("token-xyz");
         assert!(cookie.contains("rt=token-xyz"));
@@ -2013,5 +2014,94 @@ mod tests {
         )
         .await;
         assert_eq!(st_log, StatusCode::OK);
+    }
+
+    #[test]
+    fn test_auth_helpers_cookie_options_and_hashing() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Cookie options in dev vs prod
+        std::env::set_var("ENVIRONMENT", "development");
+        let cookie_dev = build_refresh_cookie("test-token");
+        assert!(cookie_dev.contains("SameSite=Strict"));
+        assert!(!cookie_dev.contains("Secure"));
+
+        std::env::set_var("ENVIRONMENT", "production");
+        let cookie_prod = build_refresh_cookie("test-token");
+        assert!(cookie_prod.contains("SameSite=Strict"));
+        assert!(cookie_prod.contains("Secure"));
+
+        std::env::remove_var("ENVIRONMENT");
+
+        // Hash refresh token helper
+        let hash1 = hash_refresh_token("sample-token-123");
+        let hash2 = hash_refresh_token("sample-token-123");
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, "sample-token-123");
+
+        // Cookie extraction helpers
+        let mut empty_headers = HeaderMap::new();
+        assert_eq!(extract_refresh_cookie(&empty_headers), None);
+        empty_headers.insert("cookie", "other_cookie=xyz".parse().unwrap());
+        assert_eq!(extract_refresh_cookie(&empty_headers), None);
+        empty_headers.insert("cookie", "rt=secret_val".parse().unwrap());
+        assert_eq!(
+            extract_refresh_cookie(&empty_headers),
+            Some("secret_val".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn db_refresh_token_reuse_and_logout_bearer_revocation() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "revoketest@admin.test";
+        let password = "password123";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed admin");
+
+        let app = auth_router();
+
+        // 1. Initial Login
+        let login_http = Request::post("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&LoginRequest {
+                    email: email.to_string(),
+                    password: password.to_string(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_login = app.clone().oneshot(login_http).await.unwrap();
+        let rt = first_nonempty_rt_from_set_cookie(res_login.headers()).unwrap();
+
+        // 2. First Refresh (rotates token)
+        let req_ref1 = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", rt))
+            .body(Body::empty())
+            .unwrap();
+        let res_ref1 = app.clone().oneshot(req_ref1).await.unwrap();
+        assert_eq!(res_ref1.status(), StatusCode::OK);
+
+        // 3. Second Refresh with OLD token -> 401 UNAUTHORIZED (reuse attempt)
+        let req_ref2 = Request::post("/api/auth/refresh")
+            .header("cookie", format!("rt={}", rt))
+            .body(Body::empty())
+            .unwrap();
+        let res_ref2 = app.clone().oneshot(req_ref2).await.unwrap();
+        assert_eq!(res_ref2.status(), StatusCode::UNAUTHORIZED);
+
+        // 4. Logout with bearer token revoking all user sessions
+        let token = create_access_token(&uid, email, "admin").unwrap();
+        let req_logout = Request::post("/api/auth/logout")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let res_logout = app.oneshot(req_logout).await.unwrap();
+        assert_eq!(res_logout.status(), StatusCode::OK);
     }
 }
