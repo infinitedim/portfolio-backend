@@ -1171,4 +1171,208 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn test_get_commit_detail_cached_happy_path() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/repos/infinitedim/portfolio-backend/commits/abc123456789".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "sha": "abc123456789",
+                        "commit": {
+                            "message": "feat: commit detail",
+                            "author": { "name": "Author", "email": "a@example.com", "date": "2026-08-01T00:00:00Z" }
+                        },
+                        "author": { "avatar_url": "https://avatar.url", "login": "infinitedim", "html_url": "https://gh.com/user" },
+                        "html_url": "https://github.com/commit/abc123456789",
+                        "status": { "state": "success" },
+                        "stats": { "additions": 10, "deletions": 2, "total": 12 },
+                        "files": [{ "filename": "src/main.rs", "status": "modified", "additions": 10, "deletions": 2, "changes": 12, "patch": "@@ -1 +1 @@" }],
+                        "parents": [{ "sha": "parent123456" }]
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+        let res = get_commit_detail(Path((
+            "infinitedim".into(),
+            "portfolio-backend".into(),
+            "abc123456789".into(),
+        )))
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_commit_detail_invalid_params_returns_400() {
+        let res = get_commit_detail(Path((
+            "invalid/user".into(),
+            "portfolio-backend".into(),
+            "main".into(),
+        )))
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_cache_get_expired_returns_none() {
+        let mut cache = CACHE.lock().unwrap();
+        cache.insert(
+            "test-expired-key".to_string(),
+            CacheEntry {
+                body: serde_json::json!({"test": 1}),
+                fetched_at: Instant::now() - Duration::from_secs(3601),
+            },
+        );
+        drop(cache);
+        assert!(cache_get("test-expired-key").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_commit_combined_status_matrix() {
+        let mut cache = CACHE.lock().unwrap();
+        // total_count == 0 -> unconfigured
+        cache.insert(
+            "/repos/owner/repo/commits/sha-empty/check-runs".into(),
+            CacheEntry {
+                body: serde_json::json!({ "total_count": 0, "check_runs": [] }),
+                fetched_at: Instant::now(),
+            },
+        );
+        // failure
+        cache.insert(
+            "/repos/owner/repo/commits/sha-fail/check-runs".into(),
+            CacheEntry {
+                body: serde_json::json!({ "total_count": 1, "check_runs": [{ "conclusion": "failure", "status": "completed" }] }),
+                fetched_at: Instant::now(),
+            },
+        );
+        // in_progress -> running
+        cache.insert(
+            "/repos/owner/repo/commits/sha-running/check-runs".into(),
+            CacheEntry {
+                body: serde_json::json!({ "total_count": 1, "check_runs": [{ "status": "in_progress", "conclusion": null }] }),
+                fetched_at: Instant::now(),
+            },
+        );
+        // all cancelled -> cancelled
+        cache.insert(
+            "/repos/owner/repo/commits/sha-cancelled/check-runs".into(),
+            CacheEntry {
+                body: serde_json::json!({ "total_count": 1, "check_runs": [{ "status": "completed", "conclusion": "cancelled" }] }),
+                fetched_at: Instant::now(),
+            },
+        );
+        drop(cache);
+
+        assert_eq!(
+            get_commit_combined_status("owner", "repo", "sha-empty").await,
+            "unconfigured"
+        );
+        assert_eq!(
+            get_commit_combined_status("owner", "repo", "sha-fail").await,
+            "failure"
+        );
+        assert_eq!(
+            get_commit_combined_status("owner", "repo", "sha-running").await,
+            "running"
+        );
+        assert_eq!(
+            get_commit_combined_status("owner", "repo", "sha-cancelled").await,
+            "cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_repo_commits_compare_mode() {
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                "/repos/owner/repo/compare/main...feat".to_string(),
+                CacheEntry {
+                    body: serde_json::json!({
+                        "commits": [{
+                            "sha": "1234",
+                            "commit": { "message": "feat", "author": { "name": null, "email": "a@a.com", "date": "2026-08-01" } },
+                            "html_url": "https://gh.com/commit/1234",
+                            "parents": []
+                        }]
+                    }),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+        let res = get_repo_commits(
+            Path(("owner".into(), "repo".into())),
+            Query(CommitQuery {
+                sha: Some("main...feat".into()),
+                per_page: Some(10),
+                page: Some(1),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_commit_check_runs_force_reload_cache_eviction() {
+        let key = "/repos/owner/repo/commits/head-sha/check-runs".to_string();
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.insert(
+                key.clone(),
+                CacheEntry {
+                    body: serde_json::json!({ "total_count": 1, "check_runs": [{ "id": 1, "name": "ci", "status": "completed", "conclusion": "success", "html_url": "url", "app": { "name": "GH" } }] }),
+                    fetched_at: Instant::now() - Duration::from_secs(15),
+                },
+            );
+        }
+        let _ = get_commit_check_runs(
+            Path(("owner".into(), "repo".into(), "head-sha".into())),
+            Query(CheckRunsQueryParams { force: Some(true) }),
+        )
+        .await;
+        let cache = CACHE.lock().unwrap();
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_github_handlers_reject_invalid_identifiers() {
+        assert_eq!(
+            get_repo_commits(
+                Path(("bad/owner".into(), "repo".into())),
+                Query(CommitQuery {
+                    sha: None,
+                    per_page: None,
+                    page: None
+                })
+            )
+            .await
+            .into_response()
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            get_repo_branches(Path(("owner".into(), "bad repo name".into())))
+                .await
+                .into_response()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            get_commit_check_runs(
+                Path(("owner".into(), "repo".into(), "bad/ref/".into())),
+                Query(CheckRunsQueryParams { force: None })
+            )
+            .await
+            .into_response()
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }

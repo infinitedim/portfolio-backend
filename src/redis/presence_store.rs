@@ -322,5 +322,39 @@ mod tests {
 
         backend.leave_conn(&conn1).await.expect("leave");
         backend.leave_conn(&conn2).await.expect("leave");
+
+        // Test leave_conn on non-existent connection
+        let non_existent = uuid::Uuid::new_v4().to_string();
+        assert!(backend.leave_conn(&non_existent).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn in_memory_multi_room_join_and_prune() {
+        let backend = InMemoryPresence::new();
+
+        // Join room1
+        let c1 = backend.join_room("conn1", "room1").await.unwrap();
+        assert_eq!(c1, 1);
+
+        // Join room2 with same connection (moves connection to room2)
+        let c2 = backend.join_room("conn1", "room2").await.unwrap();
+        assert_eq!(c2, 1);
+        assert_eq!(backend.total_connections().await.unwrap(), 1);
+
+        // Join conn2 in room2
+        let c22 = backend.join_room("conn2", "room2").await.unwrap();
+        assert_eq!(c22, 2);
+        assert_eq!(backend.total_connections().await.unwrap(), 2);
+
+        // Prune stale connections (returns count of active connections remaining)
+        let active = backend.prune_stale(100).await.unwrap();
+        assert_eq!(active, 2);
+        assert_eq!(backend.total_connections().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_leave_non_existent_connection() {
+        let backend = InMemoryPresence::new();
+        assert!(backend.leave_conn("non-existent-conn").await.is_ok());
     }
 }

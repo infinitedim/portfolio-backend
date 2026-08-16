@@ -409,4 +409,67 @@ mod tests {
         let res = resume_router().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+
+    #[test]
+    fn test_gcs_bucket_name_empty_string_filtered() {
+        std::env::set_var("GCS_BUCKET", "");
+        assert_eq!(gcs_bucket_name(), None);
+        std::env::remove_var("GCS_BUCKET");
+    }
+
+    #[tokio::test]
+    async fn upload_resume_no_fields_returns_bad_request() {
+        let boundary = "empty-boundary";
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(format!("--{}--\r\n", boundary)))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_malformed_multipart_returns_bad_request() {
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header("content-type", "multipart/form-data; boundary=test")
+            .body(Body::from(b"invalid-truncated-multipart-data".as_slice()))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_rejects_short_payload_under_4_bytes() {
+        let boundary = "short-boundary";
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", test_support::admin_bearer())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_pdf_body(boundary, b"%PD")))
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_invalid_token_returns_unauthorized() {
+        let req = Request::post("/api/upload/resume")
+            .header("authorization", "Bearer invalid.jwt.token")
+            .header("content-type", "multipart/form-data; boundary=test")
+            .body(Body::empty())
+            .expect("request should build");
+
+        let res = resume_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
 }

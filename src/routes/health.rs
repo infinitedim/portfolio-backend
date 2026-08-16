@@ -517,4 +517,85 @@ mod tests {
             std::env::remove_var("DATABASE_URL");
         }
     }
+
+    #[tokio::test]
+    async fn test_health_detailed_when_db_not_configured() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let orig = std::env::var("DATABASE_URL").ok();
+        std::env::remove_var("DATABASE_URL");
+
+        let (status, body) =
+            get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.checks.database.status, "not_configured");
+
+        if let Some(val) = orig {
+            std::env::set_var("DATABASE_URL", val);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_health_production_error_masking() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let orig_env = std::env::var("ENVIRONMENT").ok();
+        let orig_db = std::env::var("DATABASE_URL").ok();
+
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("DATABASE_URL", "postgres://invalid:5432/db");
+
+        let (status, body) =
+            get_json::<DetailedHealthResponse>(test_router(), "/health/detailed").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body.checks.database.error.as_deref(),
+            Some("database unreachable")
+        );
+
+        if let Some(env) = orig_env {
+            std::env::set_var("ENVIRONMENT", env);
+        } else {
+            std::env::remove_var("ENVIRONMENT");
+        }
+        if let Some(db) = orig_db {
+            std::env::set_var("DATABASE_URL", db);
+        } else {
+            std::env::remove_var("DATABASE_URL");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_redis_production_error_masking() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let orig_env = std::env::var("ENVIRONMENT").ok();
+        std::env::set_var("ENVIRONMENT", "production");
+
+        let invalid_pool = crate::redis::RedisPool::connect("redis://127.0.0.1:1234").await;
+        if let Ok(pool) = invalid_pool {
+            let check = check_redis(&RedisMode::Connected(Arc::new(pool))).await;
+            assert_eq!(check.status, "unhealthy");
+            assert_eq!(check.error.as_deref(), Some("redis unreachable"));
+        }
+
+        if let Some(env) = orig_env {
+            std::env::set_var("ENVIRONMENT", env);
+        } else {
+            std::env::remove_var("ENVIRONMENT");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_health_redis_unhealthy_returns_503() {
+        let invalid_pool = crate::redis::RedisPool::connect("redis://127.0.0.1:1234").await;
+        if let Ok(pool) = invalid_pool {
+            let state = HealthState {
+                redis: Arc::new(RedisMode::Connected(Arc::new(pool))),
+            };
+            let app = Router::new()
+                .route("/health/redis", axum::routing::get(health_redis))
+                .with_state(state);
+            let req = Request::get("/health/redis").body(Body::empty()).unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
 }

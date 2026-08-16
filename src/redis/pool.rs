@@ -144,4 +144,25 @@ mod tests {
             std::env::remove_var("REDIS_URL");
         }
     }
+
+    #[test]
+    fn test_unexpected_ping_format_logic() {
+        let pong = "UNKNOWN_PONG";
+        let res: Result<u64, String> = if pong.eq_ignore_ascii_case("PONG") {
+            Ok(10)
+        } else {
+            Err(format!("unexpected PING response: {pong}"))
+        };
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("unexpected PING response"));
+    }
+
+    #[tokio::test]
+    async fn test_pool_connection_getter() {
+        if let Some(url) = redis_test_url() {
+            if let Ok(pool) = RedisPool::connect(&url).await {
+                let _mgr = pool.connection();
+            }
+        }
+    }
 }

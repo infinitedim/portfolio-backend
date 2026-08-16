@@ -548,4 +548,125 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("400"));
     }
+
+    #[test]
+    fn test_deepl_endpoint_selection_and_target_langs() {
+        assert_eq!(
+            get_deepl_endpoint("abc:fx"),
+            "https://api-free.deepl.com/v2/translate"
+        );
+        assert_eq!(
+            get_deepl_endpoint("abc_pro"),
+            "https://api.deepl.com/v2/translate"
+        );
+
+        assert_eq!(to_deepl_target_lang("en"), "EN-US");
+        assert_eq!(to_deepl_target_lang("id"), "ID");
+        assert_eq!(to_deepl_target_lang("zh_CN"), "ZH-HANS");
+        assert_eq!(to_deepl_target_lang("ja_JP"), "JA");
+        assert_eq!(to_deepl_target_lang("ko_KR"), "KO");
+        assert_eq!(to_deepl_target_lang("es_ES"), "ES");
+        assert_eq!(to_deepl_target_lang("fr_FR"), "FR");
+        assert_eq!(to_deepl_target_lang("de_DE"), "DE");
+        assert_eq!(to_deepl_target_lang("pt_BR"), "PT-BR");
+        assert_eq!(to_deepl_target_lang("ru_RU"), "RU");
+        assert_eq!(to_deepl_target_lang("unknown"), "EN-US");
+    }
+
+    #[test]
+    fn test_apply_literal_fixes_non_string() {
+        let mut val_arr = serde_json::json!([1, 2, 3]);
+        apply_literal_fixes(&mut val_arr);
+        assert_eq!(val_arr, serde_json::json!([1, 2, 3]));
+
+        let mut val_str = serde_json::json!("utas pengembang web");
+        apply_literal_fixes(&mut val_str);
+        assert_eq!(val_str, serde_json::json!("thread web developer"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_deepl_incomplete_translations() {
+        use axum::{routing::post, Json, Router};
+
+        let app = Router::new().route(
+            "/v2/translate_incomplete",
+            post(|| async {
+                (
+                    axum::http::StatusCode::OK,
+                    Json(serde_json::json!({ "translations": [{"text": "one"}] })),
+                )
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let mock_url = format!("http://{}/v2/translate_incomplete", addr);
+        let res = translate_blog_post_with_endpoint(
+            &client, &mock_url, "key", "Title", None, "Content", "en_US",
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("incomplete translations"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_deepl_invalid_json_body_and_missing_field() {
+        use axum::{routing::post, Json, Router};
+
+        let app = Router::new()
+            .route(
+                "/v2/not_json",
+                post(|| async { (axum::http::StatusCode::OK, "not-valid-json") }),
+            )
+            .route(
+                "/v2/missing_field",
+                post(|| async {
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(serde_json::json!({ "other": "value" })),
+                    )
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let url_not_json = format!("http://{}/v2/not_json", addr);
+        let res1 = translate_blog_post_with_endpoint(
+            &client,
+            &url_not_json,
+            "key",
+            "Title",
+            None,
+            "Content",
+            "en_US",
+        )
+        .await;
+        assert!(res1.is_err());
+        assert!(res1.unwrap_err().contains("Failed to parse"));
+
+        let url_missing = format!("http://{}/v2/missing_field", addr);
+        let res2 = translate_blog_post_with_endpoint(
+            &client,
+            &url_missing,
+            "key",
+            "Title",
+            None,
+            "Content",
+            "en_US",
+        )
+        .await;
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("Invalid response format"));
+    }
 }

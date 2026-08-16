@@ -262,4 +262,29 @@ mod tests {
         std::env::remove_var("SITE_DESCRIPTION");
         std::env::remove_var("SITE_URL");
     }
+
+    #[tokio::test]
+    async fn test_rss_feed_db_query_error() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+
+        {
+            let mut guard = RSS_CACHE.lock().unwrap();
+            *guard = None;
+        }
+
+        // Rename blog_posts temporarily inside a transaction or invalid schema state
+        let _ = sqlx::query("ALTER TABLE blog_posts RENAME TO blog_posts_bak_rss")
+            .execute(db.pool.as_ref())
+            .await;
+
+        let response = rss_feed().await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        // Restore table name
+        let _ = sqlx::query("ALTER TABLE blog_posts_bak_rss RENAME TO blog_posts")
+            .execute(db.pool.as_ref())
+            .await;
+    }
 }

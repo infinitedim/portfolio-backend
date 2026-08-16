@@ -825,6 +825,50 @@ mod tests {
         let created: SeriesResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(created.slug, "getting-started");
 
+        // Duplicate series creation -> 400 Bad Request
+        let (st_dup, bytes_dup) = post_json_auth(
+            app.clone(),
+            "/api/admin/series",
+            &bearer,
+            &CreateSeriesRequest {
+                title: "Getting Started Duplicate".to_string(),
+                slug: "getting-started".to_string(),
+                description: None,
+            },
+        )
+        .await;
+        assert_eq!(st_dup, StatusCode::BAD_REQUEST);
+        assert!(String::from_utf8(bytes_dup.to_vec())
+            .unwrap()
+            .contains("already exists"));
+
+        // Empty title & invalid slug validation
+        let (st_empty, _) = post_json_auth(
+            app.clone(),
+            "/api/admin/series",
+            &bearer,
+            &CreateSeriesRequest {
+                title: "   ".to_string(),
+                slug: "valid-slug".to_string(),
+                description: None,
+            },
+        )
+        .await;
+        assert_eq!(st_empty, StatusCode::BAD_REQUEST);
+
+        let (st_inv_slug, _) = post_json_auth(
+            app.clone(),
+            "/api/admin/series",
+            &bearer,
+            &CreateSeriesRequest {
+                title: "Valid Title".to_string(),
+                slug: "invalid_slug!".to_string(),
+                description: None,
+            },
+        )
+        .await;
+        assert_eq!(st_inv_slug, StatusCode::BAD_REQUEST);
+
         // Call list_series_admin
         let req_list_admin = Request::get("/api/admin/series")
             .header(axum::http::header::AUTHORIZATION, &bearer)
@@ -913,10 +957,50 @@ mod tests {
         assert_eq!(res_invalid.status(), StatusCode::BAD_REQUEST);
 
         let req = Request::delete("/api/admin/series/getting-started")
-            .header(axum::http::header::AUTHORIZATION, bearer)
+            .header(axum::http::header::AUTHORIZATION, &bearer)
             .body(Body::empty())
             .unwrap();
-        let res = app.oneshot(req).await.unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+
+        // Delete non-existent series -> 404
+        let req_del_404 = Request::delete("/api/admin/series/non-existent-series")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_del_404 = app.clone().oneshot(req_del_404).await.unwrap();
+        assert_eq!(res_del_404.status(), StatusCode::NOT_FOUND);
+
+        // Get admin series 404 & invalid slug
+        let req_get_404 = Request::get("/api/admin/series/non-existent-series")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_get_404 = app.clone().oneshot(req_get_404).await.unwrap();
+        assert_eq!(res_get_404.status(), StatusCode::NOT_FOUND);
+
+        let req_get_inv = Request::get("/api/admin/series/invalid_slug!")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res_get_inv = app.clone().oneshot(req_get_inv).await.unwrap();
+        assert_eq!(res_get_inv.status(), StatusCode::BAD_REQUEST);
+
+        // Update non-existent series -> 404
+        let req_upd_404 = Request::patch("/api/admin/series/non-existent-series")
+            .header(axum::http::header::AUTHORIZATION, &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({"title": "X"})).unwrap(),
+            ))
+            .unwrap();
+        let res_upd_404 = app.oneshot(req_upd_404).await.unwrap();
+        assert_eq!(res_upd_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_series_public_static_fallback_without_db() {
+        let res = get_series_public(Path("rust-systems-mastery".to_string())).await;
+        assert!(res.is_ok());
     }
 }

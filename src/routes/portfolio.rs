@@ -1813,6 +1813,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_portfolio_skills_returns_ok_with_data() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let (status, body) =
             get_json::<PortfolioResponse>(portfolio_router(), "/api/portfolio?section=skills")
                 .await;
@@ -2067,5 +2068,389 @@ mod tests {
             .unwrap();
         let res_about_patch = app.clone().oneshot(req_about_patch).await.unwrap();
         assert_eq!(res_about_patch.status(), StatusCode::OK);
+    }
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_default_locale_and_type_helpers() {
+        assert_eq!(default_locale(), "en_US");
+        assert_eq!(default_type(), "full-time");
+    }
+
+    #[test]
+    fn test_resolve_locale_string_edge_cases() {
+        let json_obj = serde_json::json!({ "id_ID": "Halo", "en_US": "Hello" });
+        assert_eq!(resolve_locale_string(&json_obj, "id_ID"), "Halo");
+        assert_eq!(resolve_locale_string(&json_obj, "id"), "Halo");
+
+        let json_fallback = serde_json::json!({ "fr_FR": "Bonjour" });
+        assert_eq!(resolve_locale_string(&json_fallback, "ja_JP"), "Bonjour");
+
+        let json_str = serde_json::json!("Plain Value");
+        assert_eq!(resolve_locale_string(&json_str, "any"), "Plain Value");
+    }
+
+    #[test]
+    fn test_resolve_locale_array_edge_cases() {
+        let json_arr = serde_json::json!(["Item 1", "Item 2"]);
+        assert_eq!(
+            resolve_locale_array(&json_arr, "any"),
+            vec!["Item 1", "Item 2"]
+        );
+
+        let json_obj_arr = serde_json::json!({ "de_DE": ["Eins", "Zwei"] });
+        assert_eq!(
+            resolve_locale_array(&json_obj_arr, "fr_FR"),
+            vec!["Eins", "Zwei"]
+        );
+
+        let json_invalid = serde_json::json!(12345);
+        assert!(resolve_locale_array(&json_invalid, "any").is_empty());
+    }
+
+    #[test]
+    fn test_resolve_projects_and_about_non_conforming_json() {
+        let non_array_projects = serde_json::json!({ "projects": "not-an-array" });
+        let res = resolve_projects_locale(&non_array_projects, "en_US");
+        assert_eq!(res, non_array_projects);
+
+        let non_object_about = serde_json::json!("just-a-string");
+        let res_about = resolve_about_locale(&non_object_about, "en_US");
+        assert_eq!(res_about, non_object_about);
+    }
+
+    #[tokio::test]
+    async fn test_get_portfolio_static_about_and_projects_endpoints() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let app = Router::new().route("/api/portfolio", get(get_portfolio));
+
+        let req_about = Request::get("/api/portfolio?section=about&locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res_about = app.clone().oneshot(req_about).await.unwrap();
+        assert_eq!(res_about.status(), StatusCode::OK);
+
+        let req_projects = Request::get("/api/portfolio?section=projects&locale=id_ID")
+            .body(Body::empty())
+            .unwrap();
+        let res_projects = app.clone().oneshot(req_projects).await.unwrap();
+        assert_eq!(res_projects.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_update_portfolio_invalid_section() {
+        let app = Router::new().route("/api/portfolio", patch(update_portfolio));
+        let bearer = crate::test_support::admin_bearer();
+
+        let req = Request::patch("/api/portfolio")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "section": "invalid_sec", "data": {} }).to_string(),
+            ))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_update_portfolio_no_db_returns_service_unavailable() {
+        let app = Router::new().route("/api/portfolio", patch(update_portfolio));
+        let bearer = crate::test_support::admin_bearer();
+
+        let req = Request::patch("/api/portfolio")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "section": "skills", "data": {} }).to_string(),
+            ))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_admin_portfolio_endpoints_require_auth() {
+        let app = Router::new()
+            .route(
+                "/api/admin/portfolio/versions",
+                get(list_portfolio_versions),
+            )
+            .route(
+                "/api/admin/portfolio/versions/{id}/restore",
+                post(restore_portfolio_version),
+            )
+            .route(
+                "/api/admin/portfolio/experience",
+                get(list_experiences_admin).post(create_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}",
+                patch(update_experience).delete(delete_experience),
+            )
+            .route(
+                "/api/admin/portfolio/experience/{id}/locale/{loc}",
+                patch(override_experience_locale),
+            )
+            .route("/api/admin/portfolio/about", post(update_about_admin))
+            .route(
+                "/api/admin/portfolio/about/translate",
+                post(translate_about_admin),
+            )
+            .route(
+                "/api/admin/portfolio/experience/translate",
+                post(translate_experience_admin),
+            );
+
+        let valid_create_exp = serde_json::json!({
+            "company": "Test",
+            "position": { "en_US": "Dev" },
+            "duration": { "en_US": "2024" },
+            "description": { "en_US": ["desc"] },
+            "technologies": ["Rust"]
+        })
+        .to_string();
+
+        let valid_override_exp = serde_json::json!({
+            "position": "Dev",
+            "duration": "2024",
+            "description": ["desc"]
+        })
+        .to_string();
+
+        let valid_about = serde_json::json!({
+            "name": "Dev",
+            "title": { "en_US": "Title" },
+            "bio": { "en_US": "Bio" },
+            "location": { "en_US": "Loc" },
+            "contact": { "email": "a@b.com", "github": "gh", "linkedin": "li" }
+        })
+        .to_string();
+
+        let valid_about_trans = serde_json::json!({
+            "sourceLocale": "en",
+            "title": "Title",
+            "bio": "Bio",
+            "location": "Loc"
+        })
+        .to_string();
+
+        let valid_exp_trans = serde_json::json!({
+            "sourceLocale": "en",
+            "position": "Pos",
+            "duration": "Dur",
+            "description": ["Desc"]
+        })
+        .to_string();
+
+        let reqs = vec![
+            Request::get("/api/admin/portfolio/versions?section=skills")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post(format!(
+                "/api/admin/portfolio/versions/{}/restore",
+                Uuid::new_v4()
+            ))
+            .header("content-type", "application/json")
+            .body(Body::empty())
+            .unwrap(),
+            Request::get("/api/admin/portfolio/experience")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/api/admin/portfolio/experience")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_create_exp))
+                .unwrap(),
+            Request::patch(format!(
+                "/api/admin/portfolio/experience/{}",
+                Uuid::new_v4()
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"company": "X"}).to_string()))
+            .unwrap(),
+            Request::delete(format!(
+                "/api/admin/portfolio/experience/{}",
+                Uuid::new_v4()
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            Request::patch(format!(
+                "/api/admin/portfolio/experience/{}/locale/fr_FR",
+                Uuid::new_v4()
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(valid_override_exp))
+            .unwrap(),
+            Request::post("/api/admin/portfolio/about")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_about))
+                .unwrap(),
+            Request::post("/api/admin/portfolio/about/translate")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_about_trans))
+                .unwrap(),
+            Request::post("/api/admin/portfolio/experience/translate")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_exp_trans))
+                .unwrap(),
+        ];
+
+        for req in reqs {
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_portfolio_versions_invalid_section() {
+        let app = Router::new().route(
+            "/api/admin/portfolio/versions",
+            get(list_portfolio_versions),
+        );
+        let bearer = crate::test_support::admin_bearer();
+
+        let req = Request::get("/api/admin/portfolio/versions?section=invalid_sec")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_translate_about_and_experience_missing_api_key() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let orig_key = std::env::var("GEMINI_API_KEY").ok();
+        std::env::remove_var("GEMINI_API_KEY");
+
+        let app = Router::new()
+            .route(
+                "/api/admin/portfolio/about/translate",
+                post(translate_about_admin),
+            )
+            .route(
+                "/api/admin/portfolio/experience/translate",
+                post(translate_experience_admin),
+            );
+        let bearer = crate::test_support::admin_bearer();
+
+        let valid_about_trans = serde_json::json!({
+            "sourceLocale": "en",
+            "title": "Title",
+            "bio": "Bio",
+            "location": "Loc"
+        })
+        .to_string();
+
+        let valid_exp_trans = serde_json::json!({
+            "sourceLocale": "en",
+            "position": "Pos",
+            "duration": "Dur",
+            "description": ["Desc"]
+        })
+        .to_string();
+
+        let req1 = Request::post("/api/admin/portfolio/about/translate")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(valid_about_trans))
+            .unwrap();
+        let res1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let req2 = Request::post("/api/admin/portfolio/experience/translate")
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(valid_exp_trans))
+            .unwrap();
+        let res2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        if let Some(key) = orig_key {
+            std::env::set_var("GEMINI_API_KEY", key);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_experiences_admin_db_unavailable_fallback() {
+        let app = Router::new().route(
+            "/api/admin/portfolio/experience",
+            get(list_experiences_admin),
+        );
+        let bearer = crate::test_support::admin_bearer();
+
+        let req = Request::get("/api/admin/portfolio/experience")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_about_admin_db_unavailable_fallback() {
+        let app = Router::new().route("/api/admin/portfolio/about", get(get_about_admin));
+        let bearer = crate::test_support::admin_bearer();
+
+        let req = Request::get("/api/admin/portfolio/about")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn db_portfolio_non_existent_uuid_404s() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = portfolio_router();
+        let bearer = crate::test_support::admin_bearer();
+        let random_id = Uuid::new_v4();
+
+        // 1. Restore version 404
+        let req_restore =
+            Request::post(format!("/api/admin/portfolio/versions/{random_id}/restore"))
+                .header("authorization", &bearer)
+                .body(Body::empty())
+                .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_restore).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // 2. Update experience 404
+        let req_update = Request::patch(format!("/api/admin/portfolio/experience/{random_id}"))
+            .header("authorization", &bearer)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"company": "X"}).to_string()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_update).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // 3. Delete experience 404
+        let req_delete = Request::delete(format!("/api/admin/portfolio/experience/{random_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_delete).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // 4. Override locale 404
+        let req_override = Request::patch(format!(
+            "/api/admin/portfolio/experience/{random_id}/locale/fr_FR"
+        ))
+        .header("authorization", &bearer)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::json!({"position": "X"}).to_string()))
+        .unwrap();
+        assert_eq!(
+            app.oneshot(req_override).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

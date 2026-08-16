@@ -183,14 +183,14 @@ where
 
 pub use crate::routes::ErrorResponse;
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingTranslationItem {
     pub translated: BlogPostResponse,
     pub source: Option<BlogPostResponse>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingTranslationsResponse {
     pub items: Vec<PendingTranslationItem>,
@@ -3067,5 +3067,444 @@ mod tests {
         let fallback_detail =
             get_static_blog_post_detail("d2b3c4d5-6e7f-8a9b-0c1d-2e3f4a5b6c7d", "unknown").unwrap();
         assert!(fallback_detail.title.contains("Mastering Next.js 16"));
+    }
+
+    #[test]
+    fn test_is_valid_locale_matrix() {
+        assert!(is_valid_locale("en"));
+        assert!(is_valid_locale("id_ID"));
+        assert!(is_valid_locale("pt-BR"));
+        assert!(is_valid_locale("zh_CN"));
+        assert!(!is_valid_locale(""));
+        assert!(!is_valid_locale("en-US-extra-long"));
+        assert!(!is_valid_locale("en@US"));
+        assert!(!is_valid_locale("en US"));
+    }
+
+    #[test]
+    fn test_calculate_reading_time_matrix() {
+        assert_eq!(calculate_reading_time(None), 0);
+        assert_eq!(calculate_reading_time(Some("")), 0);
+        assert_eq!(calculate_reading_time(Some("word")), 1);
+        let words_400 = (0..400).map(|_| "word").collect::<Vec<_>>().join(" ");
+        assert_eq!(calculate_reading_time(Some(&words_400)), 2);
+    }
+
+    #[test]
+    fn test_default_locale_and_resolve_blog_locale_string_fallbacks() {
+        assert_eq!(default_locale(), "en");
+
+        let json_prefix = serde_json::json!({ "en_US": "Hello US" });
+        assert_eq!(
+            resolve_blog_locale_string(&json_prefix, "en_GB"),
+            "Hello US"
+        );
+
+        let json_fallback = serde_json::json!({ "de_DE": "Hallo" });
+        assert_eq!(resolve_blog_locale_string(&json_fallback, "fr_FR"), "Hallo");
+
+        let json_str = serde_json::json!("Simple Title");
+        assert_eq!(resolve_blog_locale_string(&json_str, "any"), "Simple Title");
+    }
+
+    #[tokio::test]
+    async fn db_blog_approve_translation() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route(
+                "/api/blog/{id}/approve-translation",
+                post(approve_translation),
+            )
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let req_unauth = Request::post(format!("/api/blog/{}/approve-translation", Uuid::new_v4()))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_unauth).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let (st, bytes) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Translation Pending".into(),
+                slug: "trans-pending".into(),
+                summary: None,
+                content_md: Some("body".into()),
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("ja".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: Some("pending_review".into()),
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let created: BlogPostResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(created.translation_status, "pending_review");
+
+        let req_approve = Request::post(format!("/api/blog/{}/approve-translation", created.id))
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req_approve).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let approved: BlogPostResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(approved.translation_status, "published");
+        assert!(approved.reviewed_at.is_some());
+        assert!(approved.reviewed_by.is_some());
+
+        let req_404 = Request::post(format!("/api/blog/{}/approve-translation", Uuid::new_v4()))
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req_404).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn db_blog_list_pending_translations() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route(
+                "/api/admin/blog/pending-translations",
+                get(list_pending_translations),
+            )
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let req_unauth = Request::get("/api/admin/blog/pending-translations")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_unauth).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let group_id = Uuid::new_v4();
+        let _ = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Source EN".into(),
+                slug: "source-en".into(),
+                summary: None,
+                content_md: Some("en".into()),
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("en".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: Some(group_id),
+                translation_status: Some("published".into()),
+            },
+        )
+        .await;
+        let _ = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Pending ID".into(),
+                slug: "pending-id".into(),
+                summary: None,
+                content_md: Some("id".into()),
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("id".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: Some(group_id),
+                translation_status: Some("pending_review".into()),
+            },
+        )
+        .await;
+
+        let req = Request::get("/api/admin/blog/pending-translations")
+            .header(axum::http::header::AUTHORIZATION, bearer)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let list: PendingTranslationsResponse = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(list.items.iter().any(|i| i.translated.slug == "pending-id"
+            && i.source.as_ref().map(|s| s.slug.as_str()) == Some("source-en")));
+    }
+
+    #[tokio::test]
+    async fn db_blog_translate_post_validation() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/admin/blog/{id}/translate", post(translate_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/api/admin/blog/{}/translate?target=ja",
+                    Uuid::new_v4()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let req_no_target = Request::post(format!("/api/admin/blog/{}/translate", Uuid::new_v4()))
+            .header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_no_target).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let req_bad_locale = Request::post(format!(
+            "/api/admin/blog/{}/translate?target=bad@locale!",
+            Uuid::new_v4()
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_bad_locale).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let req_not_found = Request::post(format!(
+            "/api/admin/blog/{}/translate?target=ja",
+            Uuid::new_v4()
+        ))
+        .header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .body(Body::empty())
+        .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req_not_found).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn db_blog_get_post_fallback_to_english() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/blog/{slug}", get(get_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let _ = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "English Only".into(),
+                slug: "english-only".into(),
+                summary: None,
+                content_md: Some("en body".into()),
+                content_html: None,
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("en".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: Some("published".into()),
+            },
+        )
+        .await;
+
+        let req = Request::get("/api/blog/english-only?locale=de")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get("X-Translation-Fallback").unwrap(), "en");
+
+        let req_invalid_locale =
+            Request::get("/api/blog/english-only?locale=bad_locale_too_long_123")
+                .body(Body::empty())
+                .unwrap();
+        assert_eq!(
+            app.oneshot(req_invalid_locale).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn db_blog_delete_post_gcs_cleanup_and_404() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/blog/{slug}", delete(delete_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let _ = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "GCS Image Post".into(),
+                slug: "gcs-image-post".into(),
+                summary: None,
+                content_md: Some("![Img](https://storage.googleapis.com/bucket/test.png)".into()),
+                content_html: Some(
+                    "<img src=\"https://storage.googleapis.com/bucket/test2.png\" />".into(),
+                ),
+                published: Some(true),
+                tags: None,
+                publish_at: None,
+                locale: Some("en".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+
+        let st = delete_auth(app.clone(), "/api/blog/gcs-image-post", &bearer).await;
+        assert_eq!(st, StatusCode::OK);
+
+        let st_404 = delete_auth(app, "/api/blog/non-existent-slug", &bearer).await;
+        assert_eq!(st_404, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn db_blog_crud_validation_matrix() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        let app = Router::new()
+            .route("/api/blog", post(create_post))
+            .route("/api/blog/{slug}", patch(update_post))
+            .layer(crate::test_support::mock_connect_info());
+        let bearer = crate::test_support::admin_bearer();
+
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "   ".into(),
+                slug: "valid-slug".into(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Valid Title".into(),
+                slug: "   ".into(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+                locale: None,
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        let (st, _) = post_json_auth(
+            app.clone(),
+            "/api/blog",
+            Some(&bearer),
+            &CreateBlogRequest {
+                title: "Valid Title".into(),
+                slug: "valid-slug".into(),
+                summary: None,
+                content_md: None,
+                content_html: None,
+                published: Some(false),
+                tags: None,
+                publish_at: None,
+                locale: Some("invalid@loc".into()),
+                series_id: None,
+                series_order: None,
+                translation_group_id: None,
+                translation_status: None,
+            },
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        let (st, _) = patch_json_auth(
+            app.clone(),
+            "/api/blog/Bad_Slug",
+            &bearer,
+            &serde_json::json!({ "title": "New" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        let (st, _) = patch_json_auth(
+            app.clone(),
+            "/api/blog/valid-slug?locale=bad@loc",
+            &bearer,
+            &serde_json::json!({ "title": "New" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        let (st, _) = patch_json_auth(
+            app,
+            "/api/blog/non-existent-slug",
+            &bearer,
+            &serde_json::json!({ "title": "New" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
     }
 }

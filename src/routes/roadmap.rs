@@ -511,4 +511,73 @@ mod tests {
             std::env::remove_var("ROADMAP_PASSWORD");
         }
     }
+
+    #[tokio::test]
+    async fn test_all_roadmap_endpoints_return_502_when_unconfigured_and_uncached() {
+        let _guard = TEST_MUTEX.lock().await;
+
+        let email = std::env::var("ROADMAP_EMAIL").ok();
+        let password = std::env::var("ROADMAP_PASSWORD").ok();
+        std::env::remove_var("ROADMAP_EMAIL");
+        std::env::remove_var("ROADMAP_PASSWORD");
+
+        {
+            let mut state = STATE.lock().await;
+            state.cache.clear();
+            state.auth_token = None;
+        }
+
+        assert_eq!(
+            get_dashboard().await.into_response().status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            get_teams().await.into_response().status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            get_favourites().await.into_response().status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            get_resource_progress(Path("rust".into()))
+                .await
+                .into_response()
+                .status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            get_roadmap_detail(Path("flutter".into()))
+                .await
+                .into_response()
+                .status(),
+            StatusCode::BAD_GATEWAY
+        );
+
+        if let Some(val) = email {
+            std::env::set_var("ROADMAP_EMAIL", val);
+        }
+        if let Some(val) = password {
+            std::env::set_var("ROADMAP_PASSWORD", val);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expired_cache_entry_returns_none_helper() {
+        let _guard = TEST_MUTEX.lock().await;
+        {
+            let mut state = STATE.lock().await;
+            state.cache.insert(
+                "v1-streak".to_string(),
+                CacheEntry {
+                    data: serde_json::json!({"streak": 1}),
+                    fetched_at: std::time::Instant::now() - std::time::Duration::from_secs(3601),
+                },
+            );
+        }
+        let state = STATE.lock().await;
+        let res = state.cache.get("v1-streak");
+        assert!(res.is_some());
+        assert!(res.unwrap().fetched_at.elapsed() >= std::time::Duration::from_secs(300));
+    }
 }

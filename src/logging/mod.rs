@@ -408,4 +408,35 @@ mod tests {
         assert_eq!(parsed.host_str(), Some("localhost"));
         assert_eq!(parsed.port(), Some(3100));
     }
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_log_dir_from_env_empty_string() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LOG_DIR", "   ");
+        assert_eq!(log_dir_from_env(false), None);
+        std::env::remove_var("LOG_DIR");
+    }
+
+    #[test]
+    fn test_log_dir_from_env_custom_path() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LOG_DIR", "/custom/log/dir");
+        assert_eq!(
+            log_dir_from_env(false),
+            Some(PathBuf::from("/custom/log/dir"))
+        );
+        std::env::remove_var("LOG_DIR");
+    }
+
+    #[test]
+    fn test_logging_init_execution_guard_pipeline() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LOG_DIR", "");
+        let guards = init();
+        // Standard stdout non-blocking guard returned
+        assert!(!guards.is_empty());
+        std::env::remove_var("LOG_DIR");
+    }
 }

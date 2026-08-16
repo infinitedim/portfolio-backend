@@ -797,6 +797,8 @@ mod tests {
 
     #[tokio::test]
     async fn upload_list_and_delete_roundtrip_with_isolated_dir() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("GCS_BUCKET");
         let dir = test_support::isolated_upload_dir()
             .await
             .expect("isolated upload dir should be created");
@@ -960,6 +962,169 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             delete_gcs_object("https://storage.googleapis.com/bucket/secret/file.png").await;
+        });
+    }
+
+    #[test]
+    fn test_magic_bytes_gif_webp_png_jpeg_matrix() {
+        assert_eq!(validate_image_magic_bytes(b"GIF87a"), Some("image/gif"));
+        assert_eq!(validate_image_magic_bytes(b"GIF89a"), Some("image/gif"));
+
+        let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(validate_image_magic_bytes(&png_bytes), Some("image/png"));
+
+        let jpeg_bytes = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert_eq!(validate_image_magic_bytes(&jpeg_bytes), Some("image/jpeg"));
+
+        let mut webp_bytes = vec![0u8; 12];
+        webp_bytes[0..4].copy_from_slice(b"RIFF");
+        webp_bytes[8..12].copy_from_slice(b"WEBP");
+        assert_eq!(validate_image_magic_bytes(&webp_bytes), Some("image/webp"));
+    }
+
+    #[tokio::test]
+    async fn upload_project_image_happy_path() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("GCS_BUCKET");
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+
+        let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+        let boundary = "project-upload-boundary";
+        let req = Request::post("/api/upload/project-image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                "project.png",
+                &png_bytes,
+            )))
+            .expect("request should build");
+
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("/uploads/projects/"));
+    }
+
+    #[tokio::test]
+    async fn upload_image_rejects_disallowed_extension() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("GCS_BUCKET");
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+
+        let boundary = "exe-upload-boundary";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                "script.sh",
+                b"echo hello",
+            )))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn upload_image_rejects_magic_bytes_mismatch() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("GCS_BUCKET");
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+
+        let boundary = "fake-png-boundary";
+        let req = Request::post("/api/upload/image")
+            .header("authorization", auth_header())
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                "fake.png",
+                b"not-really-a-png-file",
+            )))
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_image_rejects_invalid_filename() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+
+        let req = Request::delete("/api/upload/image/..%2Fsecret.txt")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_image_returns_not_found_for_missing_file() {
+        let _dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+
+        let req = Request::delete("/api/upload/image/non-existent-file.png")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+
+        let (status, _, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_images_ignores_subdirectories_and_non_matching_files() {
+        let dir = test_support::isolated_upload_dir()
+            .await
+            .expect("isolated upload dir should be created");
+        std::fs::create_dir_all(dir.path.join("subfolder")).unwrap();
+        std::fs::write(dir.path.join("ignored.txt"), b"txt").unwrap();
+        std::fs::write(dir.path.join("valid.png"), b"png").unwrap();
+
+        let req = Request::get("/api/upload/images")
+            .header("authorization", auth_header())
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, bytes, _) = call(upload_router(), req).await;
+        assert_eq!(status, StatusCode::OK);
+        let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body_str.contains("valid.png"));
+        assert!(!body_str.contains("ignored.txt"));
+        assert!(!body_str.contains("subfolder"));
+    }
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn delete_gcs_object_handling_matrix() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            delete_gcs_object("https://storage.googleapis.com/test-bucket/uploads/blog/image.png")
+                .await;
+            delete_gcs_object("https://storage.googleapis.com/test-bucket/unauthorized/prefix.png")
+                .await;
+            delete_gcs_object("invalid-url").await;
         });
     }
 }

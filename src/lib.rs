@@ -1099,4 +1099,72 @@ mod tests {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         load_env_file();
     }
+
+    #[tokio::test]
+    async fn test_create_app_with_connected_redis_rate_limit_middleware() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(redis_url) = std::env::var("TEST_REDIS_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+        else {
+            return;
+        };
+
+        let pool = crate::redis::pool::RedisPool::connect(&redis_url)
+            .await
+            .expect("redis pool");
+        let redis_mode = crate::redis::RedisMode::Connected(std::sync::Arc::new(pool));
+
+        let app = create_app(redis_mode);
+        let req = Request::get("/health").body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_configure_cors_development_vs_production() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        std::env::set_var("ENVIRONMENT", "development");
+        std::env::set_var("ALLOWED_ORIGINS", "https://dev.example.com");
+        let _cors_dev = configure_cors();
+
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("ALLOWED_ORIGINS", "https://prod.example.com");
+        let _cors_prod = configure_cors();
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("ALLOWED_ORIGINS");
+    }
+
+    #[tokio::test]
+    async fn test_create_app_payload_limit_layer() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let app = create_app(crate::redis::RedisMode::Disabled)
+            .layer(crate::test_support::mock_connect_info());
+
+        let uid = uuid::Uuid::new_v4().to_string();
+        let token =
+            crate::routes::auth::create_access_token(&uid, "admin@example.com", "admin").unwrap();
+
+        // Create valid multipart body > 10MB to trigger DefaultBodyLimit layer
+        let boundary = "------------------------123456789012345678901234";
+        let header = format!("--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.png\"\r\nContent-Type: image/png\r\n\r\n", boundary);
+        let footer = format!("\r\n--{}--\r\n", boundary);
+        let mut huge_body = Vec::new();
+        huge_body.extend_from_slice(header.as_bytes());
+        huge_body.extend(vec![0u8; 11 * 1024 * 1024]);
+        huge_body.extend_from_slice(footer.as_bytes());
+
+        let req = Request::post("/api/upload/image")
+            .header("authorization", format!("Bearer {}", token))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
+            .body(Body::from(huge_body))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert!(res.status().is_client_error());
+    }
 }

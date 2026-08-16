@@ -224,6 +224,17 @@ mod tests {
         assert_eq!(normalize_room("  blog  "), "blog");
     }
 
+    #[test]
+    fn test_presence_snapshot_serialization() {
+        let snap = PresenceSnapshot {
+            total_connections: 42,
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(json.contains("totalConnections"));
+        let parsed: PresenceSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.total_connections, 42);
+    }
+
     #[tokio::test]
     async fn test_ws_presence_integration() {
         use axum::routing::get;
@@ -243,7 +254,7 @@ mod tests {
         });
 
         let url = format!("ws://{}/ws", addr);
-        let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
         let (mut write, mut read) = ws_stream.split();
 
         async fn wait_for_msg(
@@ -323,7 +334,33 @@ mod tests {
             }
         }
 
-        // 9. Send Close frame -> Should close connection cleanly
+        // 9. Send Binary frame -> Should ignore cleanly
+        write
+            .send(WsMessage::Binary(vec![1, 2, 3].into()))
+            .await
+            .unwrap();
+
+        // 10. Open second connection to trigger broadcast_rx to first connection
+        let (ws_stream2, _) = connect_async(&url).await.expect("Failed second connect");
+        let (mut write2, mut read2) = ws_stream2.split();
+        let _ = wait_for_msg(&mut read2, "welcome").await;
+
+        let join_msg3 = serde_json::json!({
+            "type": "join",
+            "room": "lobby"
+        })
+        .to_string();
+        write2
+            .send(WsMessage::Text(join_msg3.into()))
+            .await
+            .unwrap();
+
+        // 11. First connection receives broadcasted welcome with updated total
+        let text_bcast = wait_for_msg(&mut read, "welcome").await;
+        assert!(text_bcast.contains("welcome"));
+
+        // 12. Send Close frame -> Should close connection cleanly
         write.send(WsMessage::Close(None)).await.unwrap();
+        write2.send(WsMessage::Close(None)).await.unwrap();
     }
 }

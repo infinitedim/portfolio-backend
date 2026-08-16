@@ -1785,6 +1785,233 @@ mod tests {
             .unwrap();
         let res_refresh2 = app.clone().oneshot(refresh_req2).await.unwrap();
         assert_eq!(res_refresh2.status(), StatusCode::UNAUTHORIZED);
+
+        // Test refresh with missing refresh token
+        let res_no_rt = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/refresh")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_no_rt.status(), StatusCode::UNAUTHORIZED);
+
+        // Test refresh with invalid refresh token
+        let res_inv_rt = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/refresh")
+                    .header("cookie", "rt=invalid_token_str")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_inv_rt.status(), StatusCode::UNAUTHORIZED);
+
+        // Test logout with bearer access token
+        let req_logout_bearer = Request::post("/api/auth/logout")
+            .header("authorization", format!("Bearer {}", access_token))
+            .body(Body::empty())
+            .unwrap();
+        let res_logout_bearer = app.oneshot(req_logout_bearer).await.unwrap();
+        assert_eq!(res_logout_bearer.status(), StatusCode::OK);
         let _ = uid;
+    }
+
+    #[test]
+    fn test_extract_refresh_cookie_helpers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            "foo=bar; rt=my_secret_token; baz=qux".parse().unwrap(),
+        );
+        assert_eq!(
+            extract_refresh_cookie(&headers),
+            Some("my_secret_token".to_string())
+        );
+
+        let mut headers2 = HeaderMap::new();
+        headers2.insert(axum::http::header::COOKIE, "other=val".parse().unwrap());
+        assert_eq!(extract_refresh_cookie(&headers2), None);
+    }
+
+    #[test]
+    fn test_require_admin_non_admin_role_forbidden() {
+        let token = create_access_token("user123", "user@example.com", "USER").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+
+        let res = require_admin(&headers);
+        assert!(matches!(res, Err(crate::routes::AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_register_empty_fields_bad_request() {
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/register",
+            &RegisterRequest {
+                email: "".to_string(),
+                password: "".to_string(),
+                first_name: None,
+                last_name: None,
+            },
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_login_no_db_fallback_credentials() {
+        let _guard = crate::test_support::acquire_test_pool().await;
+        crate::db::clear_test_pool();
+
+        let (status, _) = post_json(
+            auth_router(),
+            "/api/auth/login",
+            &LoginRequest {
+                email: "invalid@example.com".to_string(),
+                password: "wrong".to_string(),
+            },
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn db_login_lockout_after_5_failed_attempts() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "lockout@admin.test";
+        let password = "correctpassword123";
+        let uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed admin");
+
+        let app = auth_router();
+        for _ in 0..5 {
+            let (st, _) = post_json(
+                app.clone(),
+                "/api/auth/login",
+                &LoginRequest {
+                    email: email.to_string(),
+                    password: "wrongpassword".to_string(),
+                },
+            )
+            .await;
+            assert_eq!(st, StatusCode::UNAUTHORIZED);
+        }
+
+        // 6th attempt with CORRECT password should be locked out (UNAUTHORIZED)
+        let (st6, body) = post_json(
+            app,
+            "/api/auth/login",
+            &LoginRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+            },
+        )
+        .await;
+        assert_eq!(st6, StatusCode::UNAUTHORIZED);
+        let res: LoginResponse = serde_json::from_slice(&body).unwrap();
+        assert!(res.error.unwrap().contains("locked"));
+        let _ = uid;
+    }
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_load_secret_panics_in_production_when_too_short() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("TEST_SHORT_SECRET", "short");
+
+        let res = std::panic::catch_unwind(|| {
+            load_secret("TEST_SHORT_SECRET");
+        });
+        assert!(res.is_err());
+
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("TEST_SHORT_SECRET");
+    }
+
+    #[test]
+    fn test_verify_jwt_expired_claims_returns_unauthorized() {
+        let secret = load_secret("JWT_SECRET");
+        let now = chrono::Utc::now().timestamp();
+        let claims = Claims {
+            sub: "user123".to_string(),
+            email: "test@example.com".to_string(),
+            role: "ADMIN".to_string(),
+            exp: now - 3600,
+            iat: now - 7200,
+            iss: "portfolio-backend".to_string(),
+            aud: "portfolio-frontend".to_string(),
+        };
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let verify_res = verify_access_token(&token);
+        assert!(verify_res.is_err());
+    }
+
+    #[tokio::test]
+    async fn db_legacy_json_refresh_and_logout_body() {
+        let Some(db) = crate::test_support::acquire_test_pool().await else {
+            return;
+        };
+        let email = "legacybody@admin.test";
+        let password = "password123";
+        let _uid =
+            crate::test_support::insert_admin_with_password(db.pool.as_ref(), email, password)
+                .await
+                .expect("seed admin");
+
+        let app = auth_router();
+        let login_http = Request::post("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&LoginRequest {
+                    email: email.to_string(),
+                    password: password.to_string(),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let res_login = app.clone().oneshot(login_http).await.unwrap();
+        assert_eq!(res_login.status(), StatusCode::OK);
+        let rt = first_nonempty_rt_from_set_cookie(res_login.headers()).expect("rt cookie");
+
+        // Refresh via JSON body
+        let (st_ref, body_ref) = post_json(
+            app.clone(),
+            "/api/auth/refresh",
+            &serde_json::json!({ "refreshToken": rt }),
+        )
+        .await;
+        assert_eq!(st_ref, StatusCode::OK);
+        let ref_res: LoginResponse = serde_json::from_slice(&body_ref).unwrap();
+        assert!(ref_res.success);
+
+        // Logout via JSON body
+        let (st_log, _) = post_json(
+            app,
+            "/api/auth/logout",
+            &serde_json::json!({ "refreshToken": rt }),
+        )
+        .await;
+        assert_eq!(st_log, StatusCode::OK);
     }
 }
