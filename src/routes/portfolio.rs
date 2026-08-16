@@ -148,8 +148,10 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
           "ru_RU": "Интерактивное портфолио в стиле терминала с Next.js 16, бэкендом на Rust/Axum, гейт-системой в стиле OverTheWire Natas и полным стеком наблюдаемости (Grafana, Loki, Prometheus)."
         },
         "technologies": ["Next.js", "TypeScript", "Rust", "Axum", "PostgreSQL", "Redis", "Grafana", "Loki", "Prometheus", "Tailwind CSS"],
+        "category": "fullstack",
+        "platforms": ["web"],
         "demoUrl": "https://infinitedim.dev",
-        "githubUrl": "https://github.com/infinitedim/portfolio-frontend",
+        "githubUrl": "https://github.com/infinitedim/portfolio-backend",
         "imageUrl": "/avatar.jpg",
         "status": "completed",
         "featured": true,
@@ -203,6 +205,8 @@ static STATIC_PROJECTS: Lazy<Value> = Lazy::new(|| {
           "ru_RU": "Приложение для дневника здоровья на Flutter с фокусом на конфиденциальность на базе локального машинного обучения (TFLite). Построено на Clean Architecture + Riverpod с пайплайнами Python/TensorFlow для корреляции симптомов и NLP-экстракции."
         },
         "technologies": ["Flutter", "TensorFlow", "TFLite", "Python", "Riverpod", "Clean Architecture"],
+        "category": "mobile-native",
+        "platforms": ["android", "ios"],
         "githubUrl": "https://github.com/infinitedim/medmind",
         "imageUrl": "/avatar.jpg",
         "status": "in-progress",

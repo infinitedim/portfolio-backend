@@ -328,6 +328,11 @@ pub struct CommitQuery {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct GitHubCommitParent {
+    pub sha: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubCommitSummary {
     pub sha: String,
@@ -341,6 +346,7 @@ pub struct GitHubCommitSummary {
     pub author_url: Option<String>,
     pub html_url: String,
     pub status_state: Option<String>,
+    pub parents: Vec<GitHubCommitParent>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -376,6 +382,7 @@ pub struct GitHubCommitDetail {
     pub author_url: Option<String>,
     pub html_url: String,
     pub status_state: Option<String>,
+    pub parents: Vec<GitHubCommitParent>,
     pub stats: Option<GitHubCommitStats>,
     pub files: Option<Vec<GitHubCommitFile>>,
 }
@@ -576,6 +583,19 @@ pub async fn get_repo_commits(
 
                 let status_state = Some(get_commit_combined_status(owner, repo, &sha).await);
 
+                let parents = item["parents"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|p| {
+                                Some(GitHubCommitParent {
+                                    sha: p["sha"].as_str()?.to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 summaries.push(GitHubCommitSummary {
                     sha,
                     short_sha,
@@ -588,6 +608,7 @@ pub async fn get_repo_commits(
                     author_url,
                     html_url,
                     status_state,
+                    parents,
                 });
             }
 
@@ -686,6 +707,19 @@ pub async fn get_commit_detail(
                     .collect()
             });
 
+            let parents = raw["parents"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            Some(GitHubCommitParent {
+                                sha: p["sha"].as_str()?.to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             let detail = GitHubCommitDetail {
                 sha,
                 short_sha,
@@ -698,6 +732,7 @@ pub async fn get_commit_detail(
                 author_url,
                 html_url,
                 status_state,
+                parents,
                 stats,
                 files,
             };
