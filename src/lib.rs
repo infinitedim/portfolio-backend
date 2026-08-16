@@ -567,20 +567,18 @@ pub fn create_app(redis: RedisMode) -> Router {
         .merge(api_routes)
         .merge(health_routes);
 
-    // Swagger UI is enabled by default in development. In production,
-    // it is disabled unless ENABLE_SWAGGER_UI=true is explicitly set.
+    // API docs UI (Scalar) is enabled by default in development. In production,
+    // it is disabled unless ENABLE_API_DOCS=true is explicitly set.
     let is_production_env = std::env::var("ENVIRONMENT")
         .map(|v| v == "production")
         .unwrap_or(false);
-    let swagger_enabled = std::env::var("ENABLE_SWAGGER_UI")
+    let docs_enabled = std::env::var("ENABLE_API_DOCS")
         .map(|v| !v.eq_ignore_ascii_case("false") && v != "0")
         .unwrap_or(!is_production_env);
-    if swagger_enabled {
+    if docs_enabled {
         use utoipa::OpenApi;
-        use utoipa_swagger_ui::SwaggerUi;
-        app = app.merge(
-            SwaggerUi::new("/api/docs").url("/api/docs/openapi.json", openapi::ApiDoc::openapi()),
-        );
+        use utoipa_scalar::{Scalar, Servable};
+        app = app.merge(Scalar::with_url("/api/docs", openapi::ApiDoc::openapi()));
     }
 
     app.nest_service("/uploads", ServeDir::new("uploads"))
@@ -850,9 +848,9 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // `env_lock` must serialize env mutations across the whole test.
-    async fn swagger_ui_can_be_disabled_via_env() {
+    async fn api_docs_can_be_disabled_via_env() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("ENABLE_SWAGGER_UI", "false");
+        std::env::set_var("ENABLE_API_DOCS", "false");
         let app = create_app(RedisMode::Disabled);
 
         let response = app
@@ -866,14 +864,14 @@ mod tests {
             .expect("docs response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::remove_var("ENABLE_API_DOCS");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn swagger_ui_enabled_by_default_in_development() {
+    async fn api_docs_enabled_by_default_in_development() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::remove_var("ENABLE_API_DOCS");
         std::env::set_var("ENVIRONMENT", "development");
         let app = create_app(RedisMode::Disabled);
 
@@ -892,9 +890,9 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn swagger_ui_disabled_by_default_in_production() {
+    async fn api_docs_disabled_by_default_in_production() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::remove_var("ENABLE_API_DOCS");
         std::env::set_var("ENVIRONMENT", "production");
         let app = create_app(RedisMode::Disabled);
 
@@ -1195,26 +1193,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_swagger_ui_numeric_zero_and_prod_override() {
+    async fn test_api_docs_numeric_zero_and_prod_override() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
 
-        // ENABLE_SWAGGER_UI="0" -> 404
-        std::env::set_var("ENABLE_SWAGGER_UI", "0");
+        // ENABLE_API_DOCS="0" -> 404
+        std::env::set_var("ENABLE_API_DOCS", "0");
         let app1 = create_app(crate::redis::RedisMode::Disabled);
-        let req1 = Request::get("/api/docs/").body(Body::empty()).unwrap();
+        let req1 = Request::get("/api/docs").body(Body::empty()).unwrap();
         let res1 = app1.oneshot(req1).await.unwrap();
         assert_eq!(res1.status(), StatusCode::NOT_FOUND);
 
-        // ENVIRONMENT="production" + ENABLE_SWAGGER_UI="true"
+        // ENVIRONMENT="production" + ENABLE_API_DOCS="true"
         std::env::set_var("ENVIRONMENT", "production");
-        std::env::set_var("ENABLE_SWAGGER_UI", "true");
+        std::env::set_var("ENABLE_API_DOCS", "true");
         let app2 = create_app(crate::redis::RedisMode::Disabled);
-        let req2 = Request::get("/api/docs/").body(Body::empty()).unwrap();
+        let req2 = Request::get("/api/docs").body(Body::empty()).unwrap();
         let res2 = app2.oneshot(req2).await.unwrap();
         assert_ne!(res2.status(), StatusCode::NOT_FOUND);
 
         std::env::remove_var("ENVIRONMENT");
-        std::env::remove_var("ENABLE_SWAGGER_UI");
+        std::env::remove_var("ENABLE_API_DOCS");
     }
 
     #[tokio::test]

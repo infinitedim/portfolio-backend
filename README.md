@@ -81,7 +81,7 @@ After starting the logging stack, you can access:
   - Ready check: `http://localhost:9080/ready`
 - **Backend API**: <http://localhost:8080>
   - Health check: `curl http://localhost:8080/health`
-  - API docs: `/api/docs` when `ENABLE_SWAGGER_UI=true`
+  - API docs: `/api/docs` when `ENABLE_API_DOCS=true`
 
 ## API Endpoints
 
@@ -688,7 +688,7 @@ cargo tarpaulin --out Xml
 
 ### Security Checklist
 
-- [ ] Set `ENABLE_SWAGGER_UI=false` in production
+- [ ] Set `ENABLE_API_DOCS=false` in production
 - [ ] Set `GATE_TOKEN_SECRET` (>=32 chars) and `GATE_L2_ANSWER`
 - [ ] Set `METRICS_BEARER_TOKEN` and configure Prometheus bearer auth
 

@@ -1,13 +1,12 @@
-//! OpenAPI / Swagger UI definitions for the portfolio API.
+//! OpenAPI / Scalar API docs definitions for the portfolio API.
 //!
 //! The actual handler-level documentation lives next to each handler via
 //! `#[utoipa::path(...)]` attributes — this module is just the entry point
 //! that aggregates them into a single `OpenApi` derive and wires up the
 //! `bearer_auth` security scheme used by admin endpoints.
 //!
-//! Mounted at `/api/docs/{*tail}` (Swagger UI) and `/api/docs/openapi.json`
-//! (raw spec). Production deployments can disable both with the
-//! `ENABLE_SWAGGER_UI=false` environment variable — see `lib.rs`.
+//! Mounted at `/api/docs` (Scalar UI). Production deployments can disable
+//! it with the `ENABLE_API_DOCS=false` environment variable — see `lib.rs`.
 
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -17,7 +16,7 @@ use utoipa::{
 use crate::routes;
 
 /// Adds the JWT bearer security scheme to the generated spec so the
-/// "Authorize" button in Swagger UI accepts an access token.
+/// authentication panel in Scalar accepts an access token.
 pub struct SecurityAddon;
 
 impl Modify for SecurityAddon {

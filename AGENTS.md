@@ -41,8 +41,7 @@ Rust/Axum API for [portfolio-frontend](https://github.com/infinitedim/portfolio-
 - **tower_governor** fallback when `REDIS_URL` unset
 - **JWT** (admin auth & refresh tokens stored in PostgreSQL), **bcrypt**, **TOTP** (admin 2FA)
 - **Prometheus** metrics (`/metrics`), structured tracing $\rightarrow$ Loki (via Promtail)
-- **OpenAPI** (`utoipa`) — `/api/docs` when `ENABLE_SWAGGER_UI=true` (off in prod by default)
-- **Terraform** GCP: `terraform/environments/prod/` — runbook `terraform/docs/deploy-runbook.md`
+- **OpenAPI** (`utoipa`) — `/api/docs` when `ENABLE_API_DOCS=true` (off in prod by default)
 
 ---
 
@@ -77,9 +76,8 @@ src/
   metrics.rs          # Prometheus + /api/analytics/pageview
   logging/            # request-id middleware, file logs (dev)
   email/              # Resend Mailer trait
-  openapi.rs          # ApiDoc for Swagger UI
+  openapi.rs          # ApiDoc for Scalar
 config/               # prometheus, loki, grafana, slo-rules
-terraform/            # GCP prod IaC
 docker-compose.yml    # local: postgres, redis, backend, observability
 docker-compose.gcp-ops.yml  # prod VM: postgres, redis, loki, grafana, prometheus
 scripts/              # compose-dev.sh, latency-smoke.sh
@@ -134,7 +132,7 @@ Public unless noted. Rate limits: Redis buckets when `REDIS_URL` set, else `towe
 | Upload        | `/api/upload/*`                                                                                                                             | `upload.rs`            | Admin; files under `uploads/`                 |
 | Logs          | `POST /api/logs`                                                                                                                            | `logs.rs`              | Client log ingest → tracing                   |
 
-Swagger: merge at `/api/docs` when enabled. Static uploads: `nest_service("/uploads", …)`.
+Scalar: merge at `/api/docs` when enabled. Static uploads: `nest_service("/uploads", …)`.
 
 ---
 
@@ -177,7 +175,7 @@ L2 discovery (frontend): `/robots.txt` → `Disallow: /s3cr3t/` → `/s3cr3t/use
 | Backend       | Cloud Run `asia-southeast2`, port **8080**, `max_instances=1`                            |
 | Frontend      | Vercel (`NEXT_PUBLIC_API_URL` + `BACKEND_URL` = Cloud Run **origin**, no trailing slash) |
 | Postgres      | Ops VM private IP — `DATABASE_URL` via Secret Manager                                    |
-| Redis         | Ops VM `:6379` — `REDIS_URL=redis://<ops_internal_ip>:6379` (Terraform)                  |
+| Redis         | Ops VM `:6379` — `REDIS_URL=redis://<ops_internal_ip>:6379`                              |
 | Observability | Same ops VM: Loki, Grafana, Prometheus (`docker-compose.gcp-ops.yml`)                    |
 
 **Networking (critical):**
@@ -222,7 +220,7 @@ L2 discovery (frontend): `/robots.txt` → `Disallow: /s3cr3t/` → `/s3cr3t/use
 | Change type                             | Required                                                   |
 | --------------------------------------- | ---------------------------------------------------------- |
 | `.rs`, `Cargo.toml`, SQL in `db/mod.rs` | `cargo fmt --check`, `check`, `clippy -D warnings`, `test` |
-| Terraform / compose only                | validate + runbook sanity; no Rust suite                   |
+| Compose only                            | validate + sanity check; no Rust suite                     |
 | Docs only                               | no Rust suite                                              |
 
 Report pass/fail with terminal output — do not claim green without running commands.

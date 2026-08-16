@@ -24,7 +24,7 @@ and observability endpoints.
 - `JWT_SECRET` and `REFRESH_TOKEN_SECRET` set (>=32 chars)
 - `ADMIN_EMAIL` + admin password hash configured
 - `GATE_TOKEN_SECRET` + `GATE_L2_ANSWER` configured
-- `ENABLE_SWAGGER_UI=false`
+- `ENABLE_API_DOCS=false`
 - `METRICS_BEARER_TOKEN` set when exposing `/metrics`
 
 See `terraform/docs/deploy-runbook.md` for deployment hardening steps.

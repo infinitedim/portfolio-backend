@@ -1,14 +1,8 @@
 FROM rust:1.95-slim-bookworm AS chef
 
-# `curl` and `ca-certificates` are required by `utoipa-swagger-ui`'s build
-# script — it shells out to `curl` to download the Swagger UI distribution
-# during `cargo chef cook` / `cargo build`. Without them the build panics
-# with: `failed to download Swagger UI: ... \`curl\` command not found`.
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
-    musl-tools \
-    curl \
-    ca-certificates && \
+    musl-tools && \
   rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef --locked
 RUN rustup target add x86_64-unknown-linux-musl
