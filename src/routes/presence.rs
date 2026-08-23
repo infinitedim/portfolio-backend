@@ -184,6 +184,45 @@ async fn handle_socket(socket: WebSocket, state: PresenceState) {
                             }
                         }
                     }
+                    Message::Binary(bytes) => {
+                        let parsed: Result<ClientMessage, _> = rmp_serde::from_slice(&bytes);
+                        match parsed {
+                            Ok(ClientMessage::Join { room }) => {
+                                if let Some(old) = current_room.take() {
+                                    let _ = state.backend.leave_conn(&conn_id).await;
+                                    let _ = old;
+                                }
+
+                                let room = normalize_room(&room);
+                                let count = state.backend.join_room(&conn_id, &room).await.unwrap_or(0);
+                                current_room = Some(room.clone());
+
+                                if let Ok(bin_payload) = rmp_serde::to_vec(&ServerMessage::RoomCount { room, count }) {
+                                    let _ = sender.send(Message::Binary(bin_payload.into())).await;
+                                }
+
+                                let new_total = state.backend.total_connections().await.unwrap_or(0);
+                                let _ = state.broadcast_tx.send(new_total);
+                            }
+                            Ok(ClientMessage::Ping) => {
+                                let refreshed = state.backend.refresh_conn(&conn_id).await.unwrap_or(false);
+                                if !refreshed {
+                                    let room = current_room.as_deref().unwrap_or("site");
+                                    let _ = state.backend.join_room(&conn_id, room).await;
+                                }
+                                if let Ok(bin_payload) = rmp_serde::to_vec(&ServerMessage::Pong) {
+                                    let _ = sender.send(Message::Binary(bin_payload.into())).await;
+                                }
+                            }
+                            Err(_) => {
+                                if let Ok(bin_payload) = rmp_serde::to_vec(&ServerMessage::Error {
+                                    message: "invalid binary message".to_string(),
+                                }) {
+                                    let _ = sender.send(Message::Binary(bin_payload.into())).await;
+                                }
+                            }
+                        }
+                    }
                     Message::Close(_) => break,
                     Message::Ping(payload) => {
                         let _ = sender.send(Message::Pong(payload)).await;
@@ -267,9 +306,10 @@ mod tests {
         ) -> String {
             loop {
                 let msg = read.next().await.unwrap().unwrap();
-                let text = msg.to_text().unwrap();
-                if text.to_lowercase().contains(&contains.to_lowercase()) {
-                    return text.to_string();
+                if let Ok(text) = msg.to_text() {
+                    if text.to_lowercase().contains(&contains.to_lowercase()) {
+                        return text.to_string();
+                    }
                 }
             }
         }
