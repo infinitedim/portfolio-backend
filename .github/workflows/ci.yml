@@ -6,9 +6,23 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, development]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
+      - "AGENTS.md"
+      - "LICENSE"
+      - ".cursor/**"
   pull_request:
-    branches: [main, develop]
+    branches: [main, development]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
+      - "AGENTS.md"
+      - "LICENSE"
+      - ".cursor/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,28 +32,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check
+  lint:
+    name: Lint & Check
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup
+        uses: ./.github/actions/setup-backend
         with:
-          components: rustfmt
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -47,14 +47,16 @@ jobs:
       - name: Check code
         run: cargo check --all-features
 
-  test:
-    name: Test
+      - name: Run Clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  coverage:
+    name: Test & Coverage
     runs-on: ubuntu-latest
-    # Postgres service is provisioned for the DB-backed integration tests
-    # added in Phase 2/3 of the coverage expansion plan. `TEST_DATABASE_URL`
-    # is a *separate* var from the production `DATABASE_URL` so unrelated
-    # tests that branch on `DATABASE_URL` being unset (e.g. fallback admin
-    # login) keep their existing behaviour.
+    # Mirror the `test` job's Postgres service so coverage runs over the same
+    # surface area (DB-backed routes count toward coverage). A coverage-failure
+    # threshold is intentionally NOT added here yet — Phase 5 will tune and
+    # land that gate once the new test suites stabilise.
     services:
       postgres:
         image: postgres:16-alpine
@@ -82,83 +84,13 @@ jobs:
       TEST_DATABASE_URL: postgres://portfolio:portfolio@localhost:5432/portfolio_test
       TEST_REDIS_URL: redis://localhost:6379
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Wait for Postgres
-        run: |
-          for i in $(seq 1 30); do
-            if pg_isready -h localhost -p 5432 -U portfolio -d portfolio_test >/dev/null 2>&1; then
-              echo "Postgres is ready"
-              exit 0
-            fi
-            echo "Attempt $i: Postgres not ready yet, waiting 2s..."
-            sleep 2
-          done
-          echo "Postgres failed to become ready" && exit 1
-
-      - name: Run tests
-        run: cargo test --all-features
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    # Mirror the `test` job's Postgres service so coverage runs over the same
-    # surface area (DB-backed routes count toward coverage). A coverage-failure
-    # threshold is intentionally NOT added here yet — Phase 5 will tune and
-    # land that gate once the new test suites stabilise.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: portfolio
-          POSTGRES_PASSWORD: portfolio
-          POSTGRES_DB: portfolio_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U portfolio -d portfolio_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      TEST_DATABASE_URL: postgres://portfolio:portfolio@localhost:5432/portfolio_test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup
+        uses: ./.github/actions/setup-backend
         with:
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
 
       - name: Wait for Postgres
         run: |
@@ -189,55 +121,13 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Run Clippy
-        run: cargo clippy --all-features -- -D warnings
-
   build:
     name: Build
     runs-on: ubuntu-latest
-    # test + coverage temporarily disabled — add back to needs when re-enabled
-    needs: [check, clippy]
+    needs: lint
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Setup
+        uses: ./.github/actions/setup-backend
 
       - name: Build release
         run: cargo build --release
@@ -245,7 +135,7 @@ jobs:
   audit:
     name: Cargo Audit
     runs-on: ubuntu-latest
-    needs: check
+    needs: lint
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -264,7 +154,7 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: check
+    needs: lint
     permissions:
       contents: read
       security-events: write
@@ -295,7 +185,7 @@ jobs:
   docker:
     name: Docker Stack
     runs-on: ubuntu-latest
-    needs: [check, clippy]
+    needs: lint
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
