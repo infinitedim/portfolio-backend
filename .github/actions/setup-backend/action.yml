@@ -1,5 +1,5 @@
 name: Setup Backend
-description: Checkout, install Rust toolchain, and cache
+description: Setup Rust toolchain and cache
 
 inputs:
   components:
@@ -10,9 +10,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -22,3 +19,4 @@ runs:
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: ci
+
