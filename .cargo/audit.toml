@@ -26,21 +26,4 @@ ignore = [
     # Re-evaluate when `rsa` ships a constant-time fix or when we migrate
     # `jsonwebtoken` to the `aws_lc_rs` backend.
     "RUSTSEC-2023-0071",
-
-    # RUSTSEC-2026-0097 — `rand` is unsound when combined with a custom
-    # logger that calls back into `rand::rng()`. Status upstream: no fixed
-    # version is available — the advisory matches `rand` 0.8, 0.9 and 0.10
-    # alike (we transitively pull all three via `sqlx`, `totp-rs`, `governor`,
-    # `quinn-proto`, plus our direct dependency).
-    #
-    # Why we are not affected:
-    #   * We use `tracing` / `tracing-subscriber` for logging. Neither calls
-    #     back into `rand` during initialisation, so the unsound code path
-    #     is unreachable at runtime.
-    #   * Our direct calls to `rand::rng()` (`src/routes/auth.rs`,
-    #     `src/routes/twofa.rs`) happen after the subscriber is wired up
-    #     and never re-enter `rand` from inside a log handler.
-    #
-    # Re-evaluate as soon as `rand` ships a patched release.
-    "RUSTSEC-2026-0097",
 ]
